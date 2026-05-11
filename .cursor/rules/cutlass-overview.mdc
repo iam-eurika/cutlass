@@ -1,0 +1,21 @@
+---
+description: Cutlass vision, stack, scope, AI agent architecture, Slint/Rust shared types
+alwaysApply: true
+---
+
+# Cutlass
+
+Open-source **AI-first, prompt-to-edit** video editing (CapCut-inspired): users describe edits; an agent turns that into executable editor commands.
+
+## Stack
+
+- **Slint**: UI layers, timelines, layout, declarative UX.
+- **WGPU**: GPU work (preview, compositing/effects/export paths driven from Rust as the engine grows).
+
+## Scope
+
+Ship a **small but real** editor: cut, trim, and other **basic timeline editing**. On top sits an **AI agent** that emits **structured commands**; Rust **executes** those commands against project/timeline state (deterministic edits, auditable undo-friendly actions).
+
+## Slint ↔ Rust shared types
+
+Types that must exist in **both** Slint and Rust should be **defined in Slint** (`*.slint`). Slint-codegen exposes them to Rust. Types defined **only** in Rust are **not** available inside Slint UI without duplication or bridging—so prefer **Slint-first** for shared structs/enums (timeline clips, command enums bound in UI, markers, etc.).
