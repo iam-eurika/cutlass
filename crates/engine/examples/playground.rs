@@ -1,17 +1,35 @@
 //! CLI smoke test for the MVP engine API (`docs/engine/roadmap.md` phase 5).
 //!
 //! ```text
-//! cargo run -p engine --example playground -- crates/engine/tests/assets/testsrc_h264.mp4
-//! cargo run -p engine --example playground -- path/to/file.mp4 --script path/to/script.txt
+//! cargo run -p engine --example playground
+//! cargo run -p engine --example playground -- path/to/file.mp4
+//! cargo run -p engine --example playground -- path/to/file.mp4 --script script.txt
 //! ```
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::thread;
 use std::time::Duration;
 
 use engine::{Engine, EngineEvent, Rational, SourceId};
+
+/// Checked-in H.264 fixture (symlink to decoder assets) used when no `<media>` is passed.
+fn default_media_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("assets")
+        .join("testsrc_h264.mp4")
+}
+
+fn usage() -> &'static str {
+    "playground [<media>] [--script script.txt]
+
+  <media>  Video file to open (default: crates/engine test fixture testsrc_h264.mp4)
+
+  With no arguments, runs against the default fixture from the engine crate directory."
+}
 
 fn parse_rational(word: &str) -> Rational {
     if let Some((n, d)) = word.split_once('/') {
@@ -84,21 +102,50 @@ fn load_script(path: &Path) -> Vec<Step> {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let media_path: PathBuf = args
-        .next()
-        .expect("usage: playground <media> [--script script.txt]")
-        .into();
+
+    let mut media_path: Option<PathBuf> = None;
     let mut script_path: Option<PathBuf> = None;
+
     while let Some(a) = args.next() {
-        if a == "--script" {
-            script_path = Some(
-                args.next()
-                    .expect("--script needs a path")
-                    .into(),
-            );
-        } else {
-            panic!("unexpected arg {a}");
+        if a == "--help" || a == "-h" {
+            println!("{}", usage());
+            return;
         }
+        if a == "--script" {
+            let p = args.next().unwrap_or_else(|| {
+                eprintln!("error: --script requires a path\n\n{}", usage());
+                process::exit(1);
+            });
+            script_path = Some(p.into());
+            continue;
+        }
+        if a.starts_with('-') {
+            eprintln!("error: unknown flag {a:?}\n\n{}", usage());
+            process::exit(1);
+        }
+        if media_path.is_some() {
+            eprintln!("error: unexpected extra argument {a:?}\n\n{}", usage());
+            process::exit(1);
+        }
+        media_path = Some(a.into());
+    }
+
+    let media_path = media_path.unwrap_or_else(|| {
+        let p = default_media_path();
+        eprintln!(
+            "playground: no file given; using default fixture:\n  {}",
+            p.display()
+        );
+        p
+    });
+
+    if !media_path.is_file() {
+        eprintln!(
+            "error: media path is not a file: {}\n\
+             (from repo root, generate fixtures: bash crates/decoder/tests/assets/regenerate.sh)",
+            media_path.display()
+        );
+        process::exit(1);
     }
 
     let steps = match &script_path {
@@ -106,6 +153,11 @@ fn main() {
         None => default_script(),
     };
 
+    run_steps(&media_path, steps);
+}
+
+fn run_steps(media_path: &Path, steps: Vec<Step>) {
+    let media_path = media_path.to_path_buf();
     let (engine, rx) = Engine::new();
 
     let printer = thread::spawn(move || {

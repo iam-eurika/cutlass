@@ -176,7 +176,7 @@ These showed up while landing the MVP; they are worth keeping next to the phased
    - Main thread submits commands per script with small sleeps between them.
 2. Optional: `--script` reads a tiny DSL (one command per line, e.g. `seek_exact 2/1`, `next 5`, `scrub 5/2`) for ad-hoc testing.
 
-**Deliverable:** `cargo run -p engine --example playground -- crates/engine/tests/assets/testsrc_h264.mp4` runs the default script and prints sensible events.
+**Deliverable:** `cargo run -p engine --example playground` runs against the crate’s `testsrc_h264.mp4` fixture (or pass an explicit path after `--`); prints sensible events for the default script.
 
 ---
 

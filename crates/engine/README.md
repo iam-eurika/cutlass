@@ -29,7 +29,8 @@ while let Ok(ev) = rx.recv() {
 Run the smoke harness:
 
 ```bash
-cargo run -p engine --example playground -- crates/engine/tests/assets/testsrc_h264.mp4
+cargo run -p engine --example playground
+cargo run -p engine --example playground -- /path/to/video.mp4
 ```
 
 Optional script (lines like `seek_exact 2/1`, `next 5`, `scrub 5/2`, `close`, `sleep_ms 20`):
@@ -46,4 +47,4 @@ cargo run -p engine --example playground -- ./video.mp4 --script ./script.txt
 
 ## Tests
 
-Integration tests use FFmpeg fixtures under `tests/assets/` (symlinks to `crates/decoder/tests/assets/`). Regenerate via `tests/assets/regenerate.sh` (calls the decoder asset script).
+- **`tests/engine_integration.rs`:** FFmpeg-backed worker tests (`cfg(unix)`): open/probe, demuxer errors, `seek_exact` / `next_frame` / EOF, scrub coalescing + ordering, single-decoder policy, `RequestId` correlation, cloned handles, and concurrent submits. Helpers in `tests/engine_integration/common.rs`. Fixtures under `tests/assets/` (symlinks into `crates/decoder/tests/assets/`).
