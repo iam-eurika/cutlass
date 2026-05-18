@@ -2,11 +2,28 @@
 name = "app"
 version.workspace = true
 edition.workspace = true
+description = "Cutlass app: wires timeline, engine, and renderer"
+build = "build.rs"
+default-run = "preview_ui"
 
 [dependencies]
-tracing.workspace = true
-tracing-subscriber.workspace = true
-
+crossbeam-channel = "0.5"
 decoder = { path = "../decoder" }
 engine = { path = "../engine" }
 renderer = { path = "../renderer" }
+slint = "1.16"
+timeline = { path = "../timeline" }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+slint-build = "1.16"
+
+[[bin]]
+name = "preview_ui"
+path = "src/bin/preview_ui.rs"
+
+[[example]]
+name = "preview_loop"
+path = "examples/preview_loop.rs"

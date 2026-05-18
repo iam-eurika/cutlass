@@ -118,7 +118,15 @@ pub struct Renderer {
     layout_yuv420p: wgpu::BindGroupLayout,
     layout_nv12: wgpu::BindGroupLayout,
     layout_rgba8: wgpu::BindGroupLayout,
+    /// Reused staging buffer for [`Self::read_pixels_rgba8_into`].
+    readback: Option<ReadbackBuffer>,
     _not_sync: PhantomData<std::cell::Cell<()>>,
+}
+
+struct ReadbackBuffer {
+    padded_row: u32,
+    height: u32,
+    buffer: wgpu::Buffer,
 }
 
 impl Renderer {
@@ -187,6 +195,7 @@ impl Renderer {
                 layout_yuv420p,
                 layout_nv12,
                 layout_rgba8,
+                readback: None,
                 _not_sync: PhantomData,
             })
         })
@@ -209,7 +218,8 @@ impl Renderer {
         }
         let layer = &layers[0];
         let frame = &layer.frame;
-        if target.width != frame.width || target.height != frame.height {
+        // Target may be smaller than the frame (preview downscale); not larger.
+        if target.width > frame.width || target.height > frame.height {
             return Err(RendererError::TargetSizeMismatch {
                 target_w: target.width,
                 target_h: target.height,
@@ -347,7 +357,18 @@ impl Renderer {
     }
 
     /// Copies `target` to CPU RGBA8 (`width * height * 4`, tightly packed rows).
-    pub fn read_pixels_rgba8(&self, target: &RenderTarget) -> Result<Vec<u8>, RendererError> {
+    pub fn read_pixels_rgba8(&mut self, target: &RenderTarget) -> Result<Vec<u8>, RendererError> {
+        let mut out = Vec::new();
+        self.read_pixels_rgba8_into(target, &mut out)?;
+        Ok(out)
+    }
+
+    /// Like [`Self::read_pixels_rgba8`] but reuses an internal GPU staging buffer and fills `out`.
+    pub fn read_pixels_rgba8_into(
+        &mut self,
+        target: &RenderTarget,
+        out: &mut Vec<u8>,
+    ) -> Result<(), RendererError> {
         if target.width == 0 || target.height == 0 {
             return Err(RendererError::ZeroDimension);
         }
@@ -357,14 +378,28 @@ impl Renderer {
             .checked_mul(bytes_per_pixel)
             .ok_or(RendererError::BadFrameLayout)?;
         let padded_row = upload::align_up(tight_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let buffer_size =
-            u64::from(padded_row).checked_mul(u64::from(target.height)).ok_or(RendererError::BadFrameLayout)?;
-        let read_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cutlass_readback"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let buffer_size = u64::from(padded_row)
+            .checked_mul(u64::from(target.height))
+            .ok_or(RendererError::BadFrameLayout)?;
+
+        let reuse = self
+            .readback
+            .as_ref()
+            .is_some_and(|rb| rb.padded_row == padded_row && rb.height == target.height);
+        if !reuse {
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("cutlass_readback"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.readback = Some(ReadbackBuffer {
+                padded_row,
+                height: target.height,
+                buffer,
+            });
+        }
+        let read_buffer = &self.readback.as_ref().expect("readback").buffer;
 
         let mut encoder = self
             .device
@@ -379,7 +414,7 @@ impl Renderer {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &read_buffer,
+                buffer: read_buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_row),
@@ -410,8 +445,9 @@ impl Renderer {
             .map_err(|e| RendererError::Readback(e.to_string()))?;
 
         let mapped = slice.get_mapped_range();
-        let mut out =
-            Vec::with_capacity((tight_row * target.height) as usize);
+        let cap = (tight_row * target.height) as usize;
+        out.clear();
+        out.reserve(cap);
         for row in 0..target.height as usize {
             let src_start = row * padded_row as usize;
             let src_end = src_start + tight_row as usize;
@@ -419,7 +455,7 @@ impl Renderer {
         }
         drop(mapped);
         read_buffer.unmap();
-        Ok(out)
+        Ok(())
     }
 }
 
@@ -569,7 +605,7 @@ mod tests {
 
     #[test]
     fn read_pixels_rejects_zero_sized_target_dimensions() {
-        let r = Renderer::new().expect("renderer");
+        let mut r = Renderer::new().expect("renderer");
         let mut target = RenderTarget::new(r.device(), 4, 4);
         target.width = 0;
         assert!(matches!(
@@ -586,7 +622,7 @@ mod tests {
 
     #[test]
     fn readback_tightly_packed_row_length_for_odd_width() {
-        let r = Renderer::new().expect("renderer");
+        let mut r = Renderer::new().expect("renderer");
         let w = 17u32;
         let h = 3u32;
         let target = RenderTarget::new(r.device(), w, h);
@@ -618,6 +654,22 @@ mod tests {
             r.render(&[layer.clone(), layer], &target),
             Err(RendererError::UnsupportedLayerCount { count: 2 })
         ));
+    }
+
+    #[test]
+    fn render_allows_smaller_target_than_frame() {
+        let mut r = Renderer::new().expect("renderer");
+        let frame = synthetic_yuv420(125, 128, 128, 8, 8);
+        let target = RenderTarget::new(r.device(), 4, 4);
+        r.render(
+            &[Layer {
+                frame,
+                transform: Transform::identity(),
+                opacity: 1.0,
+            }],
+            &target,
+        )
+        .expect("downscaled preview render");
     }
 
     #[test]

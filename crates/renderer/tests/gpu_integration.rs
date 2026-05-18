@@ -94,7 +94,7 @@ fn upload_yuv420p_320x240_succeeds_and_textures_have_expected_size() {
         DecodeOutcome::Frame(f) => f,
         DecodeOutcome::Eof => panic!("eof"),
     };
-    let r = Renderer::new().expect("renderer");
+    let mut r = Renderer::new().expect("renderer");
     let tex = upload_decoded_frame_for_test(&r, &frame).expect("upload");
     assert_eq!(tex.len(), 3);
     assert_eq!(tex[0].size().width, 320);
@@ -192,7 +192,7 @@ fn render_nv12_solid_colors_match_yuv420p_solid_colors() {
 #[test]
 fn upload_nv12_synthetic_plane_sizes_match_320p() {
     let frame = synthetic_nv12(40, 120, 130, 320, 240);
-    let r = Renderer::new().expect("renderer");
+    let mut r = Renderer::new().expect("renderer");
     let tex = upload_decoded_frame_for_test(&r, &frame).expect("upload");
     assert_eq!(tex.len(), 2);
     assert_eq!(tex[0].size().width, 320);

@@ -1,0 +1,65 @@
+// Minimal preview shell: image + playhead slider.
+
+import { Slider } from "std-widgets.slint";
+
+export component PreviewWindow inherits Window {
+    title: "Cutlass Preview";
+    preferred-width: 900px;
+    preferred-height: 640px;
+
+    in property <image> preview-image;
+    in property <float> playhead-seconds: 0;
+    in property <float> playhead-max: 10;
+    in property <string> status-text: "Ready";
+
+    callback scrub-requested(float);
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        Rectangle {
+            min-height: 400px;
+            background: #141414;
+            border-radius: 4px;
+
+            Image {
+                source: root.preview-image;
+                image-fit: contain;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                text: "Playhead";
+                vertical-alignment: center;
+            }
+
+            Slider {
+                minimum: 0;
+                maximum: root.playhead-max;
+                value: root.playhead-seconds;
+                changed => {
+                    root.scrub-requested(self.value);
+                }
+            }
+
+            Text {
+                text: round(root.playhead-seconds) + "s / " + round(root.playhead-max) + "s";
+                min-width: 100px;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: root.status-text;
+            color: #9a9a9a;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+}

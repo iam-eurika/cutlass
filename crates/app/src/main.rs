@@ -1,4 +1,12 @@
-use tracing::info;
+//! Cutlass app binary: timeline-driven preview smoke test.
+//!
+//! ```text
+//! cargo run -p app
+//! cargo run -p app -- /path/to/video.mp4
+//! ```
+
+use std::path::PathBuf;
+
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -8,10 +16,6 @@ fn main() {
         )
         .init();
 
-    match decoder::ffmpeg_version() {
-        Ok(v) => info!(ffmpeg = %v, "decoder"),
-        Err(e) => info!(?e, "decoder (ffmpeg version unavailable)"),
-    }
-    renderer::log_name();
-    info!("app");
+    let media = std::env::args().nth(1).map(PathBuf::from);
+    app::run_preview_cli(media);
 }
