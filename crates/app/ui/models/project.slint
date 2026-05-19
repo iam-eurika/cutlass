@@ -70,7 +70,7 @@ export struct UiTrack {
     clips: [UiClip],
 }
 
-// a timeline. project can hold many (nested seqs, alts, etc.)
+// the project's timeline
 export struct UiSequence {
     id: string,
     name: string,
@@ -97,8 +97,7 @@ export struct UiProject {
     name: string,
     file-path: string,              // "" if unsaved
     schema: UiSchemaVersion,
-    sequences: [UiSequence],
+    sequence: UiSequence,
     media-bin: [UiMediaSource],
-    active-sequence-id: string,     // which seq is loaded in timeline panel
     is-dirty: bool,                 // for "● Untitled" title bar
 }
