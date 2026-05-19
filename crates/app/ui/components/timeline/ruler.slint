@@ -3,8 +3,8 @@
 import { TimelineState } from "./state.slint";
 
 export component Ruler inherits Rectangle {
-    in property <length> viewport-x: 0px;
-
+    in property <length> clamp-min-x: 0px;
+    in property <length> clamp-max-x: 1000000px;
     height: 24px;
     horizontal-stretch: 1;
     background: #28282a;
@@ -36,16 +36,25 @@ export component Ruler inherits Rectangle {
     ta := TouchArea {
         width: 100%;
         height: 100%;
-        mouse-cursor: MouseCursor.pointer;
+        mouse-cursor: MouseCursor.ew-resize;
 
-        clicked => {
-            TimelineState.playhead-x = max(
-                TimelineState.playhead-head-width / 2 - root.viewport-x,
-                min(
-                    root.width - TimelineState.playhead-head-width / 2 - root.viewport-x,
-                    self.mouse-x - root.viewport-x,
-                ),
-            );
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.scrub-to(self.mouse-x);
+            }
         }
+
+        moved() => {
+            if (!self.pressed) {
+                return;
+            }
+            root.scrub-to(self.mouse-x);
+        }
+    }
+
+    function scrub-to(mouse-x: length) {
+        TimelineState.playhead-x = mouse-x;
+        TimelineState.playhead-x = TimelineState.playhead-x < root.clamp-min-x ? root.clamp-min-x : TimelineState.playhead-x;
+        TimelineState.playhead-x = TimelineState.playhead-x > root.clamp-max-x ? root.clamp-max-x : TimelineState.playhead-x;
     }
 }
