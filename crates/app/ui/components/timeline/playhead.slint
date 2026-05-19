@@ -2,34 +2,34 @@
 import { TimelineState } from "./state.slint";
 
 export component PlayHead inherits Rectangle {
-    in property <length> head-width: 12px;
+
     in property <length> head-height: 16px;
     in property <length> head-radius: 3px;
     in property <length> head-bottom-radius: 6px;
-    in property <length> stroke-width: 1.5px;
+    in property <length> head-stroke-width: 1.5px;
+
     in property <length> line-width: 1.2px;
     in property <brush> playhead-color: #ffffff;
-    width: head-width;
+    width: TimelineState.playhead-width;
     background: transparent;
-
-    property <length> line-x: (self.width - stroke-width) / 2;
 
     head := Rectangle {
         y: 0;
-        x: 0;
-        width: head-width;
+        x: (TimelineState.playhead-width - TimelineState.playhead-head-width) / 2;
+        width: TimelineState.playhead-head-width;
         height: head-height;
+
         border-top-left-radius: head-radius;
         border-top-right-radius: head-radius;
         border-bottom-left-radius: head-bottom-radius;
         border-bottom-right-radius: head-bottom-radius;
+
         background: transparent;
-        border-width: stroke-width;
+        border-width: head-stroke-width;
         border-color: root.playhead-color;
     }
 
     Rectangle {
-        x: line-x;
         y: head-height;
         width: line-width;
         height: parent.height - head-height;
@@ -47,7 +47,7 @@ export component PlayHead inherits Rectangle {
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                 self.drag-start-playhead-x = TimelineState.playhead-x;
-                self.drag-origin-root-x = self.absolute-position.x + self.mouse-x;
+                self.drag-origin-root-x = self.absolute-position.x + self.pressed-x;
             }
         }
 
@@ -55,7 +55,8 @@ export component PlayHead inherits Rectangle {
             if (!self.pressed) {
                 return;
             }
-            TimelineState.playhead-x = self.drag-start-playhead-x + self.absolute-position.x + self.mouse-x - self.drag-origin-root-x;
+            let drag-distance = self.drag-start-playhead-x + self.absolute-position.x + self.mouse-x - self.drag-origin-root-x;
+            TimelineState.playhead-x = max(0px, min(TimelineState.viewport-width, drag-distance));
         }
     }
 }

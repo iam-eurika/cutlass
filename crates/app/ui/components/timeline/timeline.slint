@@ -4,6 +4,7 @@ import { Ruler } from "./ruler.slint";
 import { TimelineState } from "./state.slint";
 import { Toolbar } from "./toolbar.slint";
 import { PlayHead } from "./playhead.slint";
+import { HorizontalDivider, VerticalDivider } from "../divider.slint";
 
 
 
@@ -18,10 +19,7 @@ export component TimelinePanel inherits Rectangle {
 
         Toolbar { }
 
-        Rectangle {
-            height: 1px;
-            background: #202020;
-        }
+        HorizontalDivider { }
 
         HorizontalLayout {
             spacing: 50px;
@@ -37,7 +35,7 @@ export component TimelinePanel inherits Rectangle {
                     viewport-y <=> TimelineState.scroll-y;
 
                     width: 200px;
-                    viewport-height: 10000000px;
+                    viewport-height: TimelineState.viewport-height;
 
                     interactive: false;
                     VerticalLayout {
@@ -53,13 +51,15 @@ export component TimelinePanel inherits Rectangle {
 
             Rectangle {
                 clip: true;
-                width: 100%;
+                horizontal-stretch: 1;
                 height: 100%;
 
                 VerticalLayout {
+                    width: 100%;
+                    height: 100%;
+
                     Ruler {
                         height: TimelineState.ruler-height;
-                        width: 100%;
                         x: tracks.viewport-x;
                     }
 
@@ -71,8 +71,8 @@ export component TimelinePanel inherits Rectangle {
                         viewport-y <=> TimelineState.scroll-y;
                         viewport-x <=> TimelineState.scroll-x;
 
-                        viewport-width: 10000000px;
-                        viewport-height: 10000000px;
+                        viewport-width: TimelineState.viewport-width;
+                        viewport-height: TimelineState.viewport-height;
 
                         interactive: false;
 
@@ -97,7 +97,7 @@ export component TimelinePanel inherits Rectangle {
                 PlayHead {
                     y: 0;
                     height: parent.height;
-                    x <=> TimelineState.playhead-x;
+                    x: TimelineState.playhead-x + tracks.viewport-x;
                 }
             }
         }
