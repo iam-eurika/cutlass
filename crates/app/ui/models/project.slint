@@ -66,12 +66,10 @@ export struct MediaSource {
     thumbnail: image,               // lazy-filled by Rust side
 }
 
-// An instance of media on a track.
-//
-// `*-sec` fields are precise-enough (f32) derivatives of the matching
-// `RationalTime`, populated by the Rust conversion. They exist so Slint can
-// do geometry math (`start-sec * zoom * 1px`) without parsing strings each
-// frame. The `RationalTime`s remain the authoritative form.
+// An instance of media on a track. RationalTime fields carry the i64
+// numerator as a string; Slint code that needs seconds calls
+// `TimelineState.rt-sec(...)` (cached per binding so the parse runs once
+// per edit, not every frame).
 export struct Clip {
     id: string,
     media-id: string,               // -> MediaSource.id ("" for generators)
@@ -86,12 +84,6 @@ export struct Clip {
     volume: float,                  // 0..2 (audio, allows +6dB)
     enabled: bool,                  // soft-disable without deleting
     color: color,                   // user-assignable pill color
-
-    // -- derived (Rust-populated) ---------------------------------------------
-    start-sec: float,
-    duration-sec: float,
-    source-in-sec: float,
-    source-out-sec: float,
 
     // -- ephemeral UI state ----------------------------------------------------
     selected: bool,
@@ -127,11 +119,6 @@ export struct Sequence {
     out-point: RationalTime,        // export range end
 
     tracks: [Track],
-
-    // -- derived (Rust-populated) ---------------------------------------------
-    duration-sec: float,
-    in-point-sec: float,
-    out-point-sec: float,
 
     // -- ephemeral UI state ----------------------------------------------------
     playhead: RationalTime,

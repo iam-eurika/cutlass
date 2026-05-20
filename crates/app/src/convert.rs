@@ -320,14 +320,6 @@ impl TryFrom<&ui::MediaSource> for MediaSource {
 // Clip
 // ---------------------------------------------------------------------------
 
-/// Lossy-but-precise-enough seconds projection. f32 precision near 4h of
-/// timeline is ~1ms, well sub-frame at 60fps. If we ever need more (long-form
-/// docs, multi-day projects), promote to f64 or pre-multiply by zoom in Rust.
-#[inline]
-fn rt_sec_f32(r: RationalTime) -> f32 {
-    r.num as f32 / r.den as f32
-}
-
 impl From<&Clip> for ui::Clip {
     fn from(c: &Clip) -> Self {
         ui::Clip {
@@ -348,10 +340,6 @@ impl From<&Clip> for ui::Clip {
             volume: c.volume,
             enabled: c.enabled,
             color: color_to_slint(c.color),
-            start_sec: rt_sec_f32(c.start),
-            duration_sec: rt_sec_f32(c.duration),
-            source_in_sec: rt_sec_f32(c.source_in),
-            source_out_sec: rt_sec_f32(c.source_out),
             selected: false,
         }
     }
@@ -444,10 +432,6 @@ impl From<&Sequence> for ui::Sequence {
             out_point: (&s.out_point.unwrap_or(zero)).into(),
 
             tracks: vec_model(tracks),
-
-            duration_sec: rt_sec_f32(s.duration),
-            in_point_sec: s.in_point.map(rt_sec_f32).unwrap_or(0.0),
-            out_point_sec: s.out_point.map(rt_sec_f32).unwrap_or(0.0),
 
             // Ephemeral UI state — fresh defaults; real values come from
             // TimelineState / Flickable scroll positions at runtime.

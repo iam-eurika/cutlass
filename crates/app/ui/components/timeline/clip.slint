@@ -16,12 +16,19 @@ export component ClipView inherits Rectangle {
     // Vertical inset inside the track row so adjacent rows visually breathe.
     in property <length> row-padding: 4px;
 
+    // RationalTime → seconds. Cached as local properties so Slint memoizes
+    // the (cheap but non-trivial) string parse — they only recompute when
+    // the underlying RT changes, not every time the user drags the zoom
+    // slider.
+    property <float> start-sec: TimelineState.rt-sec(info.start);
+    property <float> duration-sec: TimelineState.rt-sec(info.duration);
+
     // Width floor: clips shorter than 1px still get a visible sliver so the
     // user can grab and re-trim them. Without this, very-trimmed clips
     // vanish at low zoom.
-    property <length> raw-width: info.duration-sec * TimelineState.zoom * 1px;
+    property <length> raw-width: duration-sec * TimelineState.zoom * 1px;
 
-    x: info.start-sec * TimelineState.zoom * 1px;
+    x: start-sec * TimelineState.zoom * 1px;
     y: row-padding;
     width: max(2px, raw-width);
     height: row-height - 2 * row-padding;

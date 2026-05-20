@@ -1,6 +1,17 @@
 import { AppState } from "../../models/app_state.slint";
+import { RationalTime } from "../../models/project.slint";
 
 export global TimelineState {
+    // RationalTime → seconds. Strings on the DTO carry the i64 numerator;
+    // `.to-float()` parses them once, and Slint memoizes this expression so
+    // re-evaluation only happens when the underlying RT changes (not on
+    // every zoom tick). f32 precision is sub-frame for typical project
+    // lengths; promote to a pre-multiplied pixel position in Rust if we
+    // ever care about multi-hour timelines.
+    public pure function rt-sec(rt: RationalTime) -> float {
+        rt.num.to-float() / rt.den.to-float()
+    }
+
     in-out property <length> ruler-offset: 10px;
     in-out property <int> zoom-step: 1;
     // Pixels per second. Drives ruler scale and clip geometry.
@@ -36,16 +47,20 @@ export global TimelineState {
     // a sane non-zero value so the very first frame doesn't render at 0.
     in property <length> available-width: 600px;
 
+    // Sequence duration in seconds, cached so the multi-step parse in
+    // `rt-sec` runs once per sequence change, not on every zoom tick.
+    out property <float> sequence-duration-sec:
+        rt-sec(AppState.project.sequence.duration);
+
     // Scrollable content width. Two contributors:
-    //   * Sequence content extent: `duration-sec × zoom × 1px + tail-padding`.
+    //   * Sequence content extent: `duration_sec × zoom × 1px + tail-padding`.
     //   * Visible panel width — track lanes must always fill the screen
     //     (real editors don't show a hard "end of track" before the panel
     //     edge; the area past the last clip is just empty drop space).
     // Taking the max of both makes lanes feel infinite while still scaling
     // the scroll extent up when zoomed in past the panel.
     out property <length> viewport-width:
-        max(AppState.project.sequence.duration-sec * zoom * 1px + tail-padding,
-            available-width);
+        max(sequence-duration-sec * zoom * 1px + tail-padding, available-width);
 
     // ---- Adaptive ruler scale ("nice numbers") --------------------------------
     //
