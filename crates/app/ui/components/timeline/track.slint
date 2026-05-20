@@ -13,19 +13,9 @@ export component TrackRow inherits Rectangle {
     width: 100%;
     // Muted tracks dim toward black so they read as "off" without losing
     // their structure.
-    background: info.muted ? #131315 : #1b1b1b;
-    border-radius: 2px;
+    background: info.muted ? #313131 : #222223;
 
-    // Lane separator between video lanes (lighter) and audio lanes (slight
-    // green tint). Subtle — lets users orient at a glance.
-    Rectangle {
-        x: 0;
-        y: 0;
-        width: 2px;
-        height: 100%;
-        background: info.kind == TrackKind.video ? #4a90e2 : #5cb09b;
-        opacity: 0.35;
-    }
+    border-radius: 2px;
 
     for clip in info.clips: ClipView {
         info: clip;
@@ -40,7 +30,8 @@ export component TrackHeader inherits Rectangle {
 
     height: info.height-px * 1px;
     width: 100%;
-    background: #1b1b1b;
+    background: info.muted ? #313131 : #222223;
+
     border-radius: 2px;
 
     HorizontalLayout {

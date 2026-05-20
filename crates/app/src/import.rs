@@ -78,7 +78,7 @@ fn pick_paths() -> Vec<PathBuf> {
 /// Probe a file, then synthesize the `MediaSource` whether probe succeeded
 /// or not — failures still land in the bin so the user sees them rather than
 /// having files silently disappear into the void.
-fn build_media_source(path: PathBuf) -> MediaSource {
+pub(crate) fn build_media_source(path: PathBuf) -> MediaSource {
     let name = display_name(&path);
     let id = MediaId::new();
 

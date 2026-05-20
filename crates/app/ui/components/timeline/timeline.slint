@@ -22,14 +22,37 @@ import { PlayHead } from "./playhead.slint";
 import { TrackRow, TrackHeader } from "./track.slint";
 import { HorizontalDivider, VerticalDivider } from "../divider.slint";
 import { AppState } from "../../models/app_state.slint";
+import { DragState } from "../../models/drag_state.slint";
 
 export component TimelinePanel inherits Rectangle {
     horizontal-stretch: 1;
-    background: #28282a;
+
+    init => {
+        DragState.timeline-x = root.absolute-position.x;
+        DragState.timeline-y = root.absolute-position.y;
+        DragState.timeline-width = root.width;
+        DragState.timeline-height = root.height;
+    }
+    changed absolute-position => {
+        DragState.timeline-x = root.absolute-position.x;
+        DragState.timeline-y = root.absolute-position.y;
+    }
+    changed width => {
+        DragState.timeline-width = root.width;
+    }
+    changed height => {
+        DragState.timeline-height = root.height;
+    }
 
     // Spacing between adjacent track rows. Kept in one place so the left
     // header column and the right content column stay vertically aligned.
     property <length> row-gap: 10px;
+
+    // Slint does not infer Flickable viewport size from `for` loops (see
+    // slint-ui/slint#407), so we compute the scroll extent explicitly.
+    property <int> track-count: AppState.project.sequence.tracks.length;
+    property <length> tracks-content-height:
+        track-count <= 0 ? 0px : AppState.project.sequence.tracks-total-height-px * 1px + (track-count - 1) * row-gap;
 
     // Mirror of the global playhead so we can hang a `changed` handler off
     // it — Slint `changed` handlers must live on a local property, not on a
@@ -52,10 +75,12 @@ export component TimelinePanel inherits Rectangle {
         HorizontalDivider { }
 
         HorizontalLayout {
+            vertical-stretch: 1;
             spacing: 12px;
 
             // ── Left: track headers ──────────────────────────────────────
             VerticalLayout {
+                vertical-stretch: 1;
                 horizontal-stretch: 0;
                 width: 200px;
 
@@ -72,6 +97,9 @@ export component TimelinePanel inherits Rectangle {
                     // Mirror vertical scroll from the content column so
                     // headers stay locked to their rows.
                     viewport-y: -TimelineState.scroll-y;
+                    // Do not use max(self.height, …): Flickable sizing follows
+                    // viewport-* and that collapses vertical scroll range.
+                    viewport-height: track-count <= 0 ? self.height : tracks-content-height;
 
                     VerticalLayout {
                         spacing: row-gap;
@@ -82,10 +110,23 @@ export component TimelinePanel inherits Rectangle {
                 }
             }
 
-            VerticalDivider { }
+            VerticalDivider {
+                vertical-stretch: 1;
+            }
             // ── Right: ruler + scrollable track content ─────────────────
+            //
+            // `height: 100%` is load-bearing: this Rectangle's preferred-height
+            // comes from the inner VerticalLayout, which in turn is driven by
+            // the Flickable's `viewport-height` (≈ tracks-content-height). In
+            // a HorizontalLayout that preferred-height caps the cross-axis
+            // size, so `vertical-stretch: 1` alone does NOT make the column
+            // grow past the content. Without `height: 100%`, the PlayHead
+            // (bound to `parent.height`) stops at the last track instead of
+            // touching the bottom of the timeline panel when the user drags
+            // the VSplitGripTimeline grip.
             Rectangle {
-                // clip: true; // TODO: uncomment this
+                clip: true;
+                vertical-stretch: 1;
                 horizontal-stretch: 1;
                 height: 100%;
 
@@ -105,9 +146,14 @@ export component TimelinePanel inherits Rectangle {
                         // sequence's duration × zoom (clamped so it always
                         // fills the visible panel width — see
                         // `TimelineState.viewport-width`). Vertical extent
-                        // comes from the natural height of the VerticalLayout
-                        // below.
+                        // must be set explicitly — `for` loops do not expand
+                        // the Flickable viewport (slint-ui/slint#407).
+                        // Do not use max(self.height, …) here: Flickable
+                        // preferred size tracks viewport-* and that eats the
+                        // scroll range (horizontal works because width is set
+                        // from TimelineState, not from content layout).
                         viewport-width: TimelineState.viewport-width;
+                        viewport-height: track-count <= 0 ? self.height : tracks-content-height;
 
                         interactive: false;
                         // The Flickable's `viewport-x` is <= 0 when scrolled

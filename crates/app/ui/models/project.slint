@@ -119,6 +119,10 @@ export struct Sequence {
 
     tracks: [Track],
 
+    // Sum of `Track.height-px` for all rows. Row gaps are added in the
+    // timeline panel when sizing the tracks Flickable viewport.
+    tracks-total-height-px: int,
+
     // -- ephemeral UI state ----------------------------------------------------
     playhead: RationalTime,
     zoom: float,                    // px-per-second

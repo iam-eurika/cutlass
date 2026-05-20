@@ -236,6 +236,7 @@ dependencies = [
  "rfd",
  "slint",
  "slint-build",
+ "timeline",
  "tracing",
  "tracing-subscriber",
  "uuid",

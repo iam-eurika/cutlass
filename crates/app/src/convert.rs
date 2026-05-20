@@ -415,6 +415,7 @@ impl TryFrom<&ui::Track> for Track {
 impl From<&Sequence> for ui::Sequence {
     fn from(s: &Sequence) -> Self {
         let tracks: Vec<ui::Track> = s.tracks.iter().map(ui::Track::from).collect();
+        let tracks_total_height_px: i32 = s.tracks.iter().map(|t| t.height_px as i32).sum();
         let zero = RationalTime::ZERO;
         ui::Sequence {
             id: ss(s.id.to_string()),
@@ -432,6 +433,7 @@ impl From<&Sequence> for ui::Sequence {
             out_point: (&s.out_point.unwrap_or(zero)).into(),
 
             tracks: vec_model(tracks),
+            tracks_total_height_px,
 
             // Ephemeral UI state — fresh defaults; real values come from
             // TimelineState / Flickable scroll positions at runtime.

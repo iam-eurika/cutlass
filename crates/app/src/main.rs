@@ -1,17 +1,15 @@
 //! Cutlass shell entry point.
 //!
-//! Boot sequence:
+//! Boot sequence (default):
 //!   1. Init tracing + WGPU-backed Slint backend.
-//!   2. Show the launcher (`AppWindow`) with a "Create Project" button.
-//!   3. On click, build a fresh empty `models::Project`, hand it to a new
-//!      `EditorWindow`, install the engine/preview glue, then hide the
-//!      launcher.
-//!   4. Closing the editor quits the event loop.
+//!   2. Build the dev [`demo`] project (probed `assets/` + starter timeline).
+//!   3. Open [`EditorWindow`] with preview/import glue installed.
 //!
-//! Once import / open-file land, the launcher will grow more entry points
-//! (recent projects, "Open…", drag-drop) but the editor side stays the same.
+//! Set `CUTLASS_LAUNCHER=1` to show the legacy launcher with "Create Project"
+//! (empty project). `CUTLASS_ASSETS` overrides the demo media directory.
 
 mod convert;
+mod demo;
 mod import;
 mod preview;
 
@@ -27,8 +25,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use models::{
-    Project, ProjectId, Rational, RationalTime, SchemaVersion, Sequence, SequenceId, Track,
-    TrackId, TrackKind,
+    Project, ProjectId, Rational, RationalTime, SchemaVersion, Sequence, SequenceId,
 };
 use slint::wgpu_28::WGPUConfiguration;
 use slint::{BackendSelector, CloseRequestResponse, ComponentHandle};
@@ -43,12 +40,13 @@ use crate::ui::{AppState, AppWindow, EditorWindow, TimelineState};
 /// later is exact.
 const DEFAULT_TIMEBASE: u32 = 90_000;
 
-/// Owns everything that has to outlive a single `create-project` click:
-/// the editor window itself plus the engine/preview drain thread.
+/// Owns everything that has to outlive a single editor session: the editor
+/// window itself plus the engine/preview drain thread.
 struct EditorSession {
     _window: EditorWindow,
     _preview: PreviewSession,
 }
+
 fn setup_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -56,22 +54,32 @@ fn setup_tracing() {
         )
         .init();
 }
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_tracing();
     BackendSelector::new()
         .require_wgpu_28(WGPUConfiguration::default())
         .select()?;
 
-    let launcher = AppWindow::new()?;
+    let _session = if std::env::var_os("CUTLASS_LAUNCHER").is_some() {
+        run_launcher()?;
+        None
+    } else {
+        Some(open_editor(demo::project())?)
+    };
 
-    // The session is stashed in a RefCell so the create-project closure can
-    // own it for the lifetime of the event loop. Only one session can ever
-    // be active at a time today.
+    slint::run_event_loop()?;
+    Ok(())
+}
+
+/// Legacy launcher: blank project on "Create Project".
+fn run_launcher() -> Result<(), Box<dyn std::error::Error>> {
+    let launcher = AppWindow::new()?;
     let session: Rc<RefCell<Option<EditorSession>>> = Rc::new(RefCell::new(None));
     let launcher_weak = launcher.as_weak();
     {
         let session = session.clone();
-        launcher.on_create_project(move || match open_editor() {
+        launcher.on_create_project(move || match open_editor(empty_project()) {
             Ok(s) => {
                 *session.borrow_mut() = Some(s);
                 if let Some(l) = launcher_weak.upgrade() {
@@ -81,18 +89,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => error!(?e, "failed to open editor window"),
         });
     }
-
     launcher.show()?;
-    slint::run_event_loop()?;
     Ok(())
 }
 
-/// Build a fresh empty project and open the editor on it. Wires up the
-/// preview engine and registers a close handler that quits the event loop
-/// so the process exits when the user closes the editor.
-fn open_editor() -> Result<EditorSession, Box<dyn std::error::Error>> {
+/// Open the editor on `project`. Wires preview/import and quits the event loop
+/// when the user closes the window.
+fn open_editor(project: Project) -> Result<EditorSession, Box<dyn std::error::Error>> {
     let editor = EditorWindow::new()?;
-    seed_project(&editor, empty_project());
+    seed_project(&editor, project);
     let preview = preview::install(&editor);
     import::install(&editor);
 
@@ -118,15 +123,8 @@ fn seed_project(editor: &EditorWindow, project: Project) {
     editor.global::<AppState>().set_project(dto);
 }
 
-/// A blank project: 1920×1080 / 30 fps sequence, default V1 + A1 tracks,
-/// nothing in the media bin. Matches what a typical NLE drops you into on
-/// "New Project" and gives the timeline two empty lanes to show structure.
-fn empty_project() -> Project {
-    let track_v1 = TrackId::new();
-    let track_a1 = TrackId::new();
-
-    let tracks = vec![];
-
+/// A blank project: 1920×1080 / 30 fps sequence, empty media bin and tracks.
+pub(crate) fn empty_project() -> Project {
     let sequence = Sequence {
         id: SequenceId::new(),
         name: "Untitled Sequence".into(),
@@ -138,7 +136,7 @@ fn empty_project() -> Project {
         duration: RationalTime::new_raw(0, DEFAULT_TIMEBASE),
         in_point: None,
         out_point: None,
-        tracks,
+        tracks: vec![],
     };
 
     Project {
