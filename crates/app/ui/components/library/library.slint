@@ -52,6 +52,24 @@ component LibraryTile {
                 }
             }
         }
+
+        ta := TouchArea {
+
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    debug(self.pressed-x);
+                    debug(self.pressed-y);
+                }
+            }
+
+            moved() => {
+                if (!self.pressed) {
+                    return;
+                }
+                debug(self.mouse-x);
+                debug(self.mouse-y);
+            }
+        }
     }
 }
 
@@ -126,49 +144,60 @@ export component LibraryPane inherits Rectangle {
                 spacing: root.tile-spacing;
                 item-count: AppState.project.media-bin.length;
 
-                for source[i] in AppState.project.media-bin: LibraryTile {
+                // TODO: uncomment this manually later.
+
+                // for source[i] in AppState.project.media-bin: LibraryTile {
+                //     x: grid.cell-x(i);
+                //     y: grid.cell-y(i);
+                //     width: grid.cell-width;
+                //     height: grid.cell-height;
+                //     source: source;
+                // }
+
+                for i in 20: LibraryTile {
                     x: grid.cell-x(i);
                     y: grid.cell-y(i);
                     width: grid.cell-width;
                     height: grid.cell-height;
-                    source: source;
                 }
             }
 
+            // TODO: uncomment this manually later.
+            // 
             // Empty-state click target. Doubles as a click target so a
             // fresh project can start an import without hunting for the
             // small `+` glyph above. Sits on top of `grid` in z-order so
             // the import callback wins over a stray grid click while the
             // bin is empty.
-            if AppState.project.media-bin.length == 0: TouchArea {
-                width: 100%;
-                height: 100%;
-                mouse-cursor: pointer;
-                clicked => {
-                    AppState.import-media()
-                }
+            // if AppState.project.media-bin.length == 0: TouchArea {
+            //     width: 100%;
+            //     height: 100%;
+            //     mouse-cursor: pointer;
+            //     clicked => {
+            //         AppState.import-media()
+            //     }
 
-                VerticalLayout {
-                    width: 100%;
-                    height: 100%;
-                    alignment: center;
-                    spacing: 4px;
+            //     VerticalLayout {
+            //         width: 100%;
+            //         height: 100%;
+            //         alignment: center;
+            //         spacing: 4px;
 
-                    Text {
-                        text: "No media yet";
-                        color: #5a5a64;
-                        font-size: 12px;
-                        horizontal-alignment: center;
-                    }
+            //         Text {
+            //             text: "No media yet";
+            //             color: #5a5a64;
+            //             font-size: 12px;
+            //             horizontal-alignment: center;
+            //         }
 
-                    Text {
-                        text: "Click to import";
-                        color: #7a7a8a;
-                        font-size: 11px;
-                        horizontal-alignment: center;
-                    }
-                }
-            }
+            //         Text {
+            //             text: "Click to import";
+            //             color: #7a7a8a;
+            //             font-size: 11px;
+            //             horizontal-alignment: center;
+            //         }
+            //     }
+            // }
         }
     }
 }
