@@ -1,7 +1,4 @@
-import {
-    CutlassGridView,
-    CutlassGridCell,
-} from "../../components/grid-view.slint";
+import { CutlassGridView } from "../../components/grid-view.slint";
 
 export component LibraryPanel inherits VerticalLayout {
     spacing: 0;
@@ -20,19 +17,14 @@ export component LibraryPanel inherits VerticalLayout {
         cell-height: 100px;
         spacing: 10px;
         inset: 10px;
-        // Must match the for-loop iteration count: drives `content-height`,
-        // which in turn drives whether the scroll view shows a bar at all.
         item-count: tile-count;
 
-        for _[i] in tile-count: CutlassGridCell {
-            metrics: grid.metrics;
-            index: i;
-
-            Rectangle {
-                width: 100%;
-                height: 100%;
-                background: #000000;
-            }
+        for _[i] in tile-count: Rectangle {
+            x: grid.cell-x(i);
+            y: grid.cell-y(i);
+            width: grid.cell-width;
+            height: grid.cell-height;
+            background: #000000;
         }
     }
 }

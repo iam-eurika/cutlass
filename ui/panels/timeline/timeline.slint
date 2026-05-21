@@ -1,8 +1,18 @@
+import { HorizontalDivider } from "../../components/divider.slint";
 export component TimelinePanel inherits VerticalLayout {
     spacing: 0;
 
     Rectangle {
-        vertical-stretch: 1;
-        horizontal-stretch: 1;
+        height: 40px;
+
+        Text {
+            text: "Tools";
+            color: #ffffff;
+        }
+
+        HorizontalDivider {
+            background: #000000;
+            y: parent.height - self.height;
+        }
     }
 }
