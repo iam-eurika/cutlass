@@ -1,27 +1,17 @@
+import { AppStore } from "../store/app-store.slint";
+
 // Draggable split grips. Window-space drag (`absolute-position` + `mouse`) avoids jitter
 // when the grip moves with layout (see slint-ui/slint#6949).
 
-// Left edge of the expand column: drag right → wider pane.
-global SplitTheme {
-    out property <length> width: 5px;
-    out property <length> height: width;
-    out property <color> normal-background: #111111;
-    out property <color> hover-background: #191919;
-    out property <length> min-pane: 160px;
-    out property <length> max-pane: 800px;
-    out property <length> min-timeline: 280px;
-    out property <length> max-timeline: 800px;
-}
-
 export component HSplitGripLead inherits Rectangle {
-    width: SplitTheme.width;
+    width: AppStore.theme.metrics.layout.split-grip;
     horizontal-stretch: 0;
 
     in-out property <length> pane-width;
-    in property <length> min-pane: SplitTheme.min-pane;
-    in property <length> max-pane: SplitTheme.max-pane;
+    in property <length> min-pane: AppStore.theme.metrics.layout.min-pane-width;
+    in property <length> max-pane: AppStore.theme.metrics.layout.max-pane-width;
 
-    background: ta.has-hover ? SplitTheme.hover-background : SplitTheme.normal-background;
+    background: ta.has-hover ? AppStore.theme.split-grip.hover : AppStore.theme.split-grip.normal;
 
     ta := TouchArea {
         width: 100%;
@@ -51,14 +41,14 @@ export component HSplitGripLead inherits Rectangle {
 
 // Right edge of the right column: drag right → narrower right pane.
 export component HSplitGripTrail inherits Rectangle {
-    width: SplitTheme.width;
+    width: AppStore.theme.metrics.layout.split-grip;
     horizontal-stretch: 0;
 
     in-out property <length> pane-width;
-    in property <length> min-pane: SplitTheme.min-pane;
-    in property <length> max-pane: SplitTheme.max-pane;
+    in property <length> min-pane: AppStore.theme.metrics.layout.min-pane-width;
+    in property <length> max-pane: AppStore.theme.metrics.layout.max-pane-width;
 
-    background: ta.has-hover ? SplitTheme.hover-background : SplitTheme.normal-background;
+    background: ta.has-hover ? AppStore.theme.split-grip.hover : AppStore.theme.split-grip.normal;
 
     ta := TouchArea {
         width: 100%;
@@ -88,14 +78,14 @@ export component HSplitGripTrail inherits Rectangle {
 
 // Horizontal strip above the timeline: drag adjusts timeline height.
 export component VSplitGripTimeline inherits Rectangle {
-    height: SplitTheme.height;
+    height: AppStore.theme.metrics.layout.split-grip;
     horizontal-stretch: 1;
 
     in-out property <length> timeline-height;
-    in property <length> min-timeline: SplitTheme.min-timeline;
-    in property <length> max-timeline: SplitTheme.max-timeline;
+    in property <length> min-timeline: AppStore.theme.metrics.layout.min-timeline-height;
+    in property <length> max-timeline: AppStore.theme.metrics.layout.max-timeline-height;
 
-    background: ta.has-hover ? SplitTheme.hover-background : SplitTheme.normal-background;
+    background: ta.has-hover ? AppStore.theme.split-grip.hover : AppStore.theme.split-grip.normal;
 
     ta := TouchArea {
         width: 100%;

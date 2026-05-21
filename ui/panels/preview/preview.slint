@@ -1,10 +1,15 @@
-export component PreviewPanel inherits VerticalLayout {
-    padding: 30px;
-    spacing: 0;
+import { PanelBase } from "../../components/panel-base.slint";
+import { AppStore } from "../../store/app-store.slint";
 
-    Rectangle {
-        vertical-stretch: 1;
-        horizontal-stretch: 1;
-        background: #000000;
+export component PreviewPanel inherits PanelBase {
+    VerticalLayout {
+        padding: AppStore.theme.metrics.spacing.xxl;
+        spacing: AppStore.theme.metrics.spacing.none;
+
+        Rectangle {
+            vertical-stretch: 1;
+            horizontal-stretch: 1;
+            background: AppStore.theme.surface.content-background;
+        }
     }
 }

@@ -45,6 +45,8 @@
 // `GridView` exposes `content-width` / `content-height`) plug those
 // straight into the matching properties.
 
+import { AppStore } from "../store/app-store.slint";
+
 export component CutlassScrollView inherits Rectangle {
     // ---- Public viewport ----------------------------------------------------
 
@@ -71,18 +73,18 @@ export component CutlassScrollView inherits Rectangle {
     in property <bool> show-horizontal-scrollbar: viewport-width > self.width;
     in property <bool> show-vertical-scrollbar: viewport-height > self.height;
 
-    in property <color> scrollbar-track-color: #2c2c2e;
-    in property <color> scrollbar-thumb-color: #636363;
-    in property <color> scrollbar-thumb-hover-color: #7a7a7a;
-    in property <color> scrollbar-thumb-active-color: #9a9a9a;
+    in property <color> scrollbar-track-color: AppStore.theme.scrollbar.track;
+    in property <color> scrollbar-thumb-color: AppStore.theme.scrollbar.thumb;
+    in property <color> scrollbar-thumb-hover-color: AppStore.theme.scrollbar.thumb-hover;
+    in property <color> scrollbar-thumb-active-color: AppStore.theme.scrollbar.thumb-active;
 
-    in property <length> scrollbar-size: 10px;
+    in property <length> scrollbar-size: AppStore.theme.scrollbar.size;
     // Inset between the thumb and the track edges along the short axis.
-    in property <length> scrollbar-thumb-inset: 2px;
+    in property <length> scrollbar-thumb-inset: AppStore.theme.scrollbar.thumb-inset;
     // Lower bound on thumb length so it stays draggable when content is
     // very long relative to the visible area.
-    in property <length> scrollbar-thumb-min: 24px;
-    in property <length> scrollbar-thumb-radius: 3px;
+    in property <length> scrollbar-thumb-min: AppStore.theme.scrollbar.thumb-min;
+    in property <length> scrollbar-thumb-radius: AppStore.theme.scrollbar.thumb-radius;
 
     // ---- Derived metrics ----------------------------------------------------
 

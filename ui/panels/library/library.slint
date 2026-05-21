@@ -1,30 +1,35 @@
 import { CutlassGridView } from "../../components/grid-view.slint";
+import { PanelBase } from "../../components/panel-base.slint";
+import { AppStore } from "../../store/app-store.slint";
+export component LibraryPanel inherits PanelBase {
+    VerticalLayout {
+        spacing: AppStore.theme.metrics.spacing.none;
 
-export component LibraryPanel inherits VerticalLayout {
-    spacing: 0;
-
-    // Single source of truth for the placeholder bin. When the real
+        // Single source of truth for the placeholder bin. When the real
     // media model lands this becomes `AppState.media-bin` and both the
     // for-loop and `item-count` source from the same length.
     property <int> tile-count: 30;
 
-    grid := CutlassGridView {
-        vertical-stretch: 1;
-        horizontal-stretch: 1;
+        grid := CutlassGridView {
+            show-horizontal-scrollbar: false;
+            show-vertical-scrollbar: false;
+            vertical-stretch: 1;
+            horizontal-stretch: 1;
 
-        columns: 3;
-        cell-width: 100px;
-        cell-height: 100px;
-        spacing: 10px;
-        inset: 10px;
-        item-count: tile-count;
+            columns: 3;
+            cell-width: 100px;
+            cell-height: 100px;
+            spacing: AppStore.theme.metrics.spacing.md;
+            inset: AppStore.theme.metrics.spacing.md;
+            item-count: tile-count;
 
-        for _[i] in tile-count: Rectangle {
-            x: grid.cell-x(i);
-            y: grid.cell-y(i);
-            width: grid.cell-width;
-            height: grid.cell-height;
-            background: #000000;
+            for _[i] in tile-count: Rectangle {
+                x: grid.cell-x(i);
+                y: grid.cell-y(i);
+                width: grid.cell-width;
+                height: grid.cell-height;
+                background: AppStore.theme.surface.content-background;
+            }
         }
     }
 }

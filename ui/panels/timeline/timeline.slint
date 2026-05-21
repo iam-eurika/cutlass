@@ -1,18 +1,22 @@
 import { HorizontalDivider } from "../../components/divider.slint";
-export component TimelinePanel inherits VerticalLayout {
-    spacing: 0;
+import { PanelBase } from "../../components/panel-base.slint";
+import { CutlassText } from "../../components/text.slint";
+import { AppStore } from "../../store/app-store.slint";
+export component TimelinePanel inherits PanelBase {
+    VerticalLayout {
+        spacing: AppStore.theme.metrics.spacing.none;
 
-    Rectangle {
-        height: 40px;
+        Rectangle {
+            height: AppStore.theme.metrics.layout.toolbar-height;
 
-        Text {
-            text: "Tools";
-            color: #ffffff;
-        }
+            CutlassText {
+                text: "Tools";
+                style: AppStore.theme.typography.label;
+            }
 
-        HorizontalDivider {
-            background: #000000;
-            y: parent.height - self.height;
+            HorizontalDivider {
+                y: parent.height - self.height;
+            }
         }
     }
 }

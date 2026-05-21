@@ -1,9 +1,11 @@
+import { AppStore } from "../store/app-store.slint";
+
 export component VerticalDivider inherits Rectangle {
-    width: 1px;
-    background: #202020;
+    width: AppStore.theme.metrics.stroke.hairline;
+    background: AppStore.theme.surface.divider;
 }
 
 export component HorizontalDivider inherits Rectangle {
-    height: 1px;
-    background: #202020;
+    height: AppStore.theme.metrics.stroke.hairline;
+    background: AppStore.theme.surface.divider;
 }
