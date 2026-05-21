@@ -65,7 +65,25 @@ export component TimelinePanel inherits PanelBase {
             height: AppStore.theme.metrics.layout.toolbar-height;
         }
 
-        rl := Ruler { }
+        rl := HorizontalLayout {
+            height: 30px;
+            spacing: 60px;
+
+            Rectangle { //head space
+                width: 100px;
+
+                background: blue;
+            }
+
+            Rectangle { // ruler container — clip so ticks that scroll into the head column are hidden.
+                clip: true;
+                // The Ruler itself does *not* translate with scroll. It
+                // stays at x=0 inside this container and reads scroll-x
+                // internally to compute viewport-local tick positions.
+                // See `ruler.slint` for the coordinate model.
+                Ruler { }
+            }
+        }
 
         // A `Flickable`'s preferred-height equals its `viewport-height`
         // (see Slint docs). That propagates up through `HorizontalLayout`

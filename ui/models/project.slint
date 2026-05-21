@@ -69,6 +69,15 @@ export struct Sequence {
     id: string,
     name: string,
     fps: Rational,
+    // SMPTE drop-frame timecode display flag. Only meaningful for NTSC
+    // rates (29.97 == 30000/1001, 59.94 == 60000/1001) — for everything
+    // else the ruler / timecode formatter ignores it. This is a *display*
+    // setting, not a rate change: the underlying frame indices are the
+    // same; we only relabel them so the displayed timecode tracks
+    // wall-clock time. (For 23.976 there is no standard drop scheme;
+    // by convention 23.976 projects are always non-drop and accept the
+    // ~3.6s/hour drift.)
+    drop-frame: bool,
     tracks: [Track],
 }
 

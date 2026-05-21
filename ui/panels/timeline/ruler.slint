@@ -1,8 +1,105 @@
+// SMPTE timecode ruler for the timeline panel.
+//
+// Visual layout:
+//
+//   +-------------------------------------------------------------+
+//   | 00:00:01:00      00:00:02:00      00:00:03:00              |
+//   |    .    .    .    |    .    .    .    |    .    .    .    .|
+//   +-------------------------------------------------------------+  <- hairline divider
+//
+// Tall ticks ("major") are labelled with SMPTE timecode. Short ticks
+// ("minor") are unlabelled visual subdivisions. The interval picked for
+// majors vs minors slides up and down a "nice number" ladder based on
+// the current zoom so the on-screen spacing between labels stays
+// roughly constant (~80 px) no matter whether the user is scrubbing
+// 30 frames or 30 hours.
+//
+// Coordinate model:
+//
+//   This component lives inside a clipping `Rectangle` in `timeline.slint`
+//   and stays put at x=0 within that container — it does NOT translate
+//   with the scroll. Instead it reads `TimelineViewState.scroll-x` and
+//   passes it to the Rust backend, which returns ticks already
+//   positioned in *viewport-local* pixels (`frame * zoom + scroll_x`).
+//
+//   That keeps the rendered tick count bounded by the viewport
+//   (~20 majors + ~80 minors at typical sizes), regardless of timeline
+//   length. An 8-hour project at 24 fps has 691 200 frames — emitting a
+//   per-frame tick set up-front would be a non-starter; every pro NLE
+//   (Premiere, DaVinci Resolve, FCP, Avid) virtualizes the ruler for
+//   exactly this reason.
+//
+// References:
+//   - SMPTE ST 12-1, timecode standard
+//   - OpenTimelineIO `RationalTime::to_timecode` (algorithm reused in
+//     `src/timecode.rs`)
+//   - Premiere Pro / DaVinci Resolve / FCP ruler behaviour (observed
+//     by zooming and measuring px-per-major spacing; all three sit
+//     between 70 and 90 px — we target 80)
+
+import { AppStore, TimelineStore, EditorStore } from "../../store/index.slint";
 import { CutlassText } from "../../components/index.slint";
+import { TimelineViewState } from "state.slint";
+import { RulerBackend, RulerTick } from "../../lib/ruler-backend.slint";
+
 export component Ruler inherits Rectangle {
-    width: 100%;
-    height: 30px;
-    CutlassText {
-        text: "Cutlass Ruler";
+    background: AppStore.theme.surface.app-background;
+
+    // Inputs to the tick generator. Pulled from globals so the parent
+    // (`timeline.slint`) doesn't have to wire 5 properties just to draw
+    // a ruler. If you ever need to support multiple rulers with
+    // independent state (e.g. a "source viewer" timecode strip), promote
+    // these to `in property` and have the parent pass them in.
+    private property <length> scroll-x: TimelineViewState.scroll-x;
+    private property <float> zoom: TimelineStore.zoom;
+    private property <int> fps-num: EditorStore.project.sequence.fps.num;
+    private property <int> fps-den: EditorStore.project.sequence.fps.den;
+    private property <bool> drop-frame: EditorStore.project.sequence.drop-frame;
+
+    // The tick model is re-evaluated automatically whenever any of the
+    // reads above (or `self.width`) change. We don't have to invalidate
+    // anything by hand — that's the whole point of Slint's property
+    // graph + `pure callback`.
+    private property <[RulerTick]> tick-model:
+        RulerBackend.ticks(scroll-x, self.width, zoom, fps-num, fps-den, drop-frame);
+
+    // Bottom hairline that separates the ruler from the track lanes.
+    Rectangle {
+        y: parent.height - self.height;
+        height: AppStore.theme.metrics.stroke.hairline;
+        width: parent.width;
+        background: AppStore.theme.surface.divider;
+    }
+
+    // Tick marks (both major and minor; the per-tick `is-major` flag
+    // controls colour and height so a single `for` covers both).
+    for tick in tick-model: Rectangle {
+        x: tick.x;
+        y: parent.height - self.height;
+        width: AppStore.theme.metrics.stroke.hairline;
+        height: tick.is-major ? 12px : 5px;
+        background: tick.is-major
+            ? AppStore.theme.text.secondary
+            : AppStore.theme.text.muted;
+    }
+
+    // Labels. We iterate over the same model and rely on `tick.label`
+    // being empty for minor ticks — an empty Text draws no glyphs, so
+    // we don't pay for them. Slint doesn't support `for x in xs: if c: E`
+    // directly, and a wrapper Rectangle-per-tick just to gate one Text
+    // is more allocations, not fewer.
+    //
+    // Labels are anchored just to the right of the tick (3px) so they
+    // sit inside their "cell" instead of straddling the tick line.
+    for tick in tick-model: CutlassText {
+        x: tick.x + 3px;
+        y: 3px;
+        text: tick.label;
+        // Monospaced so digits don't dance horizontally as the timecode
+        // scrolls (a common reason cheap rulers look "alive" while pro
+        // ones look glued in place).
+        mono: true;
+        style: AppStore.theme.typography.caption;
+        foreground: AppStore.theme.text.secondary;
     }
 }
