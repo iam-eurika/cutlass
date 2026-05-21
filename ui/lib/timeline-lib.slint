@@ -15,17 +15,27 @@ export global TimelineLib {
         return c.source-range.duration;
     }
 
-    // Placeholder timeline projection: 1 tick == 1 logical pixel.
-    // Real implementation will multiply seconds (or frames) by a zoom factor
-    // owned by timeline view state, not by the time model.
-    public pure function rational-to-length(rt: RationalTime) -> length {
-        return rt.value * 1px;
+    // Timeline projection: 1 tick == `zoom` logical pixels.
+    // Zoom is owned by timeline view state (see `TimelineState.zoom`) rather
+    // than the time model, so the same clip can render at any scale without
+    // mutating its `RationalTime`.
+    public pure function rational-to-length(rt: RationalTime, zoom: float) -> length {
+        return rt.value * zoom * 1px;
     }
 
     // Convenience composite for clip rendering. Kept in lock-step with
     // `clip-timeline-duration` so the call site never has to compose two
     // helpers (and so the time-remap change later only touches this file).
-    public pure function clip-timeline-width(c: Clip) -> length {
-        return c.source-range.duration.value * 1px;
+    public pure function clip-timeline-width(c: Clip, zoom: float) -> length {
+        return c.source-range.duration.value * zoom * 1px;
+    }
+
+    public pure function calc-viewport-height(track-count: int, track-height: length, spacing: length, ) -> length {
+        let content_height = (track-count * track_height) + ((track-count - 1) * spacing);
+        return content_height;
+    }
+
+    public pure function calc-viewport-width() -> length {
+        return 1000px;
     }
 }
