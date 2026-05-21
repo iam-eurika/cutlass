@@ -29,12 +29,22 @@ export struct RulerTick {
     // smear across two subpixels.
     x: length,
 
-    // Major ticks are tall (~12px) and carry a non-empty `label`.
-    // Minor ticks are short (~5px) visual subdivisions; `label == ""`.
+    // True for the labeled "|" ticks (CapCut-style: full-height
+    // vertical bar that visually reads as the leading glyph of the
+    // label). False for the dense short hash marks that fill the
+    // grid between labels. The two are drawn at different heights
+    // and colors in `ruler.slint`.
     is-major: bool,
 
-    // SMPTE timecode for major ticks: "HH:MM:SS:FF" (non-drop, `:`) or
-    // "HH:MM:SS;FF" (drop-frame, `;`). Always empty for minor ticks.
+    // Label text — SMPTE timecode "HH:MM:SS:FF" (or "HH:MM:SS;FF"
+    // for drop-frame) when the label step is one second or coarser,
+    // OR a frame-index string like "f504" when the step is
+    // sub-second. Empty for bare ticks.
+    //
+    // The format flip happens automatically inside `compute_visible_ticks`:
+    // SMPTE labels at sub-second steps would show the same SS digits
+    // on adjacent labels (only FF changing), which reads as visual
+    // noise — `f<index>` is unambiguous in that regime.
     label: string,
 }
 

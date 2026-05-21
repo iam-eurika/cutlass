@@ -1,18 +1,30 @@
-// SMPTE timecode ruler for the timeline panel.
+// CapCut-style timeline ruler.
 //
-// Visual layout:
+// Visual layout (CapCut convention, ~30 px strip):
 //
-//   +-------------------------------------------------------------+
-//   | 00:00:01:00      00:00:02:00      00:00:03:00              |
-//   |    .    .    .    |    .    .    .    |    .    .    .    .|
-//   +-------------------------------------------------------------+  <- hairline divider
+//   +---------------------------------------------------------------+
+//   |  |00:00:00:00         |00:00:01:00         |00:00:02:00      |
+//   |    .    .    .    .    .    .    .    .    .    .    .    .  |
+//   +---------------------------------------------------------------+
 //
-// Tall ticks ("major") are labelled with SMPTE timecode. Short ticks
-// ("minor") are unlabelled visual subdivisions. The interval picked for
-// majors vs minors slides up and down a "nice number" ladder based on
-// the current zoom so the on-screen spacing between labels stays
-// roughly constant (~80 px) no matter whether the user is scrubbing
-// 30 frames or 30 hours.
+// Two kinds of ticks:
+//
+//   * **Labeled ticks** (`tick.is-major == true`) — a tall 1×10 px
+//     vertical bar drawn flush against the leading edge of the label
+//     text. Together they read as a single glyph cell `|XX:XX:XX:XX`.
+//     The Rust side already picks frame indices that fall on
+//     second / minute / hour boundaries so the labels roll cleanly
+//     (`:00, :00, :00`) and never irrationally walk the FF field.
+//
+//   * **Bare ticks** (`tick.is-major == false`) — short 1×3 px hash
+//     marks lower in the strip, ~5–10× denser than labels. They give
+//     the ruler the continuous filled-rhythm look that CapCut uses
+//     (vs. the sparse "tall majors + a few minors" look of Premiere /
+//     Resolve / FCP).
+//
+// Both tick kinds and the label text use the *same x*: the labeled
+// tick line sits at `tick.x` and the label text is placed at
+// `tick.x + 2px` so the `|` and the digits read as one cell.
 //
 // Coordinate model:
 //
@@ -23,19 +35,16 @@
 //   positioned in *viewport-local* pixels (`frame * zoom + scroll_x`).
 //
 //   That keeps the rendered tick count bounded by the viewport
-//   (~20 majors + ~80 minors at typical sizes), regardless of timeline
-//   length. An 8-hour project at 24 fps has 691 200 frames — emitting a
+//   (~80–120 ticks at typical sizes) regardless of timeline length.
+//   An 8-hour project at 24 fps has 691 200 frames — emitting a
 //   per-frame tick set up-front would be a non-starter; every pro NLE
-//   (Premiere, DaVinci Resolve, FCP, Avid) virtualizes the ruler for
-//   exactly this reason.
+//   *and* CapCut virtualises the ruler for the same reason.
 //
 // References:
-//   - SMPTE ST 12-1, timecode standard
-//   - OpenTimelineIO `RationalTime::to_timecode` (algorithm reused in
-//     `src/timecode.rs`)
-//   - Premiere Pro / DaVinci Resolve / FCP ruler behaviour (observed
-//     by zooming and measuring px-per-major spacing; all three sit
-//     between 70 and 90 px — we target 80)
+//   - SMPTE ST 12-1, timecode standard (label content)
+//   - OpenCut `apps/web/src/timeline/ruler-utils.ts` — explicit
+//     CapCut clone whose ladder shapes we follow (see `src/ruler.rs`)
+//   - CapCut desktop timeline (visual inspection)
 
 import { AppStore, TimelineStore, EditorStore } from "../../store/index.slint";
 import { CutlassText } from "../../components/index.slint";
@@ -43,8 +52,6 @@ import { TimelineViewState } from "state.slint";
 import { RulerBackend, RulerTick } from "../../lib/ruler-backend.slint";
 
 export component Ruler inherits Rectangle {
-    // background: AppStore.theme.surface.app-background;
-
     // Inputs to the tick generator. Pulled from globals so the parent
     // (`timeline.slint`) doesn't have to wire 5 properties just to draw
     // a ruler. If you ever need to support multiple rulers with
@@ -63,32 +70,43 @@ export component Ruler inherits Rectangle {
     private property <[RulerTick]> tick-model:
         RulerBackend.ticks(scroll-x, self.width, zoom, fps-num, fps-den, drop-frame);
 
-    // Tick marks (both major and minor; the per-tick `is-major` flag
-    // controls colour and height so a single `for` covers both).
+    // ---- Tick marks ----
+    //
+    // Labeled ticks: 10 px tall, anchored near the top so the bar sits
+    // alongside the label digits (forming the visual `|XX:XX` glyph).
+    //
+    // Bare ticks: 3 px tall, anchored toward the bottom of the strip,
+    // separated from the label band so they read as a "grid below"
+    // rather than competing with the labels. The two y positions are
+    // chosen so the bare-tick *bottom* aligns with the labeled-tick
+    // bottom — the strip ends on a single horizontal line of ticks.
     for tick in tick-model: Rectangle {
         x: tick.x;
-        y: 3px;
-        // y: parent.height - self.height;
+        y: tick.is-major ? 4px : 11px;
         width: AppStore.theme.metrics.stroke.hairline;
-        height: tick.is-major ? 12px : 5px;
+        height: tick.is-major ? 10px : 3px;
         background: tick.is-major ? AppStore.theme.text.secondary : AppStore.theme.text.muted;
     }
 
-    // Labels. We iterate over the same model and rely on `tick.label`
-    // being empty for minor ticks — an empty Text draws no glyphs, so
-    // we don't pay for them. Slint doesn't support `for x in xs: if c: E`
-    // directly, and a wrapper Rectangle-per-tick just to gate one Text
-    // is more allocations, not fewer.
+    // ---- Labels ----
     //
-    // Labels are anchored just to the right of the tick (3px) so they
-    // sit inside their "cell" instead of straddling the tick line.
+    // We iterate the same model and rely on `tick.label` being empty
+    // for bare ticks — Slint draws an empty Text as a 0-px node, so
+    // we don't pay per-glyph for unlabeled ticks. (A wrapper
+    // `Rectangle`-per-tick that gates on `if has-label` would be
+    // *more* allocations, not fewer.)
+    //
+    // Labels are anchored 2 px to the right of the labeled tick line
+    // so the `|` and the digits read together as one cell. Top-aligned
+    // at y=1 so they sit at the top of the strip with the tick bar
+    // running alongside.
     for tick in tick-model: CutlassText {
-        x: tick.x + 3px;
-        y: 4px;
+        x: tick.x + 2px;
+        y: 1px;
         text: tick.label;
         // Monospaced so digits don't dance horizontally as the timecode
         // scrolls (a common reason cheap rulers look "alive" while pro
-        // ones look glued in place).
+        // ones — and CapCut — look glued in place).
         mono: true;
         style: AppStore.theme.typography.caption;
         foreground: AppStore.theme.text.secondary;

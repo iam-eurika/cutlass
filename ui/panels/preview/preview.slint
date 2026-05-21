@@ -1,9 +1,13 @@
-import { PanelBase } from "../../components/index.slint";
+import { PanelBase, PanelHeader } from "../../components/index.slint";
 import { AppStore } from "../../store/index.slint";
 
 export component PreviewPanel inherits PanelBase {
     VerticalLayout {
-        padding: AppStore.theme.metrics.spacing.xxl;
+        PanelHeader {
+            title: "Preview";
+        }
+
+        // padding: AppStore.theme.metrics.spacing.xxl;
         spacing: AppStore.theme.metrics.spacing.none;
 
         Rectangle {
