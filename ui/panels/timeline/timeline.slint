@@ -12,6 +12,15 @@ import { TrackHead } from "track-head.slint";
 import { Ruler } from "ruler.slint";
 import { TimelineState } from "state.slint";
 
+
+
+    component ForceHeadSpace inherits Rectangle {
+    property <length> force-head-space: 50px;
+
+    height: force-head-space;
+    background: transparent;
+}
+
 export component TimelinePanel inherits PanelBase {
     private property <int> track-count: 10;
     private property <length> track-spacing: AppStore.theme.metrics.spacing.sm;
@@ -39,6 +48,8 @@ export component TimelinePanel inherits PanelBase {
                     spacing: track-spacing;
                     vertical-stretch: 1;
 
+                    ForceHeadSpace { }
+
                     for i in track-count: TrackHead { }
                 }
 
@@ -58,6 +69,9 @@ export component TimelinePanel inherits PanelBase {
 
                     vertical-stretch: 1;
                     horizontal-stretch: 1;
+
+                    ForceHeadSpace { }
+
                     for _ in track-count: TrackLane {
                         for c in 10: Rectangle {
 

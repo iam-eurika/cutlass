@@ -1,0 +1,36 @@
+export struct RationalTime {
+    num: int,
+    den: int,
+}
+
+export struct Fps {
+    num: int,
+    den: int,
+}
+
+export struct Clip {
+    id: string,
+    name: string,
+    start: RationalTime,
+    duration: RationalTime,
+}
+
+export struct Track {
+    id: string,
+    name: string,
+    clips: [Clip],
+}
+export struct Sequence {
+    id: string,
+    name: string,
+    fps: Fps,
+    tracks: [Track],
+}
+
+
+
+export struct Project {
+    id: string,
+    title: string,
+    sequence: Sequence, // project can have ONLY one sequence at this stage. Future may allow multiple sequences.
+}

@@ -1,0 +1,27 @@
+import { Project } from "../models/index.slint";
+
+export global EditorStore {
+    out property <Project> project: {
+        id: "1",
+        title: "Project 1",
+        sequence: {
+            id: "1",
+            name: "Sequence 1",
+            fps: { num: 24, den: 1 },
+            tracks: [
+                {
+                    id: "1",
+                    name: "Track 1",
+                    clips: [
+                        {
+                            id: "1",
+                            name: "Clip 1",
+                            start: { num: 0, den: 1 },
+                            duration: { num: 1, den: 1 },
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
