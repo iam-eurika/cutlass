@@ -1,21 +1,69 @@
-import { HorizontalDivider } from "../../components/divider.slint";
-import { PanelBase } from "../../components/panel-base.slint";
-import { CutlassText } from "../../components/text.slint";
-import { AppStore } from "../../store/app-store.slint";
+import {
+    CutlassText,
+    HorizontalDivider,
+    PanelBase,
+    CutlassScrollView,
+    VerticalDivider,
+} from "../../components/index.slint";
+import { AppStore } from "../../store/index.slint";
+import { Toolbar } from "toolbar.slint";
+import { TrackLane } from "track-lane.slint";
+import { TrackHead } from "track-head.slint";
+import { Ruler } from "ruler.slint";
+import { TimelineState } from "state.slint";
+
 export component TimelinePanel inherits PanelBase {
+    private property <int> track-count: 10;
     VerticalLayout {
+
         spacing: AppStore.theme.metrics.spacing.none;
 
-        Rectangle {
+        Toolbar {
             height: AppStore.theme.metrics.layout.toolbar-height;
+        }
 
-            CutlassText {
-                text: "Tools";
-                style: AppStore.theme.typography.label;
+        Ruler { }
+
+        HorizontalLayout {
+
+            spacing: 60px;
+
+            Flickable {
+                viewport-y <=> TimelineState.scroll-y;
+                height: 100%;
+                width: 100px;
+
+                VerticalLayout {
+
+                    spacing: AppStore.theme.metrics.spacing.lg;
+                    vertical-stretch: 1;
+
+                    for i in track-count: TrackHead { }
+                }
+
+                VerticalDivider {
+                    x: parent.width - self.width;
+                    width: AppStore.theme.metrics.stroke.thin;
+                }
             }
 
-            HorizontalDivider {
-                y: parent.height - self.height;
+            Flickable {
+                viewport-y <=> TimelineState.scroll-y;
+                VerticalLayout {
+                    spacing: AppStore.theme.metrics.spacing.lg;
+                    width: 100%;
+                    vertical-stretch: 1;
+                    horizontal-stretch: 1;
+                    for _ in track-count: TrackLane {
+                        for c in 10: Rectangle {
+
+                            x: c * 220px;
+                            height: 50px;
+                            width: 200px;
+                            background: #444040;
+                        }
+                    }
+                }
             }
         }
     }

@@ -1,23 +1,24 @@
-import { Theme } from "../types/theme.slint";
 import {
     Layout,
     Metrics,
+    Panel,
     Radius,
+    Scrollbar,
     Spacing,
+    SplitGrip,
     Stroke,
-} from "../types/metrics.slint";
-import { Panel } from "../types/panel.slint";
-import { Scrollbar } from "../types/scrollbar.slint";
-import { SplitGrip } from "../types/split-grip.slint";
-import { Surface } from "../types/surface.slint";
-import { TextColors } from "../types/text-colors.slint";
-import { Typography } from "../types/typography.slint";
+    Surface,
+    TextColors,
+    Theme,
+    TrackLane,
+    Typography,
+} from "../types/index.slint";
 
 export global DefaultTheme {
     private property <Surface> surface: {
         app-background: #141414,
         content-background: #000000,
-        divider: #202020,
+        divider: #161616,
     };
 
     private property <TextColors> text: {
@@ -97,6 +98,11 @@ export global DefaultTheme {
         thumb-active: #9a9a9a,
     };
 
+    private property <TrackLane> track-lane: {
+        height: 60px,
+        background: #292929,
+    };
+
     out property <Theme> theme: {
         surface: self.surface,
         text: self.text,
@@ -105,5 +111,6 @@ export global DefaultTheme {
         metrics: self.metrics,
         panel: self.panel,
         scrollbar: self.scrollbar,
+        track-lane: self.track-lane,
     };
 }

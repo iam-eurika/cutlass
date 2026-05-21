@@ -1,5 +1,5 @@
-import { TextStyle } from "../types/typography.slint";
-import { AppStore } from "../store/app-store.slint";
+import { TextStyle } from "../types/index.slint";
+import { AppStore } from "../store/index.slint";
 
 export component CutlassText inherits Text {
     in property <TextStyle> style: AppStore.theme.typography.body;

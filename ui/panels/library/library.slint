@@ -1,14 +1,11 @@
-import { CutlassGridView } from "../../components/grid-view.slint";
-import { PanelBase } from "../../components/panel-base.slint";
-import { AppStore } from "../../store/app-store.slint";
+import { CutlassGridView, PanelBase } from "../../components/index.slint";
+import { AppStore } from "../../store/index.slint";
+
 export component LibraryPanel inherits PanelBase {
     VerticalLayout {
         spacing: AppStore.theme.metrics.spacing.none;
 
-        // Single source of truth for the placeholder bin. When the real
-    // media model lands this becomes `AppState.media-bin` and both the
-    // for-loop and `item-count` source from the same length.
-    property <int> tile-count: 30;
+        property <int> tile-count: 30;
 
         grid := CutlassGridView {
             show-horizontal-scrollbar: false;
