@@ -16,9 +16,9 @@ export global TimelineLib {
     }
 
     // Timeline projection: 1 tick == `zoom` logical pixels.
-    // Zoom is owned by timeline view state (see `TimelineState.zoom`) rather
-    // than the time model, so the same clip can render at any scale without
-    // mutating its `RationalTime`.
+    // Zoom is owned by `TimelineStore.zoom` rather than the time model, so
+    // the same clip can render at any scale without mutating its
+    // `RationalTime`.
     public pure function rational-to-length(rt: RationalTime, zoom: float) -> length {
         return rt.value * zoom * 1px;
     }
