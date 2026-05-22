@@ -1,8 +1,21 @@
 import { Project } from "../models/index.slint";
 
-// Canonical project data lives in Rust (`src/models/domain.rs`) as HashMaps.
-// Rust projects it here via `dto::project_to_slint` on startup and after
-// every command mutation.
+// Canonical project state lives in Rust (`src/models/`) and is mutated
+// only by `Editor::apply(Command)` (`src/state.rs`). Rust publishes
+// the projection here once at startup, then patches individual clip
+// rows in place via `src/projector.rs` — Slint never writes back into
+// `project`, so it's declared `in` (read-only inside `.slint`,
+// settable from Rust).
+//
+// Domain mutations from the UI happen exclusively through the
+// callbacks on this global. Each one is the canonical entry point
+// for one `Command` variant — the same vocabulary the AI agent
+// will eventually emit as tagged JSON.
 export global EditorStore {
-    in-out property <Project> project;
+    in property <Project> project;
+
+    // Reposition `clip-id` inside `track-id` to start at
+    // `new-start-value` ticks at the clip's existing rate.
+    // Dispatched from `ClipView` on drag-release.
+    callback move-clip(string /* track-id */, string /* clip-id */, int /* new-start-value */);
 }

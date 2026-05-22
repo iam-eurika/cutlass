@@ -2,18 +2,39 @@ import { AppStore, EditorStore } from "../../store/index.slint";
 import { Clip } from "../../models/index.slint";
 import { TimelineLib } from "../../lib/timeline-lib.slint";
 import { TimelineStore } from "../../store/timeline-store.slint";
+import { TimelineViewState } from "state.slint";
 
-// View for a single Clip on a TrackLane. Positions itself within the lane
-// based on the model's `timeline-start` and effective timeline width
-// (see `TimelineLib.clip-timeline-width`).
+// View for a single Clip on a TrackLane. Positions itself within the
+// lane based on the model's `timeline-start` (committed domain state)
+// plus an in-flight pixel offset from `TimelineViewState.drag-dx-px`
+// while this clip is being dragged.
 //
-// Note: input is named `model` (not `clip`) because `clip` is a built-in
-// boolean property on Slint visual elements.
+// IMPORTANT: this view never mutates the clip model. The drag updates
+// only ephemeral view state; on release we dispatch ONE `move-clip`
+// command and clear the drag fields. Rust applies the command,
+// patches the Slint projection row in place, and the clip re-renders
+// at its new committed position with no further work here.
+//
+// Note: input is named `model` (not `clip`) because `clip` is a
+// built-in boolean property on Slint visual elements.
 export component ClipView inherits Rectangle {
     in property <Clip> model;
+    in property <string> track-id;
     in property <float> zoom;
 
-    x: TimelineLib.rational-to-length(model.timeline-start, zoom);
+    // Pixel position of the clip's committed `timeline-start`. Hot
+    // path on every drag frame — kept as a single named property so
+    // we don't recompute the projection inside two separate bindings.
+    private property <length> base-x: TimelineLib.rational-to-length(model.timeline-start, zoom);
+
+    // True iff this specific clip is the one currently being dragged.
+    // Keyed on (track-id, clip-id) because clip ids are unique
+    // per-track, not project-wide.
+    private property <bool> is-active-drag:
+        TimelineViewState.dragging-track-id == track-id
+            && TimelineViewState.dragging-clip-id == model.id;
+
+    x: base-x + (is-active-drag ? TimelineViewState.drag-dx-px : 0px);
     width: TimelineLib.clip-timeline-width(model, zoom);
     height: AppStore.theme.track-lane.clip.height;
     background: AppStore.theme.track-lane.clip.background;
@@ -23,14 +44,64 @@ export component ClipView inherits Rectangle {
         width: parent.width;
         height: parent.height;
 
-        moved() => {
-            if (!self.pressed) {
-                return;
+        // Press / release lifecycle:
+        //   press   → claim the global "dragging clip" slot
+        //   move    → accumulate `drag-dx-px` in view state (no
+        //             command emitted, no domain change)
+        //   release → compute final tick delta, clear drag state,
+        //             dispatch ONE `EditorStore.move-clip` command
+        //
+        // Why this shape:
+        //   - Dragging through view state keeps the per-frame work
+        //     to one length write + one binding eval; no Rust call
+        //     and no HashMap lookup until release.
+        //   - Clearing drag state BEFORE dispatching ensures the
+        //     next frame (which sees both writes) renders the clip
+        //     at the new committed position — no overshoot, no
+        //     snap-back flicker (both writes coalesce into one
+        //     redraw).
+        //   - Sub-tick pixel motion rounds to nearest tick at
+        //     release. Sub-tick precision isn't meaningful on a
+        //     drag UX; if it becomes meaningful elsewhere (e.g.
+        //     snap-to-fps for variable-rate sources) we'll capture
+        //     it as RationalTime arithmetic in Rust, not here.
+        changed pressed => {
+            if (self.pressed) {
+                TimelineViewState.dragging-track-id = track-id;
+                TimelineViewState.dragging-clip-id = model.id;
+                TimelineViewState.drag-dx-px = 0px;
+            } else if (is-active-drag) {
+                // `1px * zoom` is the width of one tick on screen,
+                // so `drag-dx-px / (1px * zoom)` is the tick delta.
+                // `round` snaps to the nearest tick; assigning to
+                // `int` truncates the (now integer-valued) float.
+                let dx-ticks: int = round(TimelineViewState.drag-dx-px / (1px * zoom));
+                let new-start: int = model.timeline-start.value + dx-ticks;
+
+                TimelineViewState.dragging-track-id = "";
+                TimelineViewState.dragging-clip-id = "";
+                TimelineViewState.drag-dx-px = 0px;
+
+                if (dx-ticks != 0) {
+                    EditorStore.move-clip(track-id, model.id, new-start);
+                }
             }
-            root.x = self.mouse-x;
         }
-        clicked => {
-            debug("clip clicked");
+
+        // `mouse-x - pressed-x` is the cursor's delta in the
+        // TouchArea's CURRENT local frame. Since we move the TA each
+        // frame by writing into `drag-dx-px`, the local frame shifts
+        // and the next `moved` event reports only the *incremental*
+        // delta from the previous position. Accumulating into
+        // `drag-dx-px` therefore tracks the cursor's absolute
+        // displacement from the press point. (Derivation:
+        // self.mouse-x - self.pressed-x = M(t) - base - X(t-1) - (M(0) - base)
+        //                              = (M(t) - M(0)) - X(t-1)
+        // and X(t) = X(t-1) + that delta = M(t) - M(0). ✓)
+        moved => {
+            if (is-active-drag) {
+                TimelineViewState.drag-dx-px += self.mouse-x - self.pressed-x;
+            }
         }
     }
 }

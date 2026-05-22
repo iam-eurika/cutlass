@@ -1,11 +1,12 @@
-//! Editor domain model (Rust) and Slint view-model conversion.
+//! Editor domain model (pure Rust).
 //!
-//! Tracks and clips are stored in `HashMap`s for O(1) lookup by id — the
-//! shape the command layer and agent will mutate. Slint has no map type,
-//! so we project ordered `VecModel`s at the boundary via [`dto`].
+//! Tracks and clips are stored in `HashMap`s keyed by id, with sibling
+//! `*_order` vectors for stable iteration. This is the **only** shape
+//! the command layer (`crate::command`) and the agent are allowed to
+//! mutate — the Slint-facing projection is one-way and lives in
+//! `crate::projector`.
 
 pub mod clip;
-pub mod dto;
 pub mod project;
 pub mod rational;
 pub mod rational_time;
@@ -18,8 +19,6 @@ pub use clip::Clip;
 pub use project::Project;
 pub use rational::Rational;
 pub use rational_time::RationalTime;
-pub use sequence::Sequence;
 pub use time_range::TimeRange;
-pub use track::Track;
 
 pub use sample::sample_project;

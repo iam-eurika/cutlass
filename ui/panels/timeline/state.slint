@@ -1,11 +1,32 @@
 import { TimelineLib } from "../../lib/index.slint";
 import { AppStore, EditorStore, TimelineStore } from "../../store/index.slint";
-// Panel-local *view* state for the timeline. Anything in here is ephemeral
-// UI ("where is the user currently looking?") and is not part of the
-// project, not persisted, and not addressable by the agent command layer.
-// Domain timeline state (zoom, playhead, selection, marks, …) lives in
-// `TimelineStore` (see `ui/store/timeline-store.slint`).
+
+// Panel-local *view* state for the timeline. Anything in here is
+// ephemeral UI ("where is the user currently looking?", "which clip
+// is the cursor dragging right now?") and is not part of the project,
+// not persisted, and not addressable by the agent command layer.
+//
+// In particular, the drag fields below intentionally do NOT mutate
+// any clip's `timeline-start` while a drag is in flight. The view
+// renders the clip offset by `drag-dx-px` for visual feedback and
+// the gesture layer dispatches one `EditorStore.move-clip` command
+// on release — that's the only path that touches the domain.
+//
+// Domain timeline state (zoom, playhead, selection, marks, …) lives
+// in `TimelineStore` (see `ui/store/timeline-store.slint`).
 export global TimelineViewState {
     in-out property <length> scroll-x: 0px;
     in-out property <length> scroll-y: 0px;
+
+    // Identifies the clip currently being dragged. Empty string ==
+    // no drag in progress. We key on (track-id, clip-id) because
+    // clip ids are unique per track, not project-wide.
+    in-out property <string> dragging-track-id: "";
+    in-out property <string> dragging-clip-id: "";
+
+    // Pixel offset of the dragged clip from its committed
+    // `timeline-start * zoom` position. Accumulates as the pointer
+    // moves and resets to `0px` when the drag finishes. Only one
+    // clip can be dragged at a time, so a single field is enough.
+    in-out property <length> drag-dx-px: 0px;
 }
