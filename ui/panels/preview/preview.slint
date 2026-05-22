@@ -92,7 +92,8 @@ export component PreviewPanel inherits PanelBase {
 
                             TouchArea {
                                 clicked => {
-                                    AppState.enter-preview-maximized();
+                                    // AppState.enter-preview-maximized();
+                                    AppState.preview-maximized = true;
                                 }
                             }
                         }

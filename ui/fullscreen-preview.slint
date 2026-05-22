@@ -129,7 +129,8 @@ export component FullscreenPreview inherits Rectangle {
                 width: 100%;
                 height: 100%;
                 clicked => {
-                    AppState.exit-preview-maximized();
+                    // AppState.exit-preview-maximized();
+                    AppState.preview-maximized = false;
                 }
             }
         }

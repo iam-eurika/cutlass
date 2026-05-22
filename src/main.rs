@@ -20,7 +20,7 @@ fn main() -> Result<(), slint::PlatformError> {
     app.global::<TimelineLib>()
         .on_sequence_duration(timeline::sequence_duration);
 
-    wire_preview_maximize(&app);
+    // wire_preview_maximize(&app);
 
     app.run()
 }
@@ -30,37 +30,37 @@ fn main() -> Result<(), slint::PlatformError> {
 // wasn't already maximized, and exit only un-maximizes if *we* were the
 // ones who maximized it — so the user's prior maximize state is
 // preserved across a focus-mode round-trip.
-fn wire_preview_maximize(app: &AppWindow) {
-    let we_maximized = Rc::new(Cell::new(false));
-    let app_weak = app.as_weak();
+// fn wire_preview_maximize(app: &AppWindow) {
+//     let we_maximized = Rc::new(Cell::new(false));
+//     let app_weak = app.as_weak();
 
-    app.global::<AppState>().on_enter_preview_maximized({
-        let app_weak = app_weak.clone();
-        let we_maximized = we_maximized.clone();
-        move || {
-            let Some(app) = app_weak.upgrade() else {
-                return;
-            };
-            let window = app.window();
-            if !window.is_maximized() {
-                window.set_maximized(true);
-                we_maximized.set(true);
-            }
-            app.global::<AppState>().set_preview_maximized(true);
-        }
-    });
+//     app.global::<AppState>().on_enter_preview_maximized({
+//         let app_weak = app_weak.clone();
+//         let we_maximized = we_maximized.clone();
+//         move || {
+//             let Some(app) = app_weak.upgrade() else {
+//                 return;
+//             };
+//             let window = app.window();
+//             if !window.is_maximized() {
+//                 window.set_maximized(true);
+//                 we_maximized.set(true);
+//             }
+//             app.global::<AppState>().set_preview_maximized(true);
+//         }
+//     });
 
-    app.global::<AppState>().on_exit_preview_maximized({
-        let app_weak = app_weak.clone();
-        let we_maximized = we_maximized.clone();
-        move || {
-            let Some(app) = app_weak.upgrade() else {
-                return;
-            };
-            if we_maximized.replace(false) {
-                app.window().set_maximized(false);
-            }
-            app.global::<AppState>().set_preview_maximized(false);
-        }
-    });
-}
+//     app.global::<AppState>().on_exit_preview_maximized({
+//         let app_weak = app_weak.clone();
+//         let we_maximized = we_maximized.clone();
+//         move || {
+//             let Some(app) = app_weak.upgrade() else {
+//                 return;
+//             };
+//             if we_maximized.replace(false) {
+//                 app.window().set_maximized(false);
+//             }
+//             app.global::<AppState>().set_preview_maximized(false);
+//         }
+//     });
+// }

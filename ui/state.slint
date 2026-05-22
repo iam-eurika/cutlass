@@ -8,8 +8,8 @@ export global AppState {
     // visible.
     in-out property <bool> preview-maximized: false;
 
-    // UI -> host intents. The host (Rust) toggles window state and
-    // flips `preview-maximized` so both stay in sync.
-    callback enter-preview-maximized();
-    callback exit-preview-maximized();
+    // // UI -> host intents. The host (Rust) toggles window state and
+    // // flips `preview-maximized` so both stay in sync.
+    // callback enter-preview-maximized();
+    // callback exit-preview-maximized();
 }
