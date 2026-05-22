@@ -38,7 +38,9 @@ fn wire_preview_maximize(app: &AppWindow) {
         let app_weak = app_weak.clone();
         let we_maximized = we_maximized.clone();
         move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             let window = app.window();
             if !window.is_maximized() {
                 window.set_maximized(true);
@@ -52,7 +54,9 @@ fn wire_preview_maximize(app: &AppWindow) {
         let app_weak = app_weak.clone();
         let we_maximized = we_maximized.clone();
         move || {
-            let Some(app) = app_weak.upgrade() else { return };
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
             if we_maximized.replace(false) {
                 app.window().set_maximized(false);
             }

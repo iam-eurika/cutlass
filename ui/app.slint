@@ -32,13 +32,14 @@ export component AppWindow inherits Window {
     default-font-size: AppStore.theme.typography.body.size;
     default-font-weight: AppStore.theme.typography.body.weight;
 
+    no-frame: AppState.preview-maximized;
+    full-screen: true;
+
     in-out property <length> left-pane-width: 350px;
     in-out property <length> right-pane-width: 350px;
     in-out property <length> timeline-height: 400px;
 
-    background: AppState.preview-maximized
-        ? AppStore.theme.panel.background
-        : AppStore.theme.surface.app-background;
+    background: AppState.preview-maximized ? AppStore.theme.panel.background : AppStore.theme.surface.app-background;
 
     if AppState.preview-maximized: FullscreenPreview {
         width: root.width;
