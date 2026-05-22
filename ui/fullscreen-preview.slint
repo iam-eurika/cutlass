@@ -2,7 +2,7 @@
 // shell while `AppState.preview-maximized` is true. The host window
 // itself is just maximized (chrome stays); this component only handles
 // the in-window layout: a letterboxed preview plus a floating transport
-// bar.
+// bar that auto-hides after mouse idle (CapCut-style).
 import { AppState } from "state.slint";
 import { AppStore } from "store/index.slint";
 import { EditorStore } from "store/index.slint";
@@ -11,6 +11,22 @@ import { Slider } from "std-widgets.slint";
 export component FullscreenPreview inherits Rectangle {
     private property <float> sequence-aspect-ratio:
         EditorStore.project.sequence.width / EditorStore.project.sequence.height;
+    private property <bool> controls-visible: true;
+
+    hide-timer := Timer {
+        interval: 2.5s;
+        running: true;
+        triggered => {
+            root.controls-visible = false;
+            self.running = false;
+        }
+    }
+
+    function reset-controls-idle() {
+        root.controls-visible = true;
+        hide-timer.running = false;
+        hide-timer.running = true;
+    }
 
     background: AppStore.theme.panel.background;
 
@@ -28,6 +44,17 @@ export component FullscreenPreview inherits Rectangle {
             source: @image-url("../assets/texture.png");
             image-fit: ImageFit.contain;
         }
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: root.controls-visible;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.move) {
+                    root.reset-controls-idle();
+                }
+            }
+        }
     }
 
     // Floating transport bar pinned to the bottom of the window.
@@ -37,11 +64,28 @@ export component FullscreenPreview inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: parent.height - self.height - 65px;
 
+        opacity: root.controls-visible ? 1 : 0;
+        animate opacity {
+            duration: 250ms;
+            easing: ease-out;
+        }
+
         background: #141414;
         border-color: #282828;
         border-width: 1px;
         border-radius: 6px;
         clip: true;
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: root.controls-visible;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.move || e.kind == PointerEventKind.down) {
+                    root.reset-controls-idle();
+                }
+            }
+        }
 
         Image {
             source: @image-url("assets/icon/play.svg");
@@ -128,10 +172,24 @@ export component FullscreenPreview inherits Rectangle {
             TouchArea {
                 width: 100%;
                 height: 100%;
+                enabled: root.controls-visible;
                 clicked => {
-                    // AppState.exit-preview-maximized();
                     AppState.preview-maximized = false;
                 }
+            }
+        }
+    }
+
+    // When controls are hidden, sit on top to detect movement without
+    // blocking the transport bar while it is visible.
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        enabled: !root.controls-visible;
+        mouse-cursor: none;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.move || e.kind == PointerEventKind.down) {
+                root.reset-controls-idle();
             }
         }
     }
