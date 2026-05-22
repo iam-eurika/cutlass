@@ -123,6 +123,7 @@ export component TimelinePanel inherits PanelBase {
             }
 
             Flickable {
+                interactive: false;
                 viewport-width: max(content-width, self.width);
                 viewport-height: max(self.height, content-height);
 
@@ -139,6 +140,7 @@ export component TimelinePanel inherits PanelBase {
                     for t in sequence.tracks: TrackLane {
                         for c in t.clips: ClipView {
                             model: c;
+                            track-id: t.id;
                             height: parent.height - 5px;
                             zoom: TimelineStore.zoom;
                         }
