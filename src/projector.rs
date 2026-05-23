@@ -25,9 +25,7 @@ use std::rc::Rc;
 
 use slint::{Model, ModelRc, SharedString, VecModel};
 
-use crate::models::{
-    Clip, Color, Project, Rational, RationalTime, TimeRange, Track, TrackKind,
-};
+use crate::models::{Clip, Color, Project, Rational, RationalTime, TimeRange, Track, TrackKind};
 use crate::{
     Clip as SlintClip, Project as SlintProject, Rational as SlintRational,
     RationalTime as SlintRationalTime, Sequence as SlintSequence, TimeRange as SlintTimeRange,
