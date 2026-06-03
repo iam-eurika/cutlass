@@ -1,0 +1,10 @@
+[package]
+name = "cutlass-decode"
+version.workspace = true
+edition.workspace = true
+description = "Cutlass video demux + decode (ffmpeg-next)"
+
+[dependencies]
+ffmpeg-next.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

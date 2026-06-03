@@ -1,25 +1,3 @@
 /target
-**/*.rs.bk
-Cargo.lock.bak
-.DS_Store
-
-# Local media fixtures (large, not for version control).
-/assets/
-
-
-*.zip
-
-
-# Added by cargo
-#
-# already existing elements were commented out
-
-#/target
-
-
-# Added by cargo
-#
-# already existing elements were commented out
-
-#/target
+assets/
 .env

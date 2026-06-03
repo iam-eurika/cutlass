@@ -1,20 +1,18 @@
-[package]
-name = "cutlass-ui-rewrite"
+[workspace]
+members = [
+    "crates/cutlass-app",
+    "crates/cutlass-decode",
+    "crates/cutlass-compositor",
+    "crates/cutlass-engines",
+]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-build = "build.rs"
 
-[dependencies]
-
-slint = { version = "1.16", features = ["unstable-winit-030","unstable-wgpu-28", "renderer-femtovg-wgpu", "serde"] }
-serde = { version = "1", features = ["derive"] }
-
-
-[dev-dependencies]
-# Used to verify the agent-facing wire format of `Command` (see
-# `src/command.rs` tests). When the agent dispatcher lands, this moves
-# up to a regular dependency.
-serde_json = "1"
-
-[build-dependencies]
-slint-build = "1.16"
+[workspace.dependencies]
+ffmpeg-next = "8.1.0"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

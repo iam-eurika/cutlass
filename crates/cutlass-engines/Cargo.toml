@@ -1,0 +1,9 @@
+[package]
+name = "cutlass-engines"
+version.workspace = true
+edition.workspace = true
+description = "Cutlass editing engines"
+
+[dependencies]
+cutlass-decode = { path = "../cutlass-decode" }
+tracing.workspace = true

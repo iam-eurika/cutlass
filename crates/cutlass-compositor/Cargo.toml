@@ -1,0 +1,8 @@
+[package]
+name = "cutlass-compositor"
+version.workspace = true
+edition.workspace = true
+description = "Cutlass frame compositor"
+
+[dependencies]
+tracing.workspace = true

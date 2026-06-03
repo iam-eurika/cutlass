@@ -1,0 +1,16 @@
+[package]
+name = "cutlass-app"
+version.workspace = true
+edition.workspace = true
+description = "Cutlass application"
+
+[[bin]]
+name = "cutlass-app"
+path = "src/main.rs"
+
+[dependencies]
+cutlass-compositor = { path = "../cutlass-compositor" }
+cutlass-decode = { path = "../cutlass-decode" }
+cutlass-engines = { path = "../cutlass-engines" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
