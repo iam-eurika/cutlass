@@ -19,8 +19,8 @@ use ffmpeg_next::software::scaling;
 use ffmpeg_next::util::format::Pixel;
 use ffmpeg_next::util::frame::video::Video as VideoFrame;
 use ffmpeg_next::{
-    Codec, Dictionary, Error as FfmpegError, Packet, Rational, codec, decoder::Video as VideoDecoder,
-    encoder, encoder::Video as VideoEncoder,
+    Codec, Dictionary, Error as FfmpegError, Packet, Rational, codec,
+    decoder::Video as VideoDecoder, encoder, encoder::Video as VideoEncoder,
 };
 use tracing::debug;
 
@@ -58,7 +58,7 @@ impl Default for ProxyConfig {
             target_height: 1080,
             quality: 18,
             bitrate: 60_000_000,
-            hardware: false,
+            hardware: true,
         }
     }
 }
@@ -176,10 +176,7 @@ pub fn build_proxy_with(
     let use_crf = codec.name() == "libx264";
 
     let mut octx = format::output(&output).map_err(DecodeError::Open)?;
-    let global_header = octx
-        .format()
-        .flags()
-        .contains(format::Flags::GLOBAL_HEADER);
+    let global_header = octx.format().flags().contains(format::Flags::GLOBAL_HEADER);
 
     // Build + open the encoder first (it doesn't borrow octx), then register the
     // output stream and copy its parameters.
@@ -266,10 +263,7 @@ pub fn build_proxy_with(
 
     octx.write_trailer().map_err(DecodeError::Io)?;
 
-    debug!(
-        frames = frame_index,
-        dst_w, dst_h, "built proxy"
-    );
+    debug!(frames = frame_index, dst_w, dst_h, "built proxy");
     Ok(ProxyStats {
         frames: frame_index as u64,
         width: dst_w,
@@ -352,9 +346,7 @@ fn drain_encoder(
             Ok(()) => {
                 packet.set_stream(ost_index);
                 packet.rescale_ts(enc_tb, ost_tb);
-                packet
-                    .write_interleaved(octx)
-                    .map_err(DecodeError::Io)?;
+                packet.write_interleaved(octx).map_err(DecodeError::Io)?;
             }
             Err(FfmpegError::Eof) => return Ok(()),
             Err(e) if is_eagain(&e) => return Ok(()),
@@ -399,7 +391,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use crate::{Decoder, DecodeOptions, HwAccel};
+    use crate::{DecodeOptions, Decoder, HwAccel};
 
     fn sibling_main_asset(name: &str) -> Option<PathBuf> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

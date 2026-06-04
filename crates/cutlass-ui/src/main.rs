@@ -33,7 +33,7 @@ slint::include_modules!();
 /// Vertical resolution the preview composites at. The compositor scales every
 /// source to this canvas, so a modest height keeps scrub/playback cheap while
 /// staying sharp enough to edit by.
-const PREVIEW_HEIGHT: u32 = 720;
+const PREVIEW_HEIGHT: u32 = 1080;
 
 /// Playback clock tick. Playback advances by wall-clock time, not by tick count,
 /// so the actual frame shown is always correct for the timeline rate regardless
