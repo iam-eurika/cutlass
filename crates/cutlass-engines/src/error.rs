@@ -1,7 +1,7 @@
 use cutlass_decode::DecodeError;
-use cutlass_models::MediaId;
+use cutlass_models::{MediaId, ModelError};
 
-/// Errors from the engine's frame-resolution path.
+/// Errors from the engine's frame-resolution and edit-command paths.
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     /// A frame was requested for media not registered in the pool.
@@ -15,4 +15,8 @@ pub enum EngineError {
     /// The underlying decoder failed.
     #[error(transparent)]
     Decode(#[from] DecodeError),
+
+    /// An edit command violated a model invariant (overlap, bounds, bad ref).
+    #[error(transparent)]
+    Model(#[from] ModelError),
 }

@@ -9,14 +9,18 @@
 use std::sync::Arc;
 
 use cutlass_decode::DecodedFrame;
-use cutlass_models::{ClipId, Generator, MediaId, MediaSource, Project, Rational, TrackId};
+use cutlass_models::{ClipId, Generator, MediaId, MediaSource, ModelError, Project, Rational, TrackId};
 
 use crate::cache::{CacheStats, FrameCache};
+use crate::command::{EditCommand, EditHistory, EditOutcome};
 use crate::error::EngineError;
 use crate::media::FrameReader;
 use crate::pool::MediaPool;
 use crate::proxy::ProxyStatus;
 use crate::resolve::{resolve_frame, LayerContent};
+
+/// How many undo snapshots the engine retains by default.
+const DEFAULT_HISTORY_LIMIT: usize = 128;
 
 /// One fully-resolved layer of a rendered frame: its source content is in hand
 /// (a decoded frame or generator parameters), tagged with origin for the UI.
@@ -40,6 +44,7 @@ pub enum RenderedContent {
 pub struct Engine {
     project: Project,
     pool: MediaPool,
+    history: EditHistory,
 }
 
 impl Engine {
@@ -48,6 +53,7 @@ impl Engine {
         Self {
             project: Project::new(name, frame_rate),
             pool: MediaPool::new(),
+            history: EditHistory::new(DEFAULT_HISTORY_LIMIT),
         }
     }
 
@@ -56,6 +62,7 @@ impl Engine {
         Self {
             project: Project::new(name, frame_rate),
             pool: MediaPool::with_cache(cache),
+            history: EditHistory::new(DEFAULT_HISTORY_LIMIT),
         }
     }
 
@@ -161,6 +168,99 @@ impl Engine {
     pub fn set_background_paused(&mut self, paused: bool) {
         self.pool.set_background_paused(paused);
     }
+
+    // --- edit commands ----------------------------------------------------
+
+    /// Apply one structured [`EditCommand`] to the timeline.
+    ///
+    /// On success the pre-edit timeline is pushed onto the undo stack and the
+    /// outcome (e.g. the id of a created/affected clip) is returned. If the
+    /// command violates a model invariant it returns an error and the project —
+    /// and the undo history — are left untouched, so a rejected edit is a no-op.
+    pub fn apply(&mut self, command: EditCommand) -> Result<EditOutcome, EngineError> {
+        // Snapshot before mutating so a successful edit is undoable; on failure
+        // the model rejects the change without partial mutation, so we simply
+        // drop the snapshot and record nothing.
+        let snapshot = self.project.timeline().clone();
+        let outcome = self.execute(command)?;
+        self.history.record(snapshot);
+        Ok(outcome)
+    }
+
+    /// Run a command against the project. Kept separate from [`apply`] so the
+    /// history is only touched once the edit has provably succeeded.
+    fn execute(&mut self, command: EditCommand) -> Result<EditOutcome, EngineError> {
+        Ok(match command {
+            EditCommand::AddClip {
+                track,
+                media,
+                source,
+                start,
+            } => EditOutcome::Created(self.project.add_clip(track, media, source, start)?),
+            EditCommand::AddGenerated {
+                track,
+                generator,
+                timeline,
+            } => EditOutcome::Created(self.project.add_generated(track, generator, timeline)?),
+            EditCommand::SplitClip { clip, at } => {
+                EditOutcome::Created(self.project.split_clip(clip, at)?)
+            }
+            EditCommand::TrimClip { clip, timeline } => {
+                self.project.trim_clip(clip, timeline)?;
+                EditOutcome::Updated(clip)
+            }
+            EditCommand::MoveClip {
+                clip,
+                to_track,
+                start,
+            } => {
+                self.project.move_clip(clip, to_track, start)?;
+                EditOutcome::Updated(clip)
+            }
+            EditCommand::RemoveClip { clip } => {
+                self.project
+                    .remove_clip(clip)
+                    .ok_or(ModelError::UnknownClip(clip))?;
+                EditOutcome::Removed(clip)
+            }
+            EditCommand::RippleDelete { clip } => {
+                self.project.ripple_delete(clip)?;
+                EditOutcome::Removed(clip)
+            }
+        })
+    }
+
+    /// Undo the most recent applied command, restoring the prior timeline.
+    /// Returns `false` if there was nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        if !self.history.can_undo() {
+            return false;
+        }
+        let current = self.project.timeline().clone();
+        let previous = self.history.undo(current).expect("undo stack non-empty");
+        *self.project.timeline_mut() = previous;
+        true
+    }
+
+    /// Re-apply the most recently undone command. Returns `false` if there is
+    /// nothing to redo (including after a fresh edit invalidates the redo stack).
+    pub fn redo(&mut self) -> bool {
+        if !self.history.can_redo() {
+            return false;
+        }
+        let current = self.project.timeline().clone();
+        let next = self.history.redo(current).expect("redo stack non-empty");
+        *self.project.timeline_mut() = next;
+        true
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
 }
 
 #[cfg(test)]
@@ -263,6 +363,109 @@ mod tests {
             RenderedContent::Generated(Generator::Text { content }) => assert_eq!(content, "hello"),
             other => panic!("expected text generator, got {other:?}"),
         }
+    }
+
+    /// Engine on a 24fps timeline with one 24fps media source registered, so
+    /// source and timeline frames map 1:1 in the edit-command tests.
+    fn engine_for_edits() -> (Engine, MediaId, TrackId) {
+        let mut engine = Engine::new("edit", Rational::FPS_24);
+        let media = MediaSource::new("/tmp/edit.mp4", 1920, 1080, Rational::FPS_24, 1000, false);
+        let media_id = engine.project_mut().add_media(media);
+        let track = engine.project_mut().add_track(TrackKind::Video, "V1");
+        engine.register_reader(media_id, Box::new(StubReader));
+        (engine, media_id, track)
+    }
+
+    #[test]
+    fn apply_add_then_split_and_undo_redo() {
+        let (mut engine, media, track) = engine_for_edits();
+
+        let added = engine
+            .apply(EditCommand::AddClip {
+                track,
+                media,
+                source: cutlass_models::TimeRange::new(0, 100),
+                start: 0,
+            })
+            .unwrap();
+        let EditOutcome::Created(clip) = added else {
+            panic!("expected a created clip");
+        };
+        assert_eq!(engine.project().timeline().clip_count(), 1);
+
+        // Split into two clips.
+        let split = engine.apply(EditCommand::SplitClip { clip, at: 40 }).unwrap();
+        assert!(matches!(split, EditOutcome::Created(_)));
+        assert_eq!(engine.project().timeline().clip_count(), 2);
+
+        // Undo the split: back to one clip. Undo the add: back to empty.
+        assert!(engine.undo());
+        assert_eq!(engine.project().timeline().clip_count(), 1);
+        assert!(engine.undo());
+        assert_eq!(engine.project().timeline().clip_count(), 0);
+        assert!(!engine.can_undo());
+
+        // Redo both, restoring the split state.
+        assert!(engine.redo());
+        assert_eq!(engine.project().timeline().clip_count(), 1);
+        assert!(engine.redo());
+        assert_eq!(engine.project().timeline().clip_count(), 2);
+        assert!(!engine.can_redo());
+    }
+
+    #[test]
+    fn rejected_command_is_a_noop_and_records_no_history() {
+        let (mut engine, media, track) = engine_for_edits();
+        engine
+            .apply(EditCommand::AddClip {
+                track,
+                media,
+                source: cutlass_models::TimeRange::new(0, 100),
+                start: 0,
+            })
+            .unwrap();
+
+        // Drop the undo history so we can assert the failed edit adds nothing.
+        assert!(engine.undo());
+        assert!(engine.redo());
+        let undo_before = engine.can_undo();
+
+        // Overlapping placement is rejected by the model.
+        let err = engine.apply(EditCommand::AddClip {
+            track,
+            media,
+            source: cutlass_models::TimeRange::new(0, 100),
+            start: 50,
+        });
+        assert!(matches!(err, Err(EngineError::Model(_))));
+        // No new undo entry, and the timeline still holds exactly the one clip.
+        assert_eq!(engine.can_undo(), undo_before);
+        assert_eq!(engine.project().timeline().clip_count(), 1);
+    }
+
+    #[test]
+    fn fresh_edit_invalidates_redo() {
+        let (mut engine, media, track) = engine_for_edits();
+        engine
+            .apply(EditCommand::AddClip {
+                track,
+                media,
+                source: cutlass_models::TimeRange::new(0, 100),
+                start: 0,
+            })
+            .unwrap();
+        assert!(engine.undo());
+        assert!(engine.can_redo());
+
+        // A new command after an undo clears the redo stack.
+        engine
+            .apply(EditCommand::AddGenerated {
+                track,
+                generator: Generator::SolidColor { rgba: [0, 0, 0, 255] },
+                timeline: cutlass_models::TimeRange::new(0, 48),
+            })
+            .unwrap();
+        assert!(!engine.can_redo());
     }
 
     #[test]

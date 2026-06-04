@@ -8,8 +8,13 @@
 //! - [`MediaReader`] — sequential frame reads over one file (seek-vs-step).
 //! - [`MediaPool`] — owns the readers + shared cache; the `frame(media, src)`
 //!   entry point the rest of the engine pulls source frames from.
+//!
+//! The editing path:
+//! - [`EditCommand`] — the closed set of structured edits a UI or the AI agent
+//!   emits; [`Engine::apply`] executes one and records it for undo/redo.
 
 mod cache;
+mod command;
 mod engine;
 mod error;
 mod media;
@@ -18,6 +23,7 @@ mod proxy;
 mod resolve;
 
 pub use cache::{CacheStats, FrameCache, FrameKey, DEFAULT_CAPACITY_BYTES};
+pub use command::{EditCommand, EditOutcome};
 pub use engine::{Engine, RenderedContent, RenderedLayer};
 pub use error::EngineError;
 pub use media::{frame_to_time, time_to_frame, FrameReader, MediaReader};
