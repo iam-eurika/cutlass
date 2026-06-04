@@ -23,7 +23,7 @@ use crate::cache::{CacheStats, FrameCache, FrameKey};
 use crate::error::EngineError;
 use crate::media::{FrameReader, MediaReader};
 use crate::proxy::{
-    proxy_cache_dir, proxy_path, DiskBudget, ProxyService, ProxyStatus, RenderJob,
+    proxy_cache_dir, proxy_path, DiskBudget, ProxyMsg, ProxyService, ProxyStatus, RenderJob,
     DEFAULT_DISK_BUDGET_BYTES,
 };
 
@@ -57,6 +57,9 @@ pub struct MediaPool {
     proxy_config: ProxyConfig,
     /// Monotonic access counter for recency (disk-tier LRU).
     clock: u64,
+    /// Monotonic priority counter; the most recently prioritized media gets the
+    /// highest value, so a playhead bump always jumps the build queue.
+    priority_clock: i64,
 }
 
 impl MediaPool {
@@ -74,6 +77,7 @@ impl MediaPool {
             budget: DiskBudget::new(DEFAULT_DISK_BUDGET_BYTES),
             proxy_config: ProxyConfig::default(),
             clock: 0,
+            priority_clock: 0,
         }
     }
 
@@ -186,18 +190,39 @@ impl MediaPool {
                     }
                 }
             }
-            entry.status = ProxyStatus::Building;
+            entry.status = ProxyStatus::Building { progress: 0.0 };
         }
 
         let _ = std::fs::create_dir_all(proxy_cache_dir());
         let config = self.proxy_config;
+        let total_frames = media.duration.max(0) as u64;
         let service = self.proxies.get_or_insert_with(ProxyService::spawn);
         service.submit(RenderJob {
             media: media.id,
             source: media.path.clone(),
             output: path,
             config,
+            total_frames,
+            priority: 0,
         });
+    }
+
+    /// Bump `media` to the front of the build queue (e.g. it's under the
+    /// playhead). No-op if its proxy is already built or not yet requested.
+    pub fn prioritize_proxy(&mut self, media: MediaId) {
+        if let Some(service) = self.proxies.as_ref() {
+            self.priority_clock += 1;
+            service.prioritize(media, self.priority_clock);
+        }
+    }
+
+    /// Pause or resume background proxy builds. Pause during heavy interaction
+    /// (scrub/playback) so transcodes don't steal cycles from the live path;
+    /// resume when idle.
+    pub fn set_background_paused(&mut self, paused: bool) {
+        if let Some(service) = self.proxies.as_ref() {
+            service.set_paused(paused);
+        }
     }
 
     /// Install any finished proxy builds and keep the disk cache within budget.
@@ -205,36 +230,57 @@ impl MediaPool {
     /// Cheap and non-blocking; call it on the frame path (e.g. once per
     /// [`Engine::frame_at`](crate::Engine::frame_at)).
     pub fn poll_proxies(&mut self) {
-        let mut completed = Vec::new();
+        let mut messages = Vec::new();
         if let Some(service) = self.proxies.as_ref() {
-            while let Some(done) = service.try_recv() {
-                completed.push(done);
+            while let Some(msg) = service.try_recv() {
+                messages.push(msg);
             }
         }
-        if completed.is_empty() {
+        if messages.is_empty() {
             return;
         }
 
-        for done in completed {
-            let Some(entry) = self.entries.get_mut(&done.media) else {
-                continue;
-            };
-            match done.result {
-                Ok(_stats) => match entry.meta.clone() {
-                    Some(meta) => {
-                        match open_proxy_reader(done.media, &done.output, meta.frame_rate, meta.duration)
-                        {
-                            Ok(reader) => {
-                                entry.proxy = Some(reader);
-                                entry.status = ProxyStatus::Ready(done.output);
-                            }
-                            Err(e) => entry.status = ProxyStatus::Failed(e.to_string()),
+        let mut installed_any = false;
+        for msg in messages {
+            match msg {
+                ProxyMsg::Progress { media, progress } => {
+                    if let Some(entry) = self.entries.get_mut(&media) {
+                        // Only advance a still-building status; never clobber a
+                        // Ready/Failed result with a late progress message.
+                        if let ProxyStatus::Building { progress: p } = &mut entry.status {
+                            *p = progress;
                         }
                     }
-                    None => entry.status = ProxyStatus::Failed("missing proxy meta".into()),
-                },
-                Err(e) => entry.status = ProxyStatus::Failed(e),
+                }
+                ProxyMsg::Done(done) => {
+                    let Some(entry) = self.entries.get_mut(&done.media) else {
+                        continue;
+                    };
+                    match done.result {
+                        Ok(_stats) => match entry.meta.clone() {
+                            Some(meta) => match open_proxy_reader(
+                                done.media,
+                                &done.output,
+                                meta.frame_rate,
+                                meta.duration,
+                            ) {
+                                Ok(reader) => {
+                                    entry.proxy = Some(reader);
+                                    entry.status = ProxyStatus::Ready(done.output);
+                                    installed_any = true;
+                                }
+                                Err(e) => entry.status = ProxyStatus::Failed(e.to_string()),
+                            },
+                            None => entry.status = ProxyStatus::Failed("missing proxy meta".into()),
+                        },
+                        Err(e) => entry.status = ProxyStatus::Failed(e),
+                    }
+                }
             }
+        }
+
+        if !installed_any {
+            return;
         }
 
         // Never delete a proxy we currently have open.

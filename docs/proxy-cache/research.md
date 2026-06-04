@@ -205,17 +205,97 @@ produces garbled seam frames if ignored.
 
 ## 10. Implementation plan
 
-- **P1:** background build worker (SW-dec→HW-enc), all-intra-H.264 proxy, reader
-  swap in `MediaPool`, disk-LRU budget. Biggest win — kills cold seek for imports.
-- **P2:** playhead-priority queue, SW+HW lanes, `Building{pct}` UI signal,
-  activity-adaptive throttling.
+- **P1 (shipped):** background build worker (SW-dec→HW-enc), all-intra-H.264
+  proxy, reader swap in `MediaPool`, disk-LRU budget. Biggest win — kills cold
+  seek for imports.
+- **P2 (shipped):** lane pool over a shared **priority queue**, playhead
+  priority, `Building { progress }` signal, activity pause. Details below.
 - **P3 (optional):** custom segmented container with baked effects (a *timeline*
   render cache, true flavor B).
 
-New code: `crates/cutlass-engines/src/proxy.rs` (status, jobs, lanes, budget,
-hash); `crates/cutlass-decode/` gains an H.264-intra encoder + downscale helper.
-Touch points: `pool.rs` (reader preference + `request_proxy` + completion pump),
-`engine.rs` (`import_media` wiring).
+### P2 as built
+
+- **Lanes + shared queue.** `ProxyService` spawns one thread per `LaneConfig`,
+  all pulling from one `Queue` (`Mutex<Vec<RenderJob>>` + `Condvar`). Default mix
+  is one **SW lane** (all cores — the fastest single pipeline) + one **HW-decode
+  lane** (`HwAccel::Auto`, capped to 2 threads so a SW fallback can't
+  oversubscribe). Whichever lane is free pops the highest-priority job, so
+  multi-import builds in parallel and work-steals. Validated by
+  `multiple_imports_build_in_parallel` (two clips → `≈max(lanes)` wall).
+- **HW-decode build path.** `build_proxy_with` takes `ProxyBuildOptions { decode,
+  decode_threads }`; a HW lane decodes the source on the GPU block and
+  `transfer_to_cpu`s each surface before scale + HW encode. SW lanes skip the
+  transfer. Covered by `proxy_builds_via_hardware_decode_lane`.
+- **Playhead priority.** `Queue::prioritize` raises (never lowers) a *pending*
+  job's priority; ties stay FIFO. `MediaPool::prioritize_proxy` /
+  `Engine::set_playhead(frame)` bump the clip(s) under the playhead via a
+  monotonic counter, so the footage on screen builds first.
+- **Progress.** `build_proxy_with` invokes a progress callback per packet; the
+  lane coalesces it to whole-percent `ProxyMsg::Progress`, and `poll_proxies`
+  folds it into `ProxyStatus::Building { progress }` (without clobbering a
+  Ready/Failed result that races a late message).
+- **Activity throttle.** `Queue::set_paused` parks lanes between jobs;
+  `Engine::set_background_paused(true)` during heavy scrub/playback keeps cycles
+  on the live path, resume when idle. Drop signals shutdown (non-blocking; a
+  lane finishes its in-flight build then exits).
+
+New code: `crates/cutlass-engines/src/proxy.rs` (status, jobs, lanes, queue,
+budget, hash); `crates/cutlass-decode/` gained the H.264-intra encoder +
+downscale helper (`build_proxy_with`, `ProxyBuildOptions`).
+Touch points: `pool.rs` (reader preference, `request_proxy`, completion pump,
+priority/pause), `engine.rs` (`import_media` wiring, `set_playhead`,
+`set_background_paused`).
+
+### End-to-end measurement (import → wait → seek)
+
+The `import_seek` bench drives the full path: import (build the proxy through the
+pool/lane pool), then cold-seek the source vs the engine-built proxy. On the 4K60
+asset (`16078825_3840_2160_60fps.mp4`, 36.5 s, 2190 frames, 251 MB):
+
+| Stage | Result |
+|---|---|
+| Proxy build (the "little wait") | **8.06 s** → 64 MB 1080p all-intra (≈4× smaller) |
+| Cold seek **mid (50%)** | source 780 ms → **proxy 3.17 ms** (~246×) |
+| Cold seek **far (90%)** | source 1.538 s → **proxy 3.88 ms** (~397×) |
+
+So after an ~8 s background wait, scrubbing flips from a 0.8–1.5 s stall per jump
+to a flat ~3–4 ms — and the proxy seek stays flat regardless of distance. (These
+are end-to-end through a freshly opened decoder per seek, so no RAM-cache hit
+masks the seek; warm RAM-cache hits are ~0.) Reproduce:
+
+```bash
+CUTLASS_BENCH_ASSET="$PWD/assets/16078825_3840_2160_60fps.mp4" \
+  cargo bench -p cutlass-engines --bench import_seek
+```
+
+### Multi-import + random seek
+
+The `multi_import_seek` bench imports several clips at once (parallel lane builds)
+and then random-scrubs across all of them. On 4 × 4K clips (8–11.5 s each):
+
+| Metric | Result |
+|---|---|
+| Serial build (one lane at a time) | 8.73 s (sum of solo builds) |
+| **Parallel build (both lanes)** | **6.83 s wall → 1.28× speedup** |
+| Random cold seek, **source** (HW-auto) | ~692 ms median (492–857 ms range) |
+| Random cold seek, **proxy** (SW) | **~3.33 ms** (~**208×**) |
+
+The seek win carries over to random multi-clip access — as expected, since the
+proxy is all-intra so distance/clip don't matter. The **build** speedup is only
+**1.28×, not ~2×**, and that's the interesting result: both lanes currently
+converge on the *same* VideoToolbox **encoder** (a single fixed-function block),
+and the SW lane already saturates all cores, so a second concurrent build is
+encoder- and core-bound rather than free. §7's near-2× was decode-only with one
+clip per lane; under real load the shared HW encoder is the ceiling.
+
+**Implication / follow-up:** to get independent engines (the §8 principle) the
+second lane should encode in **software (libx264)** while the first uses HW
+encode — different engines, no contention. Worth benching before assuming more
+lanes help. Reproduce:
+
+```bash
+CUTLASS_BENCH_N=4 cargo bench -p cutlass-engines --bench multi_import_seek
+```
 
 ## 11. Open follow-ups
 
@@ -226,7 +306,15 @@ Touch points: `pool.rs` (reader preference + `request_proxy` + completion pump),
   tune for preview fidelity vs size.
 - Re-bench the HW path if/when the compositor consumes GPU surfaces directly
   (removes the GPU→CPU readback from the seek cost).
-- Validate lane concurrency with two equally-sized large clips.
+- ~~Validate lane concurrency with two equally-sized large clips.~~ Done —
+  `multiple_imports_build_in_parallel` (two copies of the test asset).
+- **Segment-level priority/eviction (P3):** today priority and the disk budget
+  are per-file; keyframe-aligned segment jobs would let the playhead region
+  build/evict at finer granularity (needs the IDR-split work in §9).
+- **Lane encoder contention:** `multi_import_seek` shows only 1.28× parallel
+  build speedup — both lanes share the one VideoToolbox encoder. Try a HW-decode
+  + **software-encode** (libx264) second lane (truly independent engines) and
+  re-bench; gate lane count if it doesn't help.
 
 ## 12. Reproduction
 

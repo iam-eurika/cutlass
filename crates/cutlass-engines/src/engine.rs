@@ -138,6 +138,29 @@ impl Engine {
     pub fn proxy_status(&self, media: MediaId) -> Option<&ProxyStatus> {
         self.pool.proxy_status(media)
     }
+
+    /// Tell the build scheduler where the playhead is: every clip visible at
+    /// `timeline_frame` is bumped up the proxy queue (topmost highest), so the
+    /// footage the user is looking at becomes smooth first.
+    pub fn set_playhead(&mut self, timeline_frame: i64) {
+        // Back-to-front, so the topmost layer ends with the highest priority.
+        for layer in resolve_frame(&self.project, timeline_frame) {
+            if let LayerContent::Media { media, .. } = layer.content {
+                self.pool.prioritize_proxy(media);
+            }
+        }
+    }
+
+    /// Bump a single media to the front of the proxy build queue.
+    pub fn prioritize_proxy(&mut self, media: MediaId) {
+        self.pool.prioritize_proxy(media);
+    }
+
+    /// Pause/resume background proxy builds. Pause during active scrub/playback
+    /// so transcodes don't compete with the live decode path; resume when idle.
+    pub fn set_background_paused(&mut self, paused: bool) {
+        self.pool.set_background_paused(paused);
+    }
 }
 
 #[cfg(test)]

@@ -10,3 +10,14 @@ cutlass-models = { path = "../cutlass-models" }
 rustc-hash.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "import_seek"
+harness = false
+
+[[bench]]
+name = "multi_import_seek"
+harness = false

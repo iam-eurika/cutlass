@@ -26,6 +26,7 @@ use tracing::debug;
 
 use crate::decoder::ensure_ffmpeg_init;
 use crate::error::DecodeError;
+use crate::hwaccel::{self, HwAccel};
 
 /// How to build a proxy file.
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +51,32 @@ impl Default for ProxyConfig {
     }
 }
 
+/// Per-lane build knobs that the scheduler varies across concurrent builds.
+///
+/// The two interesting axes (see `docs/proxy-cache/research.md`):
+/// - `decode`: a **software** lane is the fastest single pipeline (one SW decoder
+///   frame-threads across all cores), while a **hardware** lane decodes on the GPU
+///   block — slower per frame but it frees the CPU so a second concurrent import
+///   doesn't fight the SW lane for cores.
+/// - `decode_threads`: cap SW frame-threading so two lanes don't oversubscribe.
+#[derive(Debug, Clone, Copy)]
+pub struct ProxyBuildOptions {
+    /// Decode acceleration for reading the *source* during the build.
+    pub decode: HwAccel,
+    /// Decoder frame-thread count (`0` = all cores). Ignored for HW decode.
+    pub decode_threads: u32,
+}
+
+impl Default for ProxyBuildOptions {
+    fn default() -> Self {
+        // The fast single pipeline: SW frame-threaded decode on all cores.
+        Self {
+            decode: HwAccel::None,
+            decode_threads: 0,
+        }
+    }
+}
+
 /// Result of a completed proxy build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProxyStats {
@@ -62,11 +89,28 @@ pub struct ProxyStats {
 ///
 /// Decodes in software (frame-threaded) and encodes with a hardware H.264
 /// encoder when available. The output is a constant-frame-rate, GOP-1 file whose
-/// every frame is a keyframe.
+/// every frame is a keyframe. Equivalent to [`build_proxy_with`] with the default
+/// (software, all-cores) options and no progress reporting.
 pub fn build_proxy(
     source: &Path,
     output: &Path,
     config: ProxyConfig,
+) -> Result<ProxyStats, DecodeError> {
+    build_proxy_with(source, output, config, ProxyBuildOptions::default(), None)
+}
+
+/// Like [`build_proxy`], but with per-lane decode options and an optional
+/// progress callback.
+///
+/// `progress`, when given, is invoked periodically with the number of frames
+/// encoded so far — the scheduler maps that to a percentage for the UI. It runs
+/// on the calling (worker) thread, between packets, so it must not block.
+pub fn build_proxy_with(
+    source: &Path,
+    output: &Path,
+    config: ProxyConfig,
+    opts: ProxyBuildOptions,
+    mut progress: Option<&mut dyn FnMut(u64)>,
 ) -> Result<ProxyStats, DecodeError> {
     ensure_ffmpeg_init()?;
 
@@ -83,15 +127,19 @@ pub fn build_proxy(
         (stream.index(), stream.avg_frame_rate())
     };
 
-    // Software, frame-threaded decode (the build-pass perf finding).
     let mut dec_ctx = {
         let params = ictx.stream(stream_index).unwrap().parameters();
         codec::context::Context::from_parameters(params).map_err(DecodeError::Open)?
     };
+    // Frame-threaded decode. `count: 0` lets ffmpeg use all cores; a lane may cap
+    // it so two concurrent SW builds don't oversubscribe.
     dec_ctx.set_threading(codec::threading::Config {
         kind: codec::threading::Type::Frame,
-        count: 0,
+        count: opts.decode_threads as usize,
     });
+    // Optional hardware decode (offloads CPU for a concurrent lane). For `None`
+    // this is a no-op and decode stays on the CPU.
+    let _active = hwaccel::attach(&mut dec_ctx, opts.decode)?;
     let mut decoder = dec_ctx.decoder().video().map_err(DecodeError::Open)?;
 
     let src_w = decoder.width();
@@ -167,6 +215,9 @@ pub fn build_proxy(
             ost_tb,
             &mut frame_index,
         )?;
+        if let Some(cb) = progress.as_deref_mut() {
+            cb(frame_index as u64);
+        }
     }
 
     // Flush decoder, then encoder.
@@ -215,13 +266,23 @@ fn drain_decoder(
     loop {
         match decoder.receive_frame(&mut decoded) {
             Ok(()) => {
+                // A hardware lane yields GPU surfaces; copy them to CPU memory
+                // (NV12) so the software scaler can read them. SW lanes skip this.
+                let mut sw = VideoFrame::empty();
+                let src: &VideoFrame = if hwaccel::is_hardware_pixel_format(decoded.format()) {
+                    hwaccel::transfer_to_cpu(&decoded, &mut sw)?;
+                    &sw
+                } else {
+                    &decoded
+                };
+
                 // Lazily build the scaler from the first frame's real format/dims.
                 if scaler.is_none() {
                     *scaler = Some(
                         scaling::Context::get(
-                            decoded.format(),
-                            decoded.width(),
-                            decoded.height(),
+                            src.format(),
+                            src.width(),
+                            src.height(),
                             Pixel::YUV420P,
                             dst.0,
                             dst.1,
@@ -235,7 +296,7 @@ fn drain_decoder(
                 // Fresh output buffer per frame: the HW encoder may still hold a
                 // ref to the previous one, so we must not scale in place over it.
                 let mut scaled = VideoFrame::empty();
-                sc.run(&decoded, &mut scaled).map_err(DecodeError::Decode)?;
+                sc.run(src, &mut scaled).map_err(DecodeError::Decode)?;
                 scaled.set_pts(Some(*frame_index));
                 encoder.send_frame(&scaled).map_err(DecodeError::Decode)?;
                 *frame_index += 1;
@@ -345,6 +406,49 @@ mod tests {
             .expect("open proxy");
         let frame = dec
             .seek_to_frame(Duration::from_millis(500))
+            .expect("seek proxy")
+            .expect("frame after seek");
+        assert!(frame.width > 0 && !frame.planes.is_empty());
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn proxy_builds_via_hardware_decode_lane() {
+        let Some(src) = sibling_main_asset("testsrc_h264.mp4") else {
+            return;
+        };
+        let out = std::env::temp_dir().join("cutlass_proxy_hwdec.mp4");
+        let _ = std::fs::remove_file(&out);
+
+        // Hardware-decode lane: source decodes on the GPU block, frames transfer
+        // to CPU, then scale + HW encode. Auto falls back to SW where no HW exists,
+        // so this stays correct on CI without a GPU.
+        let mut progressed: u64 = 0;
+        let mut on_progress = |done: u64| progressed = done;
+        let stats = build_proxy_with(
+            &src,
+            &out,
+            ProxyConfig {
+                target_height: 180,
+                bitrate: 2_000_000,
+                hardware: true,
+            },
+            ProxyBuildOptions {
+                decode: HwAccel::Auto,
+                decode_threads: 0,
+            },
+            Some(&mut on_progress),
+        )
+        .expect("build proxy via hw decode");
+        assert!(stats.frames > 0, "no frames encoded");
+        assert!(progressed > 0, "progress callback never fired");
+        assert!(out.exists(), "proxy file missing");
+
+        let mut dec = Decoder::open_with(&out, DecodeOptions::default().hw_accel(HwAccel::None))
+            .expect("open proxy");
+        let frame = dec
+            .seek_to_frame(Duration::from_millis(300))
             .expect("seek proxy")
             .expect("frame after seek");
         assert!(frame.width > 0 && !frame.planes.is_empty());

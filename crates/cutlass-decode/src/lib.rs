@@ -14,7 +14,7 @@ mod hwaccel;
 mod index;
 
 pub use decoder::{Decoder, SourceInfo, ffmpeg_version, hw_accel_from_env};
-pub use encode::{ProxyConfig, ProxyStats, build_proxy};
+pub use encode::{ProxyBuildOptions, ProxyConfig, ProxyStats, build_proxy, build_proxy_with};
 pub use error::DecodeError;
 pub use frame::{DecodedFrame, PixelFormat, Plane};
 pub use hwaccel::{DecodeOptions, HwAccel};
