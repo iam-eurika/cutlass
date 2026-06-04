@@ -5,6 +5,7 @@ members = [
     "crates/cutlass-compositor",
     "crates/cutlass-engines",
     "crates/cutlass-models",
+    "crates/cutlass-ui",
 ]
 resolver = "3"
 

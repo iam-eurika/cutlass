@@ -101,7 +101,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let path = args
         .next()
         .unwrap_or_else(|| "assets/13232364_3840_2160_24fps.mp4".to_string());
-    let frame: i64 = args.next().and_then(|a| a.parse().ok()).unwrap_or(1000);
+    let frame: i64 = args.next().and_then(|a| a.parse().ok()).unwrap_or(100);
     let output = args.next().unwrap_or_else(|| "frame.png".to_string());
 
     let path = Path::new(&path);
@@ -126,6 +126,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         false,
     );
     let media_id = engine.import_media(media)?;
+    // sleep for 1 second
+    std::thread::sleep(std::time::Duration::from_secs(1));
     let track = engine.project_mut().add_track(TrackKind::Video, "V1");
     engine
         .project_mut()

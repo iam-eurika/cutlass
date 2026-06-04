@@ -34,19 +34,31 @@ pub struct ProxyConfig {
     /// Target height in pixels; width is derived from the source aspect ratio
     /// (rounded down to even). The source height caps it — proxies never upscale.
     pub target_height: u32,
-    /// Encoder target bitrate in bits/sec.
+    /// Constant-quality level for the software encoder (libx264 CRF, 0–51,
+    /// lower = better quality / bigger file). ~18 is visually near-transparent.
+    /// Used when a CRF-capable encoder is selected (the default path).
+    pub quality: u8,
+    /// Fallback target bitrate (bits/sec), used only for encoders without a CRF
+    /// mode (e.g. hardware VideoToolbox when `hardware` is set).
     pub bitrate: usize,
-    /// Prefer a hardware encoder (VideoToolbox / NVENC); falls back to software.
+    /// Prefer a hardware encoder (VideoToolbox / NVENC). Faster, but lower
+    /// quality per bit — VideoToolbox's H.264 grains noticeably even at high
+    /// bitrate. Off by default: software libx264 at constant quality (`quality`)
+    /// gives clean all-intra proxies, which matters more than build speed here.
     pub hardware: bool,
 }
 
 impl Default for ProxyConfig {
     fn default() -> Self {
-        // 1080p preview tier; 12 Mbps all-intra H.264 ≈ 0.1 GB/min — see research doc.
+        // 1080p preview tier, constant-quality software encode. All-intra H.264
+        // makes every frame a keyframe (great for seeking, poor for bit
+        // efficiency), so quality-targeted libx264 keeps it clean without
+        // guessing a bitrate. The 8 GiB disk budget evicts the overflow.
         Self {
             target_height: 1080,
-            bitrate: 12_000_000,
-            hardware: true,
+            quality: 18,
+            bitrate: 60_000_000,
+            hardware: false,
         }
     }
 }
@@ -159,6 +171,9 @@ pub fn build_proxy_with(
 
     let codec = find_h264_encoder(config.hardware)
         .ok_or_else(|| DecodeError::unsupported("no H.264 encoder available"))?;
+    // libx264 supports true constant-quality (CRF); hardware encoders don't, so
+    // they fall back to the target bitrate.
+    let use_crf = codec.name() == "libx264";
 
     let mut octx = format::output(&output).map_err(DecodeError::Open)?;
     let global_header = octx
@@ -181,11 +196,24 @@ pub fn build_proxy_with(
     enc.set_time_base(enc_tb);
     enc.set_gop(1);
     enc.set_max_b_frames(0);
-    enc.set_bit_rate(config.bitrate);
+    // In CRF mode the encoder picks the bitrate; setting one would force ABR and
+    // defeat constant quality. Only bitrate-driven (hardware) encoders need it.
+    if !use_crf {
+        enc.set_bit_rate(config.bitrate);
+    }
     if global_header {
         enc.set_flags(codec::Flags::GLOBAL_HEADER);
     }
-    let mut encoder = enc.open_with(Dictionary::new()).map_err(DecodeError::Open)?;
+
+    // Per-encoder open options: constant quality + a balanced speed preset for
+    // libx264; nothing extra for hardware encoders.
+    let mut enc_opts = Dictionary::new();
+    if use_crf {
+        let crf = config.quality.to_string();
+        enc_opts.set("crf", &crf);
+        enc_opts.set("preset", "faster");
+    }
+    let mut encoder = enc.open_with(enc_opts).map_err(DecodeError::Open)?;
 
     let ost_index = {
         let mut ost = octx.add_stream(codec).map_err(DecodeError::Open)?;
@@ -393,6 +421,7 @@ mod tests {
             &out,
             ProxyConfig {
                 target_height: 180,
+                quality: 23,
                 bitrate: 2_000_000,
                 hardware: true,
             },
@@ -431,6 +460,7 @@ mod tests {
             &out,
             ProxyConfig {
                 target_height: 180,
+                quality: 23,
                 bitrate: 2_000_000,
                 hardware: true,
             },

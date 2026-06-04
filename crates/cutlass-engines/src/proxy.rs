@@ -34,8 +34,11 @@ use cutlass_models::MediaId;
 use rustc_hash::FxHasher;
 use tracing::{debug, warn};
 
-/// Bump to invalidate every proxy on disk after a format/codec change.
-const CACHE_VERSION: u32 = 1;
+/// Bump to invalidate every proxy on disk after a format/codec/quality change.
+/// v2: raised the all-intra H.264 bitrate 12→60 Mbps to kill grain artifacts.
+/// v3: switched to constant-quality software libx264 (CRF) — cleaner per bit
+/// than VideoToolbox, which grained even at high bitrate.
+const CACHE_VERSION: u32 = 3;
 
 /// State of a media's on-disk proxy.
 #[derive(Debug, Clone)]

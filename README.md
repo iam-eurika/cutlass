@@ -8,7 +8,7 @@ Cutlass is still in early development. The sections below describe what runs **t
 
 ## Status
 
-This is an early-stage project. The headless editing core is real and tested; the UI and the natural-language agent are not built yet.
+This is an early-stage project. The headless editing core is real and tested, and a basic desktop UI now drives it; the natural-language agent is not built yet.
 
 **Works today**
 
@@ -17,13 +17,13 @@ This is an early-stage project. The headless editing core is real and tested; th
 - A closed set of deterministic, undo/redo-able edit commands: add clip, add generated clip, split, trim, move, remove, and ripple-delete.
 - Frame resolution through the engine: timeline frame → ordered layers → composited image.
 - A CPU compositor and an on-disk proxy/transcode cache to keep cold seeks fast.
+- A desktop editor shell (`cutlass-ui`, built on [Slint](https://slint.dev/)): import a video, scrub and play back a live preview, drag clips, split/delete/ripple-delete, undo/redo, with background proxy progress.
 - A small end-to-end CLI (`cutlass-app`) that decodes a clip and renders one timeline frame to a PNG — a smoke test for the whole pipeline.
 
 **Not built yet (the goal)**
 
-- The graphical timeline UI (planned on [Slint](https://slint.dev/)).
 - The natural-language agent that turns a prompt into edit commands. The command layer it will drive already exists.
-- GPU compositing/effects/export (planned on [wgpu](https://wgpu.rs/)).
+- GPU compositing/effects/export (planned on [wgpu](https://wgpu.rs/)). The preview compositor is currently CPU-only.
 
 ## Architecture
 
@@ -35,6 +35,7 @@ The codebase is a Cargo workspace split into focused crates:
 | `cutlass-decode` | FFmpeg demux + decode, hardware acceleration, keyframe indexing, proxy encode. |
 | `cutlass-compositor` | CPU frame compositor (layer sampling, fills). |
 | `cutlass-engines` | Headless editing engine: edit commands + undo/redo, frame resolution, frame cache, proxy/media pool. |
+| `cutlass-ui` | Slint desktop shell: preview, scrub/playback, timeline editing, undo/redo, proxy progress. |
 | `cutlass-app` | End-to-end render CLI that exercises the full decode → resolve → composite pipeline. |
 
 ## Prerequisites
@@ -63,6 +64,20 @@ cargo build --workspace
 # Run the tests
 cargo test --workspace
 ```
+
+### Desktop editor
+
+The `cutlass-ui` shell opens a window where you can import a video, scrub and play a live preview, drag clips on the timeline, split/delete/ripple-delete, and undo/redo:
+
+```bash
+# Open the editor (use the Import button to add a video)
+cargo run -p cutlass-ui
+
+# …or open with a video already loaded
+cargo run -p cutlass-ui -- path/to/video.mp4
+```
+
+### Render CLI
 
 The `cutlass-app` CLI decodes a video, builds a one-clip project, composites a single timeline frame, and writes it to a PNG:
 
