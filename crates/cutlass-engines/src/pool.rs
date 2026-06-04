@@ -1,24 +1,62 @@
 //! The media pool: the engine's source-frame provider.
 //!
-//! Owns one [`FrameReader`] per registered media plus the single shared
-//! [`FrameCache`]. Every frame request goes through the cache first; only a miss
-//! reaches the reader (and thus the decoder). This is the seam the rest of the
-//! engine — timeline resolution, the compositor, export — pulls source frames
-//! from.
+//! Owns one entry per registered media plus the single shared [`FrameCache`].
+//! Every frame request goes through three tiers, cheapest first:
+//!
+//! 1. **RAM** — the byte-bounded [`FrameCache`] (no decode).
+//! 2. **Disk proxy** — a 1080p all-intra reader, once a background build lands
+//!    (O(1) seek, ~9 ms cold; see [`crate::proxy`]).
+//! 3. **Source** — the original long-GOP file (slow cold seek; the fallback that
+//!    makes editing work *instantly* on import, before any proxy exists).
+//!
+//! This is the seam the rest of the engine — timeline resolution, the
+//! compositor, export — pulls source frames from.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cutlass_decode::DecodedFrame;
-use cutlass_models::{Map, MediaId, MediaSource};
+use cutlass_decode::{DecodeOptions, DecodedFrame, HwAccel, ProxyConfig};
+use cutlass_models::{Map, MediaId, MediaSource, Rational};
 
 use crate::cache::{CacheStats, FrameCache, FrameKey};
 use crate::error::EngineError;
 use crate::media::{FrameReader, MediaReader};
+use crate::proxy::{
+    proxy_cache_dir, proxy_path, DiskBudget, ProxyService, ProxyStatus, RenderJob,
+    DEFAULT_DISK_BUDGET_BYTES,
+};
 
-/// A registry of decodable media backed by a shared decoded-frame cache.
+/// Info captured at proxy-request time, needed to open the proxy reader once the
+/// background build finishes.
+#[derive(Clone)]
+struct ProxyMeta {
+    frame_rate: Rational,
+    duration: i64,
+}
+
+/// One registered media: its source reader, an optional faster proxy reader, and
+/// the proxy build status.
+struct MediaEntry {
+    source: Box<dyn FrameReader>,
+    proxy: Option<Box<dyn FrameReader>>,
+    status: ProxyStatus,
+    meta: Option<ProxyMeta>,
+    last_access: u64,
+}
+
+/// A registry of decodable media backed by a shared decoded-frame cache and an
+/// on-disk proxy tier.
 pub struct MediaPool {
-    readers: Map<MediaId, Box<dyn FrameReader>>,
+    entries: Map<MediaId, MediaEntry>,
     cache: FrameCache,
+    /// Spawned lazily on the first proxy request (tests/synthetic readers never
+    /// pay for a worker thread).
+    proxies: Option<ProxyService>,
+    budget: DiskBudget,
+    proxy_config: ProxyConfig,
+    /// Monotonic access counter for recency (disk-tier LRU).
+    clock: u64,
 }
 
 impl MediaPool {
@@ -30,8 +68,12 @@ impl MediaPool {
     /// Create an empty pool backed by a caller-configured cache.
     pub fn with_cache(cache: FrameCache) -> Self {
         Self {
-            readers: Map::default(),
+            entries: Map::default(),
             cache,
+            proxies: None,
+            budget: DiskBudget::new(DEFAULT_DISK_BUDGET_BYTES),
+            proxy_config: ProxyConfig::default(),
+            clock: 0,
         }
     }
 
@@ -39,51 +81,177 @@ impl MediaPool {
     ///
     /// Returns the [`MediaId`] now served by the pool. Opening touches the
     /// filesystem and probes the stream, so it is comparatively expensive — do
-    /// it at import time, not per frame.
+    /// it at import time, not per frame. Does **not** start a proxy build; call
+    /// [`request_proxy`](Self::request_proxy) for that.
     pub fn open(&mut self, media: &MediaSource) -> Result<MediaId, EngineError> {
         let reader = MediaReader::open(media)?;
         self.register(media.id, Box::new(reader));
         Ok(media.id)
     }
 
-    /// Register a pre-built reader under `media`. Replaces any existing reader
-    /// for that id and drops its now-stale cached frames.
+    /// Register a pre-built source reader under `media`. Replaces any existing
+    /// entry for that id and drops its now-stale cached frames.
     pub fn register(&mut self, media: MediaId, reader: Box<dyn FrameReader>) {
-        if self.readers.insert(media, reader).is_some() {
+        let existed = self
+            .entries
+            .insert(
+                media,
+                MediaEntry {
+                    source: reader,
+                    proxy: None,
+                    status: ProxyStatus::None,
+                    meta: None,
+                    last_access: 0,
+                },
+            )
+            .is_some();
+        if existed {
             self.cache.invalidate_media(media);
         }
     }
 
     /// Remove `media` from the pool and drop its cached frames.
     pub fn remove(&mut self, media: MediaId) {
-        if self.readers.remove(&media).is_some() {
+        if self.entries.remove(&media).is_some() {
             self.cache.invalidate_media(media);
         }
     }
 
     pub fn contains(&self, media: MediaId) -> bool {
-        self.readers.contains_key(&media)
+        self.entries.contains_key(&media)
     }
 
     /// Fetch source frame `source_frame` of `media`, decoding on a cache miss.
     ///
-    /// The returned [`Arc`] is shared with the cache, so holding it (e.g. while
-    /// compositing) costs no copy and keeps the frame alive even if it is later
-    /// evicted.
+    /// On a RAM miss, decode prefers the disk proxy (fast) when ready, falling
+    /// back to the source. The returned [`Arc`] is shared with the cache, so
+    /// holding it (e.g. while compositing) costs no copy and keeps the frame
+    /// alive even if it is later evicted.
     pub fn frame(
         &mut self,
         media: MediaId,
         source_frame: i64,
     ) -> Result<Arc<DecodedFrame>, EngineError> {
-        let reader = self
-            .readers
+        self.clock += 1;
+        let clock = self.clock;
+        let entry = self
+            .entries
             .get_mut(&media)
             .ok_or(EngineError::UnknownMedia(media))?;
+        entry.last_access = clock;
         let key = FrameKey::new(media, source_frame);
-        // Disjoint borrows: `reader` borrows `self.readers`, the cache call
+        // Prefer the proxy reader once it's ready; else the source reader.
+        let reader: &mut dyn FrameReader = match entry.proxy.as_mut() {
+            Some(proxy) => proxy.as_mut(),
+            None => entry.source.as_mut(),
+        };
+        // Disjoint borrows: `reader` borrows `self.entries`, the cache call
         // borrows `self.cache`. Only a miss runs the (decoding) closure.
         self.cache
             .get_or_try_insert_with(key, || reader.read(source_frame))
+    }
+
+    /// Start a background proxy build for `media` (idempotent).
+    ///
+    /// Returns immediately. If a proxy already exists on disk (a prior run), it
+    /// is adopted synchronously; otherwise a worker thread transcodes it and
+    /// [`poll_proxies`](Self::poll_proxies) installs it when done.
+    pub fn request_proxy(&mut self, media: &MediaSource) {
+        let target_height = self.proxy_config.target_height;
+        let path = proxy_path(&media.path, target_height);
+
+        {
+            let Some(entry) = self.entries.get_mut(&media.id) else {
+                return;
+            };
+            if !matches!(entry.status, ProxyStatus::None) {
+                return; // already building, ready, or permanently failed.
+            }
+            entry.meta = Some(ProxyMeta {
+                frame_rate: media.frame_rate,
+                duration: media.duration,
+            });
+
+            // Cross-run reuse: adopt an existing proxy without re-rendering.
+            if path.exists() {
+                match open_proxy_reader(media.id, &path, media.frame_rate, media.duration) {
+                    Ok(reader) => {
+                        entry.proxy = Some(reader);
+                        entry.status = ProxyStatus::Ready(path);
+                        return;
+                    }
+                    // Stale/corrupt: drop it and rebuild below.
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+            entry.status = ProxyStatus::Building;
+        }
+
+        let _ = std::fs::create_dir_all(proxy_cache_dir());
+        let config = self.proxy_config;
+        let service = self.proxies.get_or_insert_with(ProxyService::spawn);
+        service.submit(RenderJob {
+            media: media.id,
+            source: media.path.clone(),
+            output: path,
+            config,
+        });
+    }
+
+    /// Install any finished proxy builds and keep the disk cache within budget.
+    ///
+    /// Cheap and non-blocking; call it on the frame path (e.g. once per
+    /// [`Engine::frame_at`](crate::Engine::frame_at)).
+    pub fn poll_proxies(&mut self) {
+        let mut completed = Vec::new();
+        if let Some(service) = self.proxies.as_ref() {
+            while let Some(done) = service.try_recv() {
+                completed.push(done);
+            }
+        }
+        if completed.is_empty() {
+            return;
+        }
+
+        for done in completed {
+            let Some(entry) = self.entries.get_mut(&done.media) else {
+                continue;
+            };
+            match done.result {
+                Ok(_stats) => match entry.meta.clone() {
+                    Some(meta) => {
+                        match open_proxy_reader(done.media, &done.output, meta.frame_rate, meta.duration)
+                        {
+                            Ok(reader) => {
+                                entry.proxy = Some(reader);
+                                entry.status = ProxyStatus::Ready(done.output);
+                            }
+                            Err(e) => entry.status = ProxyStatus::Failed(e.to_string()),
+                        }
+                    }
+                    None => entry.status = ProxyStatus::Failed("missing proxy meta".into()),
+                },
+                Err(e) => entry.status = ProxyStatus::Failed(e),
+            }
+        }
+
+        // Never delete a proxy we currently have open.
+        let keep: HashSet<PathBuf> = self
+            .entries
+            .values()
+            .filter_map(|e| match &e.status {
+                ProxyStatus::Ready(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        self.budget.prune(&proxy_cache_dir(), &keep);
+    }
+
+    /// Current proxy status for `media`, if registered.
+    pub fn proxy_status(&self, media: MediaId) -> Option<&ProxyStatus> {
+        self.entries.get(&media).map(|e| &e.status)
     }
 
     pub fn cache_stats(&self) -> CacheStats {
@@ -93,6 +261,34 @@ impl MediaPool {
     pub fn cache(&self) -> &FrameCache {
         &self.cache
     }
+}
+
+/// Open a proxy file as a software-decoding [`MediaReader`] under `id`.
+///
+/// Software decode is deliberate: the proxy is all-intra, so cold seeks are
+/// single-frame, and software beats hardware on that latency (~9 ms vs ~62 ms).
+fn open_proxy_reader(
+    id: MediaId,
+    path: &Path,
+    frame_rate: Rational,
+    duration: i64,
+) -> Result<Box<dyn FrameReader>, EngineError> {
+    // The reader only needs id/path/frame_rate/duration; dimensions come from the
+    // proxy stream itself at decode time.
+    let proxy_source = MediaSource {
+        id,
+        path: path.to_path_buf(),
+        width: 0,
+        height: 0,
+        frame_rate,
+        duration,
+        has_audio: false,
+    };
+    let reader = MediaReader::open_with(
+        &proxy_source,
+        DecodeOptions::default().hw_accel(HwAccel::None),
+    )?;
+    Ok(Box::new(reader))
 }
 
 impl Default for MediaPool {

@@ -8,3 +8,10 @@ description = "Cutlass video demux + decode (ffmpeg-next)"
 ffmpeg-next.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "cold_seek"
+harness = false

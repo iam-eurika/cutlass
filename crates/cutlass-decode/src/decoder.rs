@@ -20,7 +20,7 @@ use crate::hwaccel::{
 
 static FFMPEG_INIT: OnceLock<Result<(), FfmpegError>> = OnceLock::new();
 
-fn ensure_ffmpeg_init() -> Result<(), DecodeError> {
+pub(crate) fn ensure_ffmpeg_init() -> Result<(), DecodeError> {
     match FFMPEG_INIT.get_or_init(ffmpeg_next::init) {
         Ok(()) => Ok(()),
         Err(e) => Err(DecodeError::Open(*e)),

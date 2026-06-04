@@ -15,6 +15,7 @@ use crate::cache::{CacheStats, FrameCache};
 use crate::error::EngineError;
 use crate::media::FrameReader;
 use crate::pool::MediaPool;
+use crate::proxy::ProxyStatus;
 use crate::resolve::{resolve_frame, LayerContent};
 
 /// One fully-resolved layer of a rendered frame: its source content is in hand
@@ -76,6 +77,9 @@ impl Engine {
     /// Opening first means a file that fails to decode never enters the project.
     pub fn import_media(&mut self, media: MediaSource) -> Result<MediaId, EngineError> {
         self.pool.open(&media)?;
+        // Kick off a background proxy build so scrubbing becomes smooth shortly
+        // after import; the source reader serves frames in the meantime.
+        self.pool.request_proxy(&media);
         Ok(self.project.add_media(media))
     }
 
@@ -91,6 +95,9 @@ impl Engine {
     /// cache, so repeated/adjacent requests are cheap. Returns an owned list so
     /// the caller can hold it without borrowing the engine.
     pub fn frame_at(&mut self, timeline_frame: i64) -> Result<Vec<RenderedLayer>, EngineError> {
+        // Install any proxies that finished building since the last call, so
+        // subsequent decodes take the fast disk-proxy path.
+        self.pool.poll_proxies();
         // `layers` borrows `self.project`; the decode below borrows `self.pool`
         // — disjoint fields, so both live at once.
         let layers = resolve_frame(&self.project, timeline_frame);
@@ -119,6 +126,17 @@ impl Engine {
 
     pub fn cache_stats(&self) -> CacheStats {
         self.pool.cache_stats()
+    }
+
+    /// Install finished proxy builds without resolving a frame (e.g. on an idle
+    /// tick, so proxies get adopted even while playback is paused).
+    pub fn poll_proxies(&mut self) {
+        self.pool.poll_proxies();
+    }
+
+    /// Proxy build status for `media`, for surfacing progress in the UI.
+    pub fn proxy_status(&self, media: MediaId) -> Option<&ProxyStatus> {
+        self.pool.proxy_status(media)
     }
 }
 

@@ -14,6 +14,7 @@ mod engine;
 mod error;
 mod media;
 mod pool;
+mod proxy;
 mod resolve;
 
 pub use cache::{CacheStats, FrameCache, FrameKey, DEFAULT_CAPACITY_BYTES};
@@ -21,4 +22,5 @@ pub use engine::{Engine, RenderedContent, RenderedLayer};
 pub use error::EngineError;
 pub use media::{frame_to_time, time_to_frame, FrameReader, MediaReader};
 pub use pool::MediaPool;
+pub use proxy::{proxy_cache_dir, proxy_path, render_hash, ProxyStatus, DEFAULT_DISK_BUDGET_BYTES};
 pub use resolve::{resolve_frame, LayerContent, ResolvedLayer};
