@@ -315,10 +315,10 @@ pub fn render_hash(source: &Path, target_height: u32) -> String {
     source.to_string_lossy().hash(&mut h);
     if let Ok(meta) = std::fs::metadata(source) {
         meta.len().hash(&mut h);
-        if let Ok(mtime) = meta.modified() {
-            if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
-                dur.as_secs().hash(&mut h);
-            }
+        if let Ok(mtime) = meta.modified()
+            && let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH)
+        {
+            dur.as_secs().hash(&mut h);
         }
     }
     target_height.hash(&mut h);

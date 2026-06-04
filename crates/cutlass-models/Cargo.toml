@@ -2,6 +2,7 @@
 name = "cutlass-models"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Cutlass project/timeline data model"
 
 [dependencies]

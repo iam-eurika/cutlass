@@ -2,6 +2,7 @@
 name = "cutlass-compositor"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Cutlass frame compositor"
 
 [dependencies]

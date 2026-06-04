@@ -78,7 +78,7 @@ fn bench_cold_seek(c: &mut Criterion) {
             let id = BenchmarkId::new(*cfg_name, target_name);
             group.bench_with_input(id, target, |b, &target| {
                 b.iter_batched_ref(
-                    || Decoder::open_with(&path, options.clone()).expect("open decoder"),
+                    || Decoder::open_with(&path, *options).expect("open decoder"),
                     |decoder| {
                         let frame = decoder
                             .seek_to_frame(target)

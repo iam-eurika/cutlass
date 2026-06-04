@@ -54,10 +54,11 @@ impl KeyframeIndex {
         loop {
             match packet.read(&mut input) {
                 Ok(()) => {
-                    if packet.stream() == stream_index && packet.is_key() {
-                        if let Some(pts) = packet.pts().or_else(|| packet.dts()) {
-                            keyframes.push(pts);
-                        }
+                    if packet.stream() == stream_index
+                        && packet.is_key()
+                        && let Some(pts) = packet.pts().or_else(|| packet.dts())
+                    {
+                        keyframes.push(pts);
                     }
                 }
                 Err(FfmpegError::Eof) => break,

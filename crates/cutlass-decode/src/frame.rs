@@ -83,7 +83,7 @@ impl DecodedFrame {
 
         let plane_heights = format
             .plane_heights(height)
-            .map_err(|msg| DecodeError::unsupported(msg))?;
+            .map_err(DecodeError::unsupported)?;
 
         let mut planes = Vec::with_capacity(plane_heights.len());
         for (i, &plane_height) in plane_heights.iter().enumerate() {
