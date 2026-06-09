@@ -46,9 +46,7 @@ fn parse_args() -> Result<Args, AnyError> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--name" | "-n" => {
-                name = iter
-                    .next()
-                    .ok_or("missing value after --name")?;
+                name = iter.next().ok_or("missing value after --name")?;
             }
             "--help" | "-h" => {
                 print_usage();
@@ -106,9 +104,7 @@ fn cutlass_paths(name: &str) -> Result<(PathBuf, PathBuf, PathBuf), AnyError> {
     fs::create_dir_all(root.join(EXPORTS_SUBDIR))?;
     fs::create_dir_all(root.join(CACHE_SUBDIR))?;
     let project = root.join(PROJECTS_SUBDIR).join(format!("{name}.cutlass"));
-    let export = root
-        .join(EXPORTS_SUBDIR)
-        .join(format!("{name}.mp4"));
+    let export = root.join(EXPORTS_SUBDIR).join(format!("{name}.mp4"));
     let cache = root.join(CACHE_SUBDIR);
     Ok((project, export, cache))
 }
@@ -132,6 +128,7 @@ fn run() -> Result<(), AnyError> {
         cache_dir,
         ..EngineConfig::default()
     };
+
     let mut engine = Engine::new(config)?;
 
     let media_id = match engine.apply(Command::Project(ProjectCommand::Import {
