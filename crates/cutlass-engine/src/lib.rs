@@ -22,6 +22,7 @@ use tracing::info;
 
 pub fn init() {
     cutlass_cache::init();
+    cutlass_probe::init();
     cutlass_decoder::init();
     cutlass_compositor::init();
     cutlass_encoder::init();

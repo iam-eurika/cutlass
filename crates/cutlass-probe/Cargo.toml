@@ -6,5 +6,10 @@ license.workspace = true
 description = "Cutlass media file probing (container, codec, stream metadata)"
 
 [dependencies]
+cutlass-models = { path = "../cutlass-models" }
+ffmpeg-next.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+cutlass-decoder = { path = "../cutlass-decoder" }

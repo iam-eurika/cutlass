@@ -1245,6 +1245,7 @@ dependencies = [
  "cutlass-decoder",
  "cutlass-encoder",
  "cutlass-models",
+ "cutlass-probe",
  "pollster",
  "tempfile",
  "thiserror 2.0.18",
@@ -1266,6 +1267,9 @@ dependencies = [
 name = "cutlass-probe"
 version = "0.1.0"
 dependencies = [
+ "cutlass-decoder",
+ "cutlass-models",
+ "ffmpeg-next",
  "thiserror 2.0.18",
  "tracing",
 ]

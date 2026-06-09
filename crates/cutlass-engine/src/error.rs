@@ -3,6 +3,7 @@ use cutlass_compositor::CompositorError;
 use cutlass_decoder::DecodeError;
 use cutlass_encoder::EncodeError;
 use cutlass_models::ModelError;
+use cutlass_probe::ProbeError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -18,6 +19,9 @@ pub enum EngineError {
 
     #[error(transparent)]
     Decode(#[from] DecodeError),
+
+    #[error(transparent)]
+    Probe(#[from] ProbeError),
 
     #[error(transparent)]
     Cache(#[from] DiskCacheError),
