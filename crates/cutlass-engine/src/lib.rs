@@ -1,11 +1,20 @@
-//! Editing engine.
+//! Editing engine: project session, inverse-command undo/redo, frame cache.
 
+mod action;
 mod engine;
+mod error;
+mod import;
+mod session;
 
+pub use action::ApplyOutcome;
 pub use engine::{DEFAULT_CACHE_BUDGET_BYTES, Engine, EngineConfig};
+pub use error::EngineError;
+pub use cutlass_commands::{Command, EditCommand, EditOutcome, ProjectCommand};
 
 use tracing::info;
 
 pub fn init() {
+    cutlass_cache::init();
+    cutlass_decoder::init();
     info!("cutlass-engine ready");
 }

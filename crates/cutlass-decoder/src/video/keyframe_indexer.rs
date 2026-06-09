@@ -423,6 +423,218 @@ mod tests {
         assert_eq!(index.len(), 1);
     }
 
+    #[test]
+    fn time_base_accessor_returns_build_value() {
+        let custom = tb(1001, 30_000);
+        let index = KeyframeIndex::from_keyframes(custom, vec![0, 120]);
+        assert_eq!(index.time_base().numerator(), 1001);
+        assert_eq!(index.time_base().denominator(), 30_000);
+    }
+
+    #[test]
+    fn single_keyframe_gop_is_open_ended() {
+        let index = synthetic_index(&[42]);
+        let gop = index.gop_containing(1_000).expect("gop");
+        assert_eq!(gop.start, 42);
+        assert_eq!(gop.end, None);
+        assert!(gop.contains(42));
+        assert!(gop.contains(9_999));
+        assert_eq!(index.next_keyframe_ticks(0), None);
+        assert_eq!(index.next_keyframe_ticks(42), None);
+    }
+
+    #[test]
+    fn lookup_with_i64_max_returns_last_keyframe() {
+        let index = synthetic_index(&[0, 48, 96]);
+        assert_eq!(index.keyframe_at_or_before_ticks(i64::MAX), Some(96));
+        let gop = index.gop_containing(i64::MAX).expect("tail");
+        assert_eq!(gop.start, 96);
+        assert_eq!(gop.end, None);
+    }
+
+    #[test]
+    fn gop_start_matches_keyframe_at_or_before() {
+        let index = synthetic_index(&[10, 40, 90, 200]);
+        for target in [0, 10, 25, 40, 89, 200, 500] {
+            let kf = index.keyframe_at_or_before_ticks(target);
+            let gop = index.gop_containing(target);
+            match (kf, gop) {
+                (None, None) => {}
+                (Some(k), Some(g)) => assert_eq!(k, g.start),
+                _ => panic!("mismatch at target {target}"),
+            }
+        }
+    }
+
+    #[test]
+    fn next_keyframe_matches_gop_end_for_interior_targets() {
+        let index = synthetic_index(&[0, 100, 250]);
+        for target in [0, 50, 100, 150, 249] {
+            let gop = index.gop_containing(target).expect("gop");
+            assert_eq!(index.next_keyframe_ticks(target), gop.end);
+        }
+    }
+
+    #[test]
+    fn gop_boundaries_partition_keyframe_spans() {
+        let kfs = [0_i64, 72, 144, 216];
+        let index = synthetic_index(&kfs);
+        for window in kfs.windows(2) {
+            let (a, b) = (window[0], window[1]);
+            let mid = a + (b - a) / 2;
+            let gop = index.gop_containing(mid).expect("gop");
+            assert_eq!(gop.start, a);
+            assert_eq!(gop.end, Some(b));
+            assert!(gop.contains(mid));
+            assert!(!gop.contains(b));
+        }
+    }
+
+    #[test]
+    fn every_keyframe_tick_selects_itself() {
+        let index = synthetic_index(&[0, 48, 120, 240]);
+        for &kf in index.keyframe_ticks() {
+            assert_eq!(index.keyframe_at_or_before_ticks(kf), Some(kf));
+            let gop = index.gop_containing(kf).expect("gop");
+            assert_eq!(gop.start, kf);
+            assert!(gop.contains(kf));
+        }
+    }
+
+    #[test]
+    fn seek_us_at_or_before_none_before_first_keyframe() {
+        let index = synthetic_index(&[500, 1_000]);
+        assert_eq!(index.seek_us_at_or_before(499), None);
+    }
+
+    #[test]
+    fn seek_us_at_or_before_exact_keyframe_tick() {
+        let index = KeyframeIndex::from_keyframes(tb(1, 1_000_000), vec![3_000_000]);
+        assert_eq!(index.seek_us_at_or_before(3_000_000), Some(3_000_000));
+    }
+
+    #[test]
+    fn ticks_to_av_time_base_identity_for_microsecond_tb() {
+        let index = KeyframeIndex::from_keyframes(tb(1, 1_000_000), vec![0]);
+        assert_eq!(index.ticks_to_av_time_base(1_234_567), 1_234_567);
+    }
+
+    #[test]
+    fn ticks_to_av_time_base_scales_rational_tb() {
+        let index = KeyframeIndex::from_keyframes(tb(1, 24), vec![24]);
+        // 24 ticks @ 1/24s == 1 second == 1_000_000 µs in AV_TIME_BASE.
+        assert_eq!(index.ticks_to_av_time_base(24), 1_000_000);
+        assert_eq!(index.ticks_to_av_time_base(12), 500_000);
+    }
+
+    #[test]
+    fn ntsc_time_base_ticks_to_duration_one_frame() {
+        let ntsc = tb(1001, 30_000);
+        // 1001 ticks @ 1001/30000 = 1001²/30000 seconds.
+        let one_frame = ticks_to_duration(ntsc, 1001);
+        assert_eq!(one_frame, Duration::from_nanos(33_400_033_333));
+        // Display-path Duration hop truncates: do not use for seek targets.
+        assert_eq!(duration_to_ticks(ntsc, one_frame), 1000);
+    }
+
+    #[test]
+    fn duration_to_ticks_zero_duration_is_zero() {
+        assert_eq!(duration_to_ticks(tb(1, 24), Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn ticks_to_duration_clamps_overflow_to_max_nanos() {
+        let d = ticks_to_duration(tb(1, 1), i64::MAX);
+        assert_eq!(d, Duration::from_nanos(u64::MAX));
+    }
+
+    #[test]
+    fn keyframe_times_iterator_matches_manual_conversion() {
+        let index = synthetic_index(&[0, 24, 48]);
+        let times: Vec<Duration> = index.keyframe_times().collect();
+        assert_eq!(times.len(), 3);
+        assert_eq!(times[0], Duration::ZERO);
+        assert_eq!(times[1], Duration::from_secs(1));
+        assert_eq!(times[2], Duration::from_secs(2));
+    }
+
+    #[test]
+    fn keyframe_at_or_before_duration_matches_tick_path() {
+        let index = synthetic_index(&[0, 48, 96]);
+        let target = Duration::from_millis(2_100); // 50 ticks @ 24fps → GOP at 48
+        let via_duration = index.keyframe_at_or_before(target).expect("duration");
+        let via_ticks = index
+            .keyframe_at_or_before_ticks(index.duration_to_ticks(target))
+            .map(|t| index.ticks_to_duration(t))
+            .expect("ticks");
+        assert_eq!(via_duration, via_ticks);
+        assert_eq!(via_duration, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn duration_to_ticks_clamps_extreme_durations() {
+        let tb = tb(1, 1);
+        let huge = Duration::from_secs(u64::MAX);
+        let ticks = duration_to_ticks(tb, huge);
+        assert_eq!(ticks, i64::MAX);
+    }
+
+    #[test]
+    fn from_keyframes_empty_vec_is_empty_index() {
+        let index = KeyframeIndex::from_keyframes(tb(1, 24), vec![]);
+        assert!(index.is_empty());
+        assert_eq!(index.len(), 0);
+        assert_eq!(index.keyframe_at_or_before_ticks(0), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn build_rejects_non_utf8_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"\xff/keyframe-index.mp4"));
+        let err = match KeyframeIndex::build(path) {
+            Err(e) => e,
+            Ok(_) => panic!("expected non-utf8 path to be rejected"),
+        };
+        assert!(matches!(err, DecodeError::Unsupported { .. }));
+    }
+
+    #[test]
+    fn build_missing_file_returns_open_error() {
+        let path = PathBuf::from("/tmp/cutlass-indexer-missing-xyzzy.mp4");
+        let err = match KeyframeIndex::build(&path) {
+            Err(e) => e,
+            Ok(_) => panic!("expected missing file to fail"),
+        };
+        assert!(matches!(err, DecodeError::Open(_)));
+    }
+
+    #[test]
+    fn lookup_is_monotonic_over_increasing_targets() {
+        let index = synthetic_index(&[0, 48, 96, 144]);
+        let mut prev = None;
+        for target in (0..200).step_by(7) {
+            let kf = index.keyframe_at_or_before_ticks(target);
+            if let (Some(p), Some(k)) = (prev, kf) {
+                assert!(k >= p, "lookup regressed at target {target}");
+            }
+            if kf.is_some() {
+                prev = kf;
+            }
+        }
+    }
+
+    #[test]
+    fn gop_contains_rejects_negative_ticks() {
+        let gop = Gop {
+            start: 0,
+            end: Some(100),
+        };
+        assert!(!gop.contains(-1));
+    }
+
     fn any_video_asset() -> Option<PathBuf> {
         let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         let preferred = assets.join("6137050-hd_1920_1080_24fps.mp4");

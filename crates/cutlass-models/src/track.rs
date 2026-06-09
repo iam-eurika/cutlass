@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::Map;
 use crate::clip::Clip;
 use crate::error::ModelError;
@@ -5,7 +7,7 @@ use crate::ids::{ClipId, TrackId};
 use crate::time::{RationalTime, TimeRange};
 
 /// Whether a track carries picture or sound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrackKind {
     Video,
     Audio,
@@ -16,7 +18,7 @@ pub enum TrackKind {
 /// Clips are stored in a hash map keyed by [`ClipId`] for O(1) lookup. Order is
 /// not stored; call [`clips_ordered`](Track::clips_ordered) to iterate by start
 /// time. Overlap is enforced by the [`Timeline`](crate::Timeline) on insert.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
     pub kind: TrackKind,
@@ -25,6 +27,7 @@ pub struct Track {
     pub enabled: bool,
     /// Audio: whether the track is silenced. Video: unused.
     pub muted: bool,
+    #[serde(with = "crate::serde_map")]
     clips: Map<ClipId, Clip>,
 }
 

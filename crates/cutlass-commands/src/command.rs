@@ -12,6 +12,12 @@ use cutlass_models::{ClipId, Generator, MediaId, RationalTime, TimeRange, TrackI
 pub enum ProjectCommand {
     /// Register a file in the media pool.
     Import { path: PathBuf },
+    /// Write the current project to a `.cutlass` file.
+    Save { path: PathBuf },
+    /// Replace the session from a project file; every media path must exist.
+    Open { path: PathBuf },
+    /// Replace the session from a project file; missing media paths are kept but not relinked.
+    Load { path: PathBuf },
 }
 
 /// A single structured edit against the timeline.

@@ -7,4 +7,11 @@ description = "Cutlass editing engine"
 
 [dependencies]
 cutlass-cache = { path = "../cutlass-cache" }
+cutlass-commands = { path = "../cutlass-commands" }
+cutlass-decoder = { path = "../cutlass-decoder" }
+cutlass-models = { path = "../cutlass-models" }
+thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

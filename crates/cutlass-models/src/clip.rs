@@ -1,10 +1,12 @@
+use serde::{Deserialize, Serialize};
+
 use crate::error::ModelError;
 use crate::ids::{ClipId, MediaId};
 use crate::time::{RationalTime, TimeRange, resample, time_add, time_sub};
 
 /// What a clip draws. Either a trimmed range of imported media, or synthetic
 /// content rendered by the engine (text, shapes, solids, ...).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClipSource {
     /// A trimmed portion of a [`MediaSource`](crate::MediaSource).
     ///
@@ -17,7 +19,7 @@ pub enum ClipSource {
 /// A synthetic clip with no source media. Parameters are intentionally minimal
 /// for now; richer styling (fonts, transforms, gradients) can be added per
 /// variant without touching the timeline model.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Generator {
     /// A title / text layer.
     Text { content: String },
@@ -29,7 +31,7 @@ pub enum Generator {
     Adjustment,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Shape {
     Rectangle,
     Ellipse,
@@ -38,7 +40,7 @@ pub enum Shape {
 /// A placement of some [`ClipSource`] on a track.
 ///
 /// `timeline` is where the clip sits on the sequence, at the timeline rate.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     pub id: ClipId,
     pub content: ClipSource,

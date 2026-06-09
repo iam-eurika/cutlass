@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::Map;
 use crate::clip::Clip;
 use crate::error::ModelError;
@@ -13,12 +15,14 @@ use crate::track::Track;
 ///   video track wins when compositing.
 /// - `clip_index` maps every [`ClipId`] to the track containing it, so a clip
 ///   can be found across the whole timeline in O(1) without scanning tracks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timeline {
     /// Editing/playback frame rate. Clip `timeline` ranges are in these frames.
     pub frame_rate: Rational,
+    #[serde(with = "crate::serde_map")]
     tracks: Map<TrackId, Track>,
     order: Vec<TrackId>,
+    #[serde(with = "crate::serde_map")]
     clip_index: Map<ClipId, TrackId>,
 }
 

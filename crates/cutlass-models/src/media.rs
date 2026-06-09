@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::MediaId;
 use crate::time::{Rational, RationalTime, TimeRange};
 
@@ -7,7 +9,7 @@ use crate::time::{Rational, RationalTime, TimeRange};
 ///
 /// This is the *asset*, not a placement on the timeline; many [`Clip`](crate::Clip)s
 /// can reference the same `MediaSource`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaSource {
     pub id: MediaId,
     pub path: PathBuf,

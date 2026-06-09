@@ -1,8 +1,12 @@
+use serde::{Deserialize, Serialize};
+
 use crate::Map;
 use crate::clip::{Clip, ClipSource, Generator};
 use crate::error::ModelError;
 use crate::ids::{ClipId, MediaId, ProjectId, TrackId};
 use crate::media::MediaSource;
+use crate::metadata::ProjectMetadata;
+use crate::schema::ProjectSchema;
 use crate::time::{Rational, RationalTime, TimeRange, check_same_rate, resample, time_sub};
 use crate::timeline::Timeline;
 use crate::track::{Track, TrackKind};
@@ -12,10 +16,19 @@ use crate::track::{Track, TrackKind};
 /// `Project` is the aggregate root and the only place that can guarantee
 /// referential integrity between clips and media, so clip creation goes through
 /// [`add_clip`](Project::add_clip).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
+    /// Document schema identity (version, kind, extensions).
+    #[serde(
+        serialize_with = "crate::schema::serialize",
+        deserialize_with = "crate::schema::deserialize",
+        alias = "schema_version"
+    )]
+    pub schema: ProjectSchema,
     pub id: ProjectId,
     pub name: String,
+    pub metadata: ProjectMetadata,
+    #[serde(with = "crate::serde_map")]
     media: Map<MediaId, MediaSource>,
     timeline: Timeline,
 }
@@ -24,11 +37,25 @@ impl Project {
     /// Create an empty project whose timeline runs at `frame_rate`.
     pub fn new(name: impl Into<String>, frame_rate: Rational) -> Self {
         Self {
+            schema: ProjectSchema::current(),
             id: ProjectId::next(),
             name: name.into(),
+            metadata: ProjectMetadata::default(),
             media: Map::default(),
             timeline: Timeline::new(frame_rate),
         }
+    }
+
+    pub fn schema(&self) -> &ProjectSchema {
+        &self.schema
+    }
+
+    pub fn metadata(&self) -> &ProjectMetadata {
+        &self.metadata
+    }
+
+    pub fn metadata_mut(&mut self) -> &mut ProjectMetadata {
+        &mut self.metadata
     }
 
     // --- media pool -------------------------------------------------------
@@ -387,6 +414,8 @@ mod tests {
     #[test]
     fn new_creates_empty_project_at_frame_rate() {
         let project = Project::new("my edit", R24);
+        assert_eq!(project.schema, ProjectSchema::current());
+        assert_eq!(project.metadata, ProjectMetadata::default());
         assert_eq!(project.name, "my edit");
         assert_eq!(project.timeline().frame_rate, R24);
         assert_eq!(project.media_count(), 0);

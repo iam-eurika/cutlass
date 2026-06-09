@@ -1,12 +1,22 @@
 use thiserror::Error;
 
 use crate::ids::{ClipId, MediaId, TrackId};
+use crate::schema::ProjectSchema;
 use crate::time::Rational;
 
 /// Errors from model mutations that would violate a referential or layout
 /// invariant.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ModelError {
+    #[error("unsupported project schema (found {found:?}, expected {expected:?})")]
+    UnsupportedProjectSchema {
+        found: ProjectSchema,
+        expected: ProjectSchema,
+    },
+
+    #[error("invalid project file: {0}")]
+    InvalidProjectFile(String),
+
     #[error("unknown track: {0}")]
     UnknownTrack(TrackId),
 

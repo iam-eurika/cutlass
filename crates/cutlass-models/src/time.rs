@@ -6,9 +6,10 @@
 //! `[start, start + duration)` with both endpoints carrying the same rate.
 
 use crate::error::ModelError;
+use serde::{Deserialize, Serialize};
 
 /// An exact frame rate as `num/den` frames per second.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rational {
     pub num: i32,
     pub den: i32,
@@ -50,7 +51,7 @@ impl Rational {
 }
 
 /// A time position or duration as integer ticks at an exact rate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RationalTime {
     pub value: i64,
     pub rate: Rational,
@@ -70,7 +71,7 @@ impl RationalTime {
 ///
 /// `start` and `duration` must share the same `rate`; use [`TimeRange::at_rate`]
 /// when constructing from tick counts at one rate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimeRange {
     pub start: RationalTime,
     pub duration: RationalTime,

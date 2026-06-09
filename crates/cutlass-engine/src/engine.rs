@@ -2,7 +2,12 @@
 
 use std::path::PathBuf;
 
-use cutlass_cache::diskcache::FrameCache;
+use cutlass_cache::FrameCache;
+use cutlass_commands::Command;
+use cutlass_models::Project;
+
+use crate::action::{ApplyContext, ApplyOutcome, History, dispatch};
+use crate::error::EngineError;
 
 /// Default on-disk frame cache budget (50 GiB).
 pub const DEFAULT_CACHE_BUDGET_BYTES: u64 = 50 * 1024 * 1024 * 1024;
@@ -14,6 +19,8 @@ pub struct EngineConfig {
     pub cache_dir: PathBuf,
     /// Global frame cache byte budget; LRU eviction runs across all sources.
     pub cache_budget_bytes: u64,
+    /// Maximum inverse actions retained on the undo stack.
+    pub undo_limit: usize,
 }
 
 impl Default for EngineConfig {
@@ -21,31 +28,131 @@ impl Default for EngineConfig {
         Self {
             cache_dir: PathBuf::from(".cutlass/cache"),
             cache_budget_bytes: DEFAULT_CACHE_BUDGET_BYTES,
+            undo_limit: 100,
         }
     }
 }
 
-/// Cutlass editing engine.
-///
-/// Owns session infrastructure (frame cache today; timeline state and source
-/// readers will live here as the engine grows).
+/// Cutlass editing engine: project state, inverse undo/redo, session infrastructure.
 pub struct Engine {
+    project: Project,
     cache: FrameCache,
     config: EngineConfig,
+    history: History,
+    project_path: Option<PathBuf>,
 }
 
 impl Engine {
     pub fn new(config: EngineConfig) -> std::io::Result<Self> {
+        let undo_limit = config.undo_limit;
         let cache = FrameCache::new(config.cache_dir.clone(), config.cache_budget_bytes)?;
-        Ok(Self { cache, config })
+        Ok(Self {
+            project: Project::new("untitled", cutlass_models::Rational::FPS_24),
+            cache,
+            history: History::new(undo_limit),
+            project_path: None,
+            config,
+        })
+    }
+
+    pub fn with_project(config: EngineConfig, project: Project) -> std::io::Result<Self> {
+        let undo_limit = config.undo_limit;
+        let cache = FrameCache::new(config.cache_dir.clone(), config.cache_budget_bytes)?;
+        Ok(Self {
+            project,
+            cache,
+            history: History::new(undo_limit),
+            project_path: None,
+            config,
+        })
     }
 
     pub fn config(&self) -> &EngineConfig {
         &self.config
     }
 
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+
+    pub fn project_mut(&mut self) -> &mut Project {
+        &mut self.project
+    }
+
     pub fn cache(&self) -> &FrameCache {
         &self.cache
+    }
+
+    /// Path last written with [`Save`](cutlass_commands::ProjectCommand::Save) or
+    /// loaded with [`Open`](cutlass_commands::ProjectCommand::Open) /
+    /// [`Load`](cutlass_commands::ProjectCommand::Load).
+    pub fn project_path(&self) -> Option<&PathBuf> {
+        self.project_path.as_ref()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Apply a wire command. On success, pushes the inverse action onto the undo stack.
+    pub fn apply(&mut self, command: Command) -> Result<ApplyOutcome, EngineError> {
+        let mut ctx = ApplyContext {
+            project: &mut self.project,
+            cache: &self.cache,
+            project_path: &mut self.project_path,
+            history: &mut self.history,
+        };
+        let (outcome, inverse) = dispatch(command, &mut ctx)?;
+        if let Some(inverse) = inverse {
+            self.history.record_do(inverse);
+        }
+        Ok(outcome)
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(action) = self.history.pop_undo() else {
+            return false;
+        };
+        match self.run_action(action) {
+            Ok(inverse) => {
+                self.history.push_redo(inverse);
+                true
+            }
+            Err(_) => {
+                // Leave history unchanged on failure — caller may retry.
+                false
+            }
+        }
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(action) = self.history.pop_redo() else {
+            return false;
+        };
+        match self.run_action(action) {
+            Ok(inverse) => {
+                self.history.push_undo(inverse);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn run_action(
+        &mut self,
+        action: Box<dyn crate::action::EditAction>,
+    ) -> Result<Box<dyn crate::action::EditAction>, EngineError> {
+        let mut ctx = ApplyContext {
+            project: &mut self.project,
+            cache: &self.cache,
+            project_path: &mut self.project_path,
+            history: &mut self.history,
+        };
+        action.apply(&mut ctx)
     }
 
     /// True when the frame cache has paused writes due to a disk-full I/O error.
