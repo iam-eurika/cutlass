@@ -1,4 +1,5 @@
-//! End-to-end session smoke test: new project → import → edit → save → export.
+//! End-to-end session smoke test: new project → import (up to 3 media) →
+//! multi-clip edit → save → export.
 //!
 //! Writes under `.cutlass/` in the current working directory:
 //!   - `projects/<name>.cutlass` — saved project
@@ -9,11 +10,12 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use cutlass_commands::{Command, EditCommand, EditOutcome, ProjectCommand};
 use cutlass_engine::{ApplyOutcome, Engine, EngineConfig};
-use cutlass_models::{RationalTime, TimeRange, TrackKind};
+use cutlass_models::{MediaId, RationalTime, TimeRange, TrackId, TrackKind, resample};
+
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -24,10 +26,10 @@ const CUTLASS_DIR: &str = ".cutlass";
 const PROJECTS_SUBDIR: &str = "projects";
 const EXPORTS_SUBDIR: &str = "exports";
 const CACHE_SUBDIR: &str = "cache";
-const MAX_EXPORT_FRAMES: i64 = 96;
+const MAX_MEDIA: usize = 3;
+const MAX_CLIP_FRAMES: i64 = 96;
 
 struct Args {
-    video: PathBuf,
     name: String,
 }
 
@@ -40,7 +42,6 @@ fn setup_tracing() {
 }
 
 fn parse_args() -> Result<Args, AnyError> {
-    let mut video: Option<PathBuf> = None;
     let mut name = env::var("CUTLASS_NAME").unwrap_or_else(|_| "demo".into());
     let mut iter = env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -55,47 +56,107 @@ fn parse_args() -> Result<Args, AnyError> {
             other if other.starts_with('-') => {
                 return Err(format!("unknown flag: {other}").into());
             }
-            path => video = Some(PathBuf::from(path)),
+            path => {
+                return Err(format!(
+                    "unexpected argument: {path} (videos are picked randomly from {ASSETS_DIR}/)"
+                )
+                .into());
+            }
         }
-    }
-
-    let video = match video {
-        Some(p) => p,
-        None => first_asset_in(ASSETS_DIR)
-            .ok_or_else(|| format!("no video arg and no mp4 found in {ASSETS_DIR}/"))?,
-    };
-
-    if !video.is_file() {
-        return Err(format!("video not found: {}", video.display()).into());
     }
 
     if name.is_empty() {
         return Err("session name must not be empty".into());
     }
 
-    Ok(Args { video, name })
+    Ok(Args { name })
 }
 
 fn print_usage() {
     eprintln!(
-        "Usage: cutlass-app [VIDEO] [--name NAME]\n\
+        "Usage: cutlass-app [--name NAME]\n\
          \n\
-         Builds a one-clip project, saves to .cutlass/projects/, exports MP4 to .cutlass/exports/.\n\
+         Builds a three-clip project from random videos in assets/, saves to\n\
+         .cutlass/projects/, exports MP4 to .cutlass/exports/.\n\
          \n\
-         VIDEO   Source file (default: first .mp4 in assets/)\n\
          --name  Session basename (default: demo, or CUTLASS_NAME env)\n"
     );
 }
 
-fn first_asset_in(dir: &str) -> Option<PathBuf> {
+fn video_assets_in(dir: &str) -> Vec<PathBuf> {
     let mut paths: Vec<_> = fs::read_dir(dir)
-        .ok()?
+        .ok()
+        .into_iter()
+        .flatten()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.is_file() && p.extension().is_some_and(|ext| ext == "mp4"))
         .collect();
     paths.sort();
-    paths.into_iter().next()
+    paths
+}
+
+fn random_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    nanos ^ (u64::from(std::process::id()) << 32)
+}
+
+fn next_random(state: &mut u64) -> u64 {
+    *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+    *state
+}
+
+/// [`MAX_MEDIA`] random picks from `assets/`; distinct when enough files exist.
+fn random_session_videos() -> Result<Vec<PathBuf>, AnyError> {
+    let pool = video_assets_in(ASSETS_DIR);
+    if pool.is_empty() {
+        return Err(format!("no mp4 found in {ASSETS_DIR}/").into());
+    }
+
+    let mut rng = random_seed();
+    let mut available: Vec<usize> = (0..pool.len()).collect();
+    let mut picks = Vec::with_capacity(MAX_MEDIA);
+
+    for _ in 0..MAX_MEDIA {
+        if available.is_empty() {
+            available = (0..pool.len()).collect();
+        }
+        let slot = (next_random(&mut rng) as usize) % available.len();
+        let pool_idx = available.swap_remove(slot);
+        picks.push(pool[pool_idx].clone());
+    }
+
+    Ok(picks)
+}
+
+fn import_media(engine: &mut Engine, path: &Path) -> Result<MediaId, AnyError> {
+    match engine.apply(Command::Project(ProjectCommand::Import {
+        path: path.to_path_buf(),
+    }))? {
+        ApplyOutcome::Imported { media } => Ok(media),
+        other => Err(format!("import failed for {}: {other:?}", path.display()).into()),
+    }
+}
+
+fn add_media_clip(
+    engine: &mut Engine,
+    track: TrackId,
+    media: MediaId,
+    source: TimeRange,
+    start: RationalTime,
+) -> Result<(), AnyError> {
+    match engine.apply(Command::Edit(EditCommand::AddClip {
+        track,
+        media,
+        source,
+        start,
+    }))? {
+        ApplyOutcome::Edited(EditOutcome::Created(_)) => Ok(()),
+        other => Err(format!("add clip failed: {other:?}").into()),
+    }
 }
 
 fn cutlass_paths(name: &str) -> Result<(PathBuf, PathBuf, PathBuf), AnyError> {
@@ -118,11 +179,15 @@ fn run() -> Result<(), AnyError> {
     let args = parse_args()?;
     let (project_path, export_path, cache_dir) = cutlass_paths(&args.name)?;
 
+    let videos = random_session_videos()?;
     info!(
-        video = %args.video.display(),
         name = %args.name,
+        picks = videos.len(),
         "starting e2e session"
     );
+    for (i, path) in videos.iter().enumerate() {
+        info!(clip = i + 1, video = %path.file_name().and_then(|n| n.to_str()).unwrap_or("?"), "selected asset");
+    }
 
     let config = EngineConfig {
         cache_dir,
@@ -131,23 +196,15 @@ fn run() -> Result<(), AnyError> {
 
     let mut engine = Engine::new(config)?;
 
-    let media_id = match engine.apply(Command::Project(ProjectCommand::Import {
-        path: args.video.clone(),
-    }))? {
-        ApplyOutcome::Imported { media } => media,
-        other => return Err(format!("import failed: {other:?}").into()),
-    };
-
-    let (clip_len, media_rate) = {
-        let media = engine
-            .project()
-            .media(media_id)
-            .ok_or("imported media missing from pool")?;
-        (
-            media.duration.value.clamp(1, MAX_EXPORT_FRAMES),
-            media.frame_rate,
-        )
-    };
+    let mut media_ids = Vec::with_capacity(MAX_MEDIA);
+    for path in &videos {
+        media_ids.push(import_media(&mut engine, path)?);
+    }
+    info!(
+        media = media_ids.len(),
+        clips = MAX_MEDIA,
+        "imported media for multi-clip session"
+    );
 
     let track_id = match engine.apply(Command::Edit(EditCommand::AddTrack {
         kind: TrackKind::Video,
@@ -158,18 +215,32 @@ fn run() -> Result<(), AnyError> {
     };
 
     let tl_rate = engine.project().timeline().frame_rate;
-    let source = TimeRange::at_rate(0, clip_len, media_rate);
-    let start = RationalTime::new(0, tl_rate);
+    let mut timeline_start = RationalTime::new(0, tl_rate);
 
-    match engine.apply(Command::Edit(EditCommand::AddClip {
-        track: track_id,
-        media: media_id,
-        source,
-        start,
-    }))? {
-        ApplyOutcome::Edited(EditOutcome::Created(_)) => {}
-        other => return Err(format!("add clip failed: {other:?}").into()),
+    for media_id in media_ids {
+        let (clip_len, media_rate) = {
+            let media = engine
+                .project()
+                .media(media_id)
+                .ok_or("imported media missing from pool")?;
+            (
+                media.duration.value.clamp(1, MAX_CLIP_FRAMES),
+                media.frame_rate,
+            )
+        };
+        let source = TimeRange::at_rate(0, clip_len, media_rate);
+        let timeline_duration = resample(RationalTime::new(clip_len, media_rate), tl_rate)
+            .value
+            .max(1);
+        add_media_clip(&mut engine, track_id, media_id, source, timeline_start)?;
+        timeline_start = RationalTime::new(timeline_start.value + timeline_duration, tl_rate);
     }
+
+    info!(
+        clips = engine.project().timeline().clip_count(),
+        frames = engine.project().timeline().duration().value,
+        "timeline assembled"
+    );
 
     let preview = engine
         .get_frame(RationalTime::new(0, tl_rate))
