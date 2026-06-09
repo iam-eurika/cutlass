@@ -22,4 +22,7 @@ pub enum EngineError {
 
     #[error("media file not found: {0}")]
     MissingMedia(String),
+
+    #[error("preview: {0}")]
+    Preview(String),
 }

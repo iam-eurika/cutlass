@@ -45,3 +45,22 @@ fn undo_add_clip_uses_inverse_not_snapshot() {
     assert_eq!(engine.project().timeline().clip_count(), 0);
     assert_eq!(engine.project().media_count(), 1, "import survives clip undo");
 }
+
+#[test]
+fn undo_import_fails_while_media_referenced() {
+    let Some(path) = small_video_asset() else {
+        return;
+    };
+    let (_dir, mut engine) = temp_engine();
+    let media_id = import_asset(&mut engine, &path);
+    let track = engine.project_mut().add_track(TrackKind::Video, "V1");
+    // Place clip without pushing undo — stack only holds the import inverse.
+    engine
+        .project_mut()
+        .add_clip(track, media_id, tr(0, 48), rt(0))
+        .expect("direct add");
+
+    assert!(!engine.undo());
+    assert!(engine.project().media(media_id).is_some());
+    assert_eq!(engine.project().timeline().clip_count(), 1);
+}

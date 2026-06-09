@@ -88,9 +88,13 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::edit::{add_clip, remove_media};
+    use crate::action::edit::{
+        add_clip, add_generated, move_clip, remove_media, ripple_delete, split_clip, trim_clip,
+    };
     use cutlass_cache::FrameCache;
-    use cutlass_models::{MediaSource, Rational, RationalTime, TimeRange, TrackKind};
+    use cutlass_models::{
+        Clip, Generator, MediaSource, Rational, RationalTime, TimeRange, TrackKind,
+    };
 
     fn setup() -> (tempfile::TempDir, Project, FrameCache) {
         let dir = tempfile::tempdir().unwrap();
@@ -171,5 +175,276 @@ mod tests {
 
         let _ = inv3.apply(&mut ctx).unwrap();
         assert_eq!(ctx.project.media_count(), 0);
+    }
+
+    #[test]
+    fn split_clip_inverse_oscillates() {
+        let (_dir, mut project, cache) = setup();
+        let media_id = project.add_media(MediaSource::new(
+            "/tmp/split.mp4",
+            1920,
+            1080,
+            Rational::FPS_24,
+            240,
+            false,
+        ));
+        let track = project.add_track(TrackKind::Video, "V1");
+        let clip_id = project
+            .add_clip(
+                track,
+                media_id,
+                TimeRange::at_rate(0, 48, Rational::FPS_24),
+                RationalTime::new(0, Rational::FPS_24),
+            )
+            .unwrap();
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let (_tail, inv1) = split_clip::execute(&mut ctx, clip_id, rt(24)).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 2);
+        assert_eq!(
+            ctx.project.clip(clip_id).unwrap().timeline.duration.value,
+            24
+        );
+
+        let inv2 = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 1);
+        assert_eq!(
+            ctx.project.clip(clip_id).unwrap().timeline.duration.value,
+            48
+        );
+
+        let inv3 = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 2);
+        assert_eq!(
+            ctx.project.clip(clip_id).unwrap().timeline.duration.value,
+            24
+        );
+
+        let _ = inv3.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 1);
+    }
+
+    #[test]
+    fn ripple_delete_inverse_oscillates() {
+        let (_dir, mut project, cache) = setup();
+        let track = project.add_track(TrackKind::Video, "V1");
+        let first = project
+            .timeline_mut()
+            .add_clip(
+                track,
+                Clip::generated(Generator::Adjustment, tr(0, 10)),
+            )
+            .unwrap();
+        let second = project
+            .timeline_mut()
+            .add_clip(
+                track,
+                Clip::generated(Generator::Adjustment, tr(20, 10)),
+            )
+            .unwrap();
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let inv1 = ripple_delete::execute(&mut ctx, first).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 1);
+        assert_eq!(
+            ctx.project.clip(second).unwrap().timeline.start.value,
+            10
+        );
+
+        let inv2 = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 2);
+        assert_eq!(
+            ctx.project.clip(second).unwrap().timeline.start.value,
+            20
+        );
+
+        let _ = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 1);
+    }
+
+    #[test]
+    fn ripple_delete_middle_of_three_adjacent_oscillates() {
+        let (_dir, mut project, cache) = setup();
+        let track = project.add_track(TrackKind::Video, "V1");
+        let a = project
+            .timeline_mut()
+            .add_clip(track, Clip::generated(Generator::Adjustment, tr(0, 10)))
+            .unwrap();
+        let b = project
+            .timeline_mut()
+            .add_clip(track, Clip::generated(Generator::Adjustment, tr(10, 10)))
+            .unwrap();
+        let c = project
+            .timeline_mut()
+            .add_clip(track, Clip::generated(Generator::Adjustment, tr(20, 10)))
+            .unwrap();
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let inv1 = ripple_delete::execute(&mut ctx, b).unwrap();
+        assert_eq!(ctx.project.clip(c).unwrap().start().value, 10);
+
+        let inv2 = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(b).unwrap().start().value, 10);
+        assert_eq!(ctx.project.clip(c).unwrap().start().value, 20);
+
+        let _ = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(c).unwrap().start().value, 10);
+        assert!(ctx.project.clip(b).is_none());
+        let _ = a;
+    }
+
+    #[test]
+    fn trim_clip_inverse_restores_snapshot() {
+        let (_dir, mut project, cache) = setup();
+        let media_id = project.add_media(MediaSource::new(
+            "/tmp/trim.mp4",
+            1280,
+            720,
+            Rational::FPS_24,
+            240,
+            false,
+        ));
+        let track = project.add_track(TrackKind::Video, "V1");
+        let clip_id = project
+            .add_clip(
+                track,
+                media_id,
+                TimeRange::at_rate(0, 48, Rational::FPS_24),
+                RationalTime::new(0, Rational::FPS_24),
+            )
+            .unwrap();
+        let before = ctx_project_clip(&project, clip_id);
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let inv1 = trim_clip::execute(&mut ctx, clip_id, tr(10, 28)).unwrap();
+        assert_eq!(ctx.project.clip(clip_id).unwrap().timeline.start.value, 10);
+
+        let inv2 = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(clip_id).unwrap().timeline, before.timeline);
+        assert_eq!(
+            ctx.project.clip(clip_id).unwrap().source_range(),
+            before.source_range()
+        );
+
+        let _ = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(clip_id).unwrap().timeline.start.value, 10);
+    }
+
+    #[test]
+    fn move_clip_inverse_oscillates() {
+        let (_dir, mut project, cache) = setup();
+        let v1 = project.add_track(TrackKind::Video, "V1");
+        let v2 = project.add_track(TrackKind::Video, "V2");
+        let clip_id = project
+            .timeline_mut()
+            .add_clip(
+                v1,
+                Clip::generated(Generator::Text { content: "x".into() }, tr(5, 15)),
+            )
+            .unwrap();
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let inv1 = move_clip::execute(&mut ctx, clip_id, v2, rt(40)).unwrap();
+        assert_eq!(ctx.project.timeline().track_of(clip_id), Some(v2));
+
+        let inv2 = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().track_of(clip_id), Some(v1));
+        assert_eq!(ctx.project.clip(clip_id).unwrap().start().value, 5);
+
+        let _ = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().track_of(clip_id), Some(v2));
+    }
+
+    #[test]
+    fn add_generated_inverse_oscillates() {
+        let (_dir, mut project, cache) = setup();
+        let track = project.add_track(TrackKind::Video, "V1");
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let (id, inv1) = add_generated::execute(
+            &mut ctx,
+            track,
+            Generator::SolidColor {
+                rgba: [9, 8, 7, 6],
+            },
+            tr(0, 12),
+        )
+        .unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 1);
+
+        let inv2 = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 0);
+
+        let inv3 = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 1);
+        assert!(ctx.project.clip(id).is_some());
+
+        let _ = inv3.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 0);
+    }
+
+    #[test]
+    fn split_generated_clip_inverse_oscillates() {
+        let (_dir, mut project, cache) = setup();
+        let track = project.add_track(TrackKind::Video, "V1");
+        let clip_id = project
+            .timeline_mut()
+            .add_clip(
+                track,
+                Clip::generated(
+                    Generator::Text {
+                        content: "split me".into(),
+                    },
+                    tr(0, 20),
+                ),
+            )
+            .unwrap();
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let (_tail, inv1) = split_clip::execute(&mut ctx, clip_id, rt(10)).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 2);
+
+        let inv2 = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 1);
+        assert_eq!(
+            ctx.project.clip(clip_id).unwrap().timeline.duration.value,
+            20
+        );
+
+        let _ = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.timeline().clip_count(), 2);
+    }
+
+    fn ctx_project_clip(project: &Project, id: cutlass_models::ClipId) -> cutlass_models::Clip {
+        project.clip(id).unwrap().clone()
+    }
+
+    fn rt(value: i64) -> RationalTime {
+        RationalTime::new(value, Rational::FPS_24)
+    }
+
+    fn tr(start: i64, duration: i64) -> TimeRange {
+        TimeRange::at_rate(start, duration, Rational::FPS_24)
     }
 }

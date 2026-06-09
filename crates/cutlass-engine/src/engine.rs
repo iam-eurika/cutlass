@@ -6,8 +6,13 @@ use cutlass_cache::FrameCache;
 use cutlass_commands::Command;
 use cutlass_models::Project;
 
+use cutlass_models::RationalTime;
+
 use crate::action::{ApplyContext, ApplyOutcome, History, dispatch};
+use crate::decoder_pool::DecoderPool;
 use crate::error::EngineError;
+use crate::frame::RgbaFrame;
+use crate::preview;
 
 /// Default on-disk frame cache budget (50 GiB).
 pub const DEFAULT_CACHE_BUDGET_BYTES: u64 = 50 * 1024 * 1024 * 1024;
@@ -40,6 +45,7 @@ pub struct Engine {
     config: EngineConfig,
     history: History,
     project_path: Option<PathBuf>,
+    decoder_pool: DecoderPool,
 }
 
 impl Engine {
@@ -51,6 +57,7 @@ impl Engine {
             cache,
             history: History::new(undo_limit),
             project_path: None,
+            decoder_pool: DecoderPool::new(),
             config,
         })
     }
@@ -63,6 +70,7 @@ impl Engine {
             cache,
             history: History::new(undo_limit),
             project_path: None,
+            decoder_pool: DecoderPool::new(),
             config,
         })
     }
@@ -107,10 +115,23 @@ impl Engine {
             history: &mut self.history,
         };
         let (outcome, inverse) = dispatch(command, &mut ctx)?;
+        if matches!(outcome, ApplyOutcome::Opened | ApplyOutcome::Loaded) {
+            self.decoder_pool.clear();
+        }
         if let Some(inverse) = inverse {
             self.history.record_do(inverse);
         }
         Ok(outcome)
+    }
+
+    /// Decode the topmost enabled video clip at `time` and return an RGBA preview frame.
+    pub fn get_frame(&mut self, time: RationalTime) -> Result<RgbaFrame, EngineError> {
+        preview::get_frame(
+            &self.project,
+            &self.cache,
+            &mut self.decoder_pool,
+            time,
+        )
     }
 
     pub fn undo(&mut self) -> bool {
@@ -123,7 +144,8 @@ impl Engine {
                 true
             }
             Err(_) => {
-                // Leave history unchanged on failure — caller may retry.
+                // Inverse was popped before apply; on failure the action is lost.
+                // Inverses are written to be infallible once pushed.
                 false
             }
         }
