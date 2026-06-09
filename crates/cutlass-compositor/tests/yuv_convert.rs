@@ -80,6 +80,32 @@ fn gpu_yuv_gray_matches_legacy_cpu_at_same_size() {
     }
 }
 
+fn yuv_to_rgb_at(y: &[u8], u: &[u8], v: &[u8], w: u32, x: u32, y_px: u32) -> [u8; 3] {
+    let w = w as usize;
+    let yv = i32::from(y[(y_px as usize) * w + x as usize]);
+    let uu = i32::from(u[((y_px / 2) as usize) * (w / 2) + (x / 2) as usize]) - 128;
+    let vv = i32::from(v[((y_px / 2) as usize) * (w / 2) + (x / 2) as usize]) - 128;
+    [
+        ((298 * (yv - 16) + 409 * vv + 128) >> 8).clamp(0, 255) as u8,
+        ((298 * (yv - 16) - 100 * uu - 208 * vv + 128) >> 8).clamp(0, 255) as u8,
+        ((298 * (yv - 16) + 516 * uu + 128) >> 8).clamp(0, 255) as u8,
+    ]
+}
+
+#[test]
+fn legacy_rgba_yuv_roundtrip_1080p_solid() {
+    let (w, h) = (1920u32, 1080u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px.copy_from_slice(&[169, 164, 166, 255]);
+    }
+    let yuv = legacy_rgba_to_yuv420p(&rgba, w, h);
+    let rgb = yuv_to_rgb_at(&yuv.y, &yuv.u, &yuv.v, w, 960, 540);
+    for (got, want) in rgb.iter().zip([169u8, 164, 166]) {
+        assert!((i16::from(*got) - i16::from(want)).abs() <= 2, "got {got} want {want}");
+    }
+}
+
 #[test]
 fn gpu_rgba_to_yuv_matches_legacy_cpu() {
     let Some(gpu) = try_gpu() else {

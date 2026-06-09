@@ -18,7 +18,7 @@ This is an early-stage project. The headless editing core is real and tested, an
 - Frame resolution through the engine: timeline frame → ordered layers → composited image.
 - A WGPU compositor and an on-disk proxy/transcode cache to keep cold seeks fast.
 - A desktop editor shell (`cutlass-ui`, built on [Slint](https://slint.dev/)): import a video, scrub and play back a live preview, drag clips, split/delete/ripple-delete, undo/redo, with background proxy progress.
-- A small end-to-end CLI (`cutlass-app`) that decodes a clip and renders one timeline frame to a PNG — a smoke test for the whole pipeline.
+- A small end-to-end CLI (`cutlass-app`) that imports a clip, saves a `.cutlass` project, and exports an MP4 — a smoke test for the whole pipeline.
 
 **Not built yet (the goal)**
 
@@ -36,7 +36,7 @@ The codebase is a Cargo workspace split into focused crates:
 | `cutlass-compositor` | WGPU frame compositor (multi-layer alpha-over, RGBA readback). |
 | `cutlass-engine` | Headless editing engine: edit commands + undo/redo, WGPU preview, timeline export, frame cache. |
 | `cutlass-ui` | Slint desktop shell: preview, scrub/playback, timeline editing, undo/redo, proxy progress. |
-| `cutlass-app` | End-to-end render CLI that exercises the full decode → resolve → composite pipeline. |
+| `cutlass-app` | End-to-end session CLI: import → save project → export MP4 under `.cutlass/`. |
 
 ## Benchmarks
 
@@ -94,13 +94,16 @@ cargo run -p cutlass-ui
 cargo run -p cutlass-ui -- path/to/video.mp4
 ```
 
-### Render CLI
+### Session CLI (`cutlass-app`)
 
-The `cutlass-app` CLI decodes a video, builds a one-clip project, composites a single timeline frame, and writes it to a PNG:
+End-to-end engine smoke test: import a clip, preview one frame, save a `.cutlass` project, and export an MP4 under `.cutlass/`:
 
 ```bash
-# cutlass-app <video> [frame_index] [output.png]
-cargo run -p cutlass-app -- path/to/video.mp4 1000 frame.png
+# First MP4 in assets/, writes .cutlass/projects/demo.cutlass + .cutlass/exports/demo.mp4
+cargo run -p cutlass-app
+
+# Specific source and session name
+cargo run -p cutlass-app -- assets/foo.mp4 --name foo_edit
 ```
 
 ## License

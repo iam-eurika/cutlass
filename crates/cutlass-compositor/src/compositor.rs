@@ -245,8 +245,43 @@ impl Compositor {
     ) -> Result<Yuv420pImage, CompositorError> {
         validate_layers(config, layers)?;
         self.ensure_target(gpu, config)?;
-        self.render_layers(gpu, config, layers)?;
-        self.readback_yuv420p(gpu, config)
+
+        let width = config.width;
+        let height = config.height;
+        let y_stride = width;
+        let uv_stride = width / 2;
+        let y_count = (y_stride * height) as u64;
+        let uv_count = (uv_stride * (height / 2)) as u64;
+        let y_buf = storage_buffer(gpu, "y_out", y_count * 4);
+        let u_buf = storage_buffer(gpu, "u_out", uv_count * 4);
+        let v_buf = storage_buffer(gpu, "v_out", uv_count * 4);
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("composite_yuv_encoder"),
+            });
+        self.render_layers_into(&mut encoder, gpu, config, layers)?;
+        self.encode_yuv_into(
+            &mut encoder,
+            gpu,
+            config,
+            &y_buf,
+            &u_buf,
+            &v_buf,
+        )?;
+        gpu.queue.submit(Some(encoder.finish()));
+
+        let y = read_storage_u8(gpu, &y_buf, y_count as usize)?;
+        let u = read_storage_u8(gpu, &u_buf, uv_count as usize)?;
+        let v = read_storage_u8(gpu, &v_buf, uv_count as usize)?;
+        Ok(Yuv420pImage {
+            width,
+            height,
+            y,
+            u,
+            v,
+        })
     }
 
     fn render_layers(
@@ -255,13 +290,24 @@ impl Compositor {
         config: &CompositorConfig,
         layers: &[CompositeLayer],
     ) -> Result<(), CompositorError> {
-        let target = self.target.as_ref().expect("target initialized");
-
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("composite_encoder"),
             });
+        self.render_layers_into(&mut encoder, gpu, config, layers)?;
+        gpu.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    fn render_layers_into(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        gpu: &GpuContext,
+        config: &CompositorConfig,
+        layers: &[CompositeLayer],
+    ) -> Result<(), CompositorError> {
+        let target = self.target.as_ref().expect("target initialized");
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -375,7 +421,66 @@ impl Compositor {
             }
         }
 
-        gpu.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    fn encode_yuv_into(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        gpu: &GpuContext,
+        config: &CompositorConfig,
+        y_buf: &wgpu::Buffer,
+        u_buf: &wgpu::Buffer,
+        v_buf: &wgpu::Buffer,
+    ) -> Result<(), CompositorError> {
+        let target = self.target.as_ref().expect("target initialized");
+        let width = config.width;
+        let height = config.height;
+        let params = RgbaToYuvParams {
+            width,
+            height,
+            y_stride: width,
+            uv_stride: width / 2,
+        };
+        gpu.queue
+            .write_buffer(&self.rgba_to_yuv_params, 0, bytemuck::bytes_of(&params));
+
+        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rgba_to_yuv_bind"),
+            layout: &self.rgba_to_yuv_bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&target.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: y_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: u_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: v_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.rgba_to_yuv_params.as_entire_binding(),
+                },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("rgba_to_yuv_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.rgba_to_yuv_pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
         Ok(())
     }
 
@@ -425,89 +530,6 @@ impl Compositor {
             }
         })?;
         RgbaImage::new(config.width, config.height, tight)
-    }
-
-    fn readback_yuv420p(
-        &mut self,
-        gpu: &GpuContext,
-        config: &CompositorConfig,
-    ) -> Result<Yuv420pImage, CompositorError> {
-        let target = self.target.as_ref().expect("target initialized");
-        let width = config.width;
-        let height = config.height;
-        let y_stride = width;
-        let uv_stride = width / 2;
-        let y_count = (y_stride * height) as u64;
-        let uv_count = (uv_stride * (height / 2)) as u64;
-        let y_bytes = y_count * 4;
-        let uv_bytes = uv_count * 4;
-
-        let y_buf = storage_buffer(gpu, "y_out", y_bytes);
-        let u_buf = storage_buffer(gpu, "u_out", uv_bytes);
-        let v_buf = storage_buffer(gpu, "v_out", uv_bytes);
-
-        let params = RgbaToYuvParams {
-            width,
-            height,
-            y_stride,
-            uv_stride,
-        };
-        gpu.queue
-            .write_buffer(&self.rgba_to_yuv_params, 0, bytemuck::bytes_of(&params));
-
-        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("rgba_to_yuv_bind"),
-            layout: &self.rgba_to_yuv_bind_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&target.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: y_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: u_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: v_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.rgba_to_yuv_params.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("rgba_to_yuv_encoder"),
-            });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("rgba_to_yuv_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.rgba_to_yuv_pipeline);
-            pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
-        }
-        gpu.queue.submit(Some(encoder.finish()));
-
-        let y = read_storage_u8(gpu, &y_buf, y_count as usize)?;
-        let u = read_storage_u8(gpu, &u_buf, uv_count as usize)?;
-        let v = read_storage_u8(gpu, &v_buf, uv_count as usize)?;
-        Ok(Yuv420pImage {
-            width,
-            height,
-            y,
-            u,
-            v,
-        })
     }
 
     fn ensure_target(

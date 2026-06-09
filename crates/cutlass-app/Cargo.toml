@@ -3,15 +3,15 @@ name = "cutlass-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cutlass application"
+description = "Cutlass end-to-end session CLI (import → save → export)"
 
 [[bin]]
 name = "cutlass-app"
 path = "src/main.rs"
 
 [dependencies]
-cutlass-decoder = { path = "../cutlass-decoder" }
-cutlass-encoder = { path = "../cutlass-encoder" }
-image = "0.25"
+cutlass-commands = { path = "../cutlass-commands" }
+cutlass-engine = { path = "../cutlass-engine" }
+cutlass-models = { path = "../cutlass-models" }
 tracing.workspace = true
 tracing-subscriber.workspace = true

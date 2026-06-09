@@ -92,7 +92,7 @@ pub fn legacy_rgba_to_yuv420p(rgba: &[u8], width: u32, height: u32) -> Yuv420pIm
             let g = i32::from(rgba[i + 1]);
             let b = i32::from(rgba[i + 2]);
             y_plane[row * w + col] =
-                ((66 * r + 129 * g + 25 * b + 128) >> 8).clamp(16, 235) as u8;
+                (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16).clamp(16, 235) as u8;
         }
     }
 
@@ -112,8 +112,8 @@ pub fn legacy_rgba_to_yuv420p(rgba: &[u8], width: u32, height: u32) -> Yuv420pIm
             let r = r_sum / 4;
             let g = g_sum / 4;
             let b = b_sum / 4;
-            let u = ((-38 * r - 74 * g + 112 * b + 128) >> 8).clamp(16, 240) as u8;
-            let v = ((112 * r - 94 * g - 18 * b + 128) >> 8).clamp(16, 240) as u8;
+            let u = (((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128).clamp(16, 240) as u8;
+            let v = (((112 * r - 94 * g - 18 * b + 128) >> 8) + 128).clamp(16, 240) as u8;
             let uv_row = row / 2;
             let uv_col = col / 2;
             u_plane[uv_row * (w / 2) + uv_col] = u;

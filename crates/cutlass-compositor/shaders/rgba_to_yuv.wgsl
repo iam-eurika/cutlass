@@ -15,9 +15,9 @@ struct RgbaToYuvParams {
 
 fn rgb_to_yuv(r: f32, g: f32, b: f32) -> vec3<f32> {
     // Match legacy CPU coeffs in cutlass-compositor::legacy_rgba_to_yuv420p.
-    let y = clamp((66.0 * r + 129.0 * g + 25.0 * b + 128.0) / 256.0, 16.0, 235.0);
-    let u = clamp((-38.0 * r - 74.0 * g + 112.0 * b + 128.0) / 256.0, 16.0, 240.0);
-    let v = clamp((112.0 * r - 94.0 * g - 18.0 * b + 128.0) / 256.0, 16.0, 240.0);
+    let y = clamp((66.0 * r + 129.0 * g + 25.0 * b + 128.0) / 256.0 + 16.0, 16.0, 235.0);
+    let u = clamp((-38.0 * r - 74.0 * g + 112.0 * b + 128.0) / 256.0 + 128.0, 16.0, 240.0);
+    let v = clamp((112.0 * r - 94.0 * g - 18.0 * b + 128.0) / 256.0 + 128.0, 16.0, 240.0);
     return vec3(y, u, v);
 }
 
