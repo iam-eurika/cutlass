@@ -1,25 +1,11 @@
+//! Integration tests for project-level invariants and cross-module behavior.
+
+mod common;
+
+use common::{rt, sample_media, tr, tr_at, FPS_24, FPS_30};
 use cutlass_models::{
-    Generator, MediaSource, ModelError, Project, Rational, RationalTime, Shape, TimeRange,
-    TrackKind,
+    Generator, MediaSource, ModelError, Project, Shape, TrackKind,
 };
-
-const FPS_24: Rational = Rational::FPS_24;
-
-fn rt(value: i64) -> RationalTime {
-    RationalTime::new(value, FPS_24)
-}
-
-fn tr(start: i64, duration: i64) -> TimeRange {
-    TimeRange::at_rate(start, duration, FPS_24)
-}
-
-fn tr_at(start: i64, duration: i64, rate: Rational) -> TimeRange {
-    TimeRange::at_rate(start, duration, rate)
-}
-
-fn sample_media(fps: Rational, duration: i64) -> MediaSource {
-    MediaSource::new("/tmp/sample.mp4", 3840, 2160, fps, duration, true)
-}
 
 #[test]
 fn build_project_and_query_by_id() {
@@ -114,14 +100,14 @@ fn unknown_refs_error() {
 #[test]
 fn rate_conform_adjusts_timeline_duration() {
     let mut project = Project::new("demo", FPS_24);
-    let media_id = project.add_media(sample_media(Rational::FPS_30, 1000));
+    let media_id = project.add_media(sample_media(FPS_30, 1000));
     let v1 = project.add_track(TrackKind::Video, "V1");
 
     let clip_id = project
         .add_clip(
             v1,
             media_id,
-            tr_at(0, 120, Rational::FPS_30),
+            tr_at(0, 120, FPS_30),
             rt(0),
         )
         .unwrap();
@@ -340,4 +326,57 @@ fn editing_unknown_clip_errors() {
         project.move_clip(gone, v1, rt(0)),
         Err(ModelError::UnknownClip(_))
     ));
+}
+
+#[test]
+fn media_pool_lookup_and_iteration() {
+    let mut project = Project::new("pool", FPS_24);
+    let a = project.add_media(sample_media(FPS_24, 100));
+    let b = project.add_media(sample_media(FPS_30, 200));
+
+    assert_eq!(project.media(a).unwrap().duration.value, 100);
+    assert_eq!(project.media(b).unwrap().frame_rate, FPS_30);
+
+    let mut durations: Vec<i64> = project.media_iter().map(|m| m.duration.value).collect();
+    durations.sort();
+    assert_eq!(durations, vec![100, 200]);
+}
+
+#[test]
+fn resample_preserved_across_split_trim_chain() {
+    let mut project = Project::new("chain", FPS_24);
+    let media_id = project.add_media(sample_media(FPS_30, 600));
+    let track = project.add_track(TrackKind::Video, "V1");
+
+    let clip = project
+        .add_clip(track, media_id, tr_at(0, 300, FPS_30), rt(0))
+        .unwrap();
+    assert_eq!(project.clip(clip).unwrap().timeline.duration.value, 240);
+
+    let right = project.split_clip(clip, rt(120)).unwrap();
+    project.trim_clip(right, tr(120, 96)).unwrap();
+
+    assert_eq!(project.clip(clip).unwrap().timeline, tr(0, 120));
+    assert_eq!(project.clip(right).unwrap().timeline, tr(120, 96));
+    assert_eq!(project.timeline().duration().value, 216);
+}
+
+#[test]
+fn audio_and_video_tracks_hold_independent_clips() {
+    let mut project = Project::new("av", FPS_24);
+    let media_id = project.add_media(sample_media(FPS_24, 500));
+    let video = project.add_track(TrackKind::Video, "V1");
+    let audio = project.add_track(TrackKind::Audio, "A1");
+
+    let picture = project
+        .add_clip(video, media_id, tr(0, 200), rt(0))
+        .unwrap();
+    let sound = project
+        .add_clip(audio, media_id, tr(0, 200), rt(0))
+        .unwrap();
+
+    assert_ne!(picture, sound);
+    assert_eq!(project.timeline().track_of(picture), Some(video));
+    assert_eq!(project.timeline().track_of(sound), Some(audio));
+    assert_eq!(project.timeline().clip_count(), 2);
 }
