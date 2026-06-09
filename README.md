@@ -38,6 +38,23 @@ The codebase is a Cargo workspace split into focused crates:
 | `cutlass-ui` | Slint desktop shell: preview, scrub/playback, timeline editing, undo/redo, proxy progress. |
 | `cutlass-app` | End-to-end render CLI that exercises the full decode → resolve → composite pipeline. |
 
+## Benchmarks
+
+Criterion benches for the compositor GPU path and engine preview/export (local only; not run in CI):
+
+```bash
+# GPU compositor (solid / RGBA / two-layer stack @ 1080p)
+cargo bench -p cutlass-compositor --bench composite
+
+# get_frame: solid clip always; media clip when assets/*.mp4 or CUTLASS_BENCH_ASSET is set
+cargo bench -p cutlass-engine --bench preview
+
+# Full export: 48-frame solid timeline → MP4
+cargo bench -p cutlass-engine --bench export
+```
+
+HTML reports land in `target/criterion/`. See [docs/benchmarks.md](docs/benchmarks.md) for case descriptions, env vars, and how to interpret cold/warm preview numbers.
+
 ## Prerequisites
 
 - A recent stable **Rust** toolchain (edition 2024; Rust 1.85 or newer).
