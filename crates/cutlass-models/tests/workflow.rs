@@ -96,7 +96,8 @@ fn mixed_generated_and_media_layers() {
     let mut project = Project::new("mixed", FPS_24);
     let media_id = project.add_media(sample_media(FPS_24, 1_000));
     let video = project.add_track(TrackKind::Video, "Video");
-    let titles = project.add_track(TrackKind::Video, "Titles");
+    let titles = project.add_track(TrackKind::Text, "Titles");
+    let gfx = project.add_track(TrackKind::Sticker, "GFX");
 
     let footage = project
         .add_clip(video, media_id, tr(0, 500), rt(0))
@@ -112,7 +113,7 @@ fn mixed_generated_and_media_layers() {
         .unwrap();
     let lower_third = project
         .add_generated(
-            titles,
+            gfx,
             Generator::SolidColor {
                 rgba: [0, 0, 0, 180],
             },
@@ -125,7 +126,7 @@ fn mixed_generated_and_media_layers() {
     assert!(project.clip(title).unwrap().is_generated());
     assert_eq!(
         project.timeline().track_of(lower_third),
-        Some(titles)
+        Some(gfx)
     );
     assert_eq!(project.timeline().duration().value, 500);
 }
@@ -188,8 +189,8 @@ fn timeline_remove_track_purges_clip_index() {
 #[test]
 fn shape_generator_and_move_preserves_source() {
     let mut project = Project::new("gfx", FPS_24);
-    let gfx = project.add_track(TrackKind::Video, "GFX");
-    let alt = project.add_track(TrackKind::Video, "Alt");
+    let gfx = project.add_track(TrackKind::Sticker, "GFX");
+    let alt = project.add_track(TrackKind::Sticker, "Alt");
 
     let shape = project
         .add_generated(

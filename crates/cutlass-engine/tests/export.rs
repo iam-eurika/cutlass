@@ -59,7 +59,7 @@ fn export_track_without_clips_errors() {
 #[test]
 fn export_missing_output_parent_errors() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -84,7 +84,7 @@ fn export_missing_output_parent_errors() {
 #[test]
 fn export_generated_timeline_writes_mp4() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -116,7 +116,7 @@ fn export_generated_timeline_writes_mp4() {
 #[test]
 fn export_longer_solid_timeline_scales_frame_count() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -168,7 +168,7 @@ fn export_media_clip_writes_seekable_mp4() {
 #[test]
 fn export_trimmed_clip_uses_shortened_duration() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     let clip = add_generated(
         &mut engine,
         track,
@@ -194,7 +194,7 @@ fn export_trimmed_clip_uses_shortened_duration() {
 #[test]
 fn export_abutting_clips_span_full_timeline() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -226,12 +226,12 @@ fn export_two_track_composite_writes_valid_mp4() {
     let (dir, mut engine) = temp_engine();
     let media_id = import_asset(&mut engine, &path);
     let v1 = add_track(&mut engine, TrackKind::Video, "V1");
-    let v2 = add_track(&mut engine, TrackKind::Video, "V2");
+    let overlay = add_track(&mut engine, TrackKind::Sticker, "T1");
 
     add_media_clip(&mut engine, v1, media_id, tr(0, 24), rt(0));
     add_generated(
         &mut engine,
-        v2,
+        overlay,
         Generator::SolidColor {
             rgba: [0, 0, 0, 128],
         },
@@ -250,8 +250,8 @@ fn export_two_track_composite_writes_valid_mp4() {
 #[test]
 fn export_duration_follows_latest_ending_track() {
     let (dir, mut engine) = temp_engine();
-    let v1 = add_track(&mut engine, TrackKind::Video, "V1");
-    let v2 = add_track(&mut engine, TrackKind::Video, "V2");
+    let v1 = add_track(&mut engine, TrackKind::Sticker, "T1");
+    let v2 = add_track(&mut engine, TrackKind::Sticker, "T2");
 
     add_generated(
         &mut engine,
@@ -280,7 +280,7 @@ fn export_duration_follows_latest_ending_track() {
 #[test]
 fn export_timeline_gap_errors() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -313,7 +313,7 @@ fn export_timeline_gap_errors() {
 #[test]
 fn export_delayed_clip_start_errors_on_leading_gap() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -374,7 +374,7 @@ fn export_decodes_from_source_when_cache_corrupt() {
 #[test]
 fn export_does_not_push_undo_entry() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -397,7 +397,7 @@ fn export_does_not_push_undo_entry() {
 #[test]
 fn export_twice_to_same_path_succeeds() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,

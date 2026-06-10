@@ -44,7 +44,7 @@ fn e2e_solid_project_save_load_export() {
     assert_eq!(engine.project().media_count(), 0);
     assert!(engine.project_path().is_none());
 
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,
@@ -207,12 +207,12 @@ fn e2e_two_layer_stack_save_export() {
     let (dir, mut engine) = temp_engine();
     let media_id = import_asset(&mut engine, &asset);
     let v1 = add_track(&mut engine, TrackKind::Video, "V1");
-    let v2 = add_track(&mut engine, TrackKind::Video, "V2");
+    let overlay = add_track(&mut engine, TrackKind::Sticker, "T1");
 
     add_media_clip(&mut engine, v1, media_id, tr(0, 24), rt(0));
     add_generated(
         &mut engine,
-        v2,
+        overlay,
         Generator::SolidColor {
             rgba: [0, 0, 0, 128],
         },
@@ -251,7 +251,7 @@ fn e2e_export_errors_on_empty_saved_project() {
 #[test]
 fn e2e_undo_survives_save_but_not_open() {
     let (dir, mut engine) = temp_engine();
-    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
         &mut engine,
         track,

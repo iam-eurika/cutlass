@@ -106,10 +106,11 @@ mod tests {
                 RationalTime::new(0, R24),
             )
             .unwrap();
+        let overlay = project.add_track(TrackKind::Text, "T1");
         project
             .timeline_mut()
             .add_clip(
-                track,
+                overlay,
                 Clip::generated(Generator::Text { content: "hi".into() }, TimeRange::at_rate(48, 24, R24)),
             )
             .unwrap();

@@ -35,23 +35,48 @@ export global EditorStore {
                 },
                 {
                     id: "2",
-                    name: "V2",
-                    kind: TrackKind.video,
-                    color: #5E8B7E,
+                    name: "A1",
+                    kind: TrackKind.audio,
+                    color: #C99846,
                     clips: [
                         {
                             id: "2",
                             name: "Clip 2",
+                            timeline-start: { value: 30, rate: { num: 24, den: 1 } },
+                            source-range: {
+                                start: { value: 5, rate: { num: 24, den: 1 } },
+                                duration: { value: 70, rate: { num: 24, den: 1 } },
+                            },
+                        },
+                    ],
+                },
+                {
+                    id: "3",
+                    name: "FX1",
+                    kind: TrackKind.effect,
+                    color: #7B68A6,
+                    clips: [
+                        {
+                            id: "3",
+                            name: "Effect 1",
                             timeline-start: { value: 0, rate: { num: 24, den: 1 } },
                             source-range: {
                                 start: { value: 0, rate: { num: 24, den: 1 } },
                                 duration: { value: 80, rate: { num: 24, den: 1 } },
                             },
                         },
+                    ],
+                },
+                {
+                    id: "4",
+                    name: "T1",
+                    kind: TrackKind.text,
+                    color: #5E8B7E,
+                    clips: [
                         {
-                            id: "3",
-                            name: "Clip 3",
-                            timeline-start: { value: 120, rate: { num: 24, den: 1 } },
+                            id: "4",
+                            name: "Title 1",
+                            timeline-start: { value: 0, rate: { num: 24, den: 1 } },
                             source-range: {
                                 start: { value: 0, rate: { num: 24, den: 1 } },
                                 duration: { value: 60, rate: { num: 24, den: 1 } },
@@ -60,63 +85,54 @@ export global EditorStore {
                     ],
                 },
                 {
-                    id: "3",
-                    name: "V3",
-                    kind: TrackKind.video,
+                    id: "5",
+                    name: "ADJ1",
+                    kind: TrackKind.adjustment,
                     color: #6C5B7B,
                     clips: [
                         {
-                            id: "4",
-                            name: "Clip 4",
-                            timeline-start: { value: 50, rate: { num: 24, den: 1 } },
+                            id: "5",
+                            name: "Grade 1",
+                            timeline-start: { value: 20, rate: { num: 24, den: 1 } },
                             source-range: {
                                 start: { value: 0, rate: { num: 24, den: 1 } },
                                 duration: { value: 90, rate: { num: 24, den: 1 } },
                             },
-                        }
+                        },
                     ],
                 },
                 {
-                    id: "4",
-                    name: "A1",
-                    kind: TrackKind.audio,
-                    color: #C99846,
+                    id: "6",
+                    name: "FLT1",
+                    kind: TrackKind.filter,
+                    color: #4A8C8C,
                     clips: [
                         {
-                            id: "5",
-                            name: "Clip 5",
-                            timeline-start: { value: 30, rate: { num: 24, den: 1 } },
+                            id: "6",
+                            name: "Blur 1",
+                            timeline-start: { value: 40, rate: { num: 24, den: 1 } },
                             source-range: {
-                                start: { value: 5, rate: { num: 24, den: 1 } },
-                                duration: { value: 70, rate: { num: 24, den: 1 } },
+                                start: { value: 0, rate: { num: 24, den: 1 } },
+                                duration: { value: 50, rate: { num: 24, den: 1 } },
                             },
                         },
+                    ],
+                },
+                {
+                    id: "7",
+                    name: "S1",
+                    kind: TrackKind.sticker,
+                    color: #BF6F4A,
+                    clips: [
                         {
-                            id: "6",
-                            name: "Clip 6",
-                            timeline-start: { value: 150, rate: { num: 24, den: 1 } },
+                            id: "7",
+                            name: "Sticker 1",
+                            timeline-start: { value: 120, rate: { num: 24, den: 1 } },
                             source-range: {
                                 start: { value: 0, rate: { num: 24, den: 1 } },
                                 duration: { value: 45, rate: { num: 24, den: 1 } },
                             },
                         },
-                    ],
-                },
-                {
-                    id: "5",
-                    name: "A2",
-                    kind: TrackKind.audio,
-                    color: #BF6F4A,
-                    clips: [
-                        {
-                            id: "7",
-                            name: "Clip 7",
-                            timeline-start: { value: 0, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 0, rate: { num: 24, den: 1 } },
-                                duration: { value: 200, rate: { num: 24, den: 1 } },
-                            },
-                        }
                     ],
                 },
             ],

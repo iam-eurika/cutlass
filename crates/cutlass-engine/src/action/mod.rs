@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn ripple_delete_inverse_oscillates() {
         let (_dir, mut project, cache) = setup();
-        let track = project.add_track(TrackKind::Video, "V1");
+        let track = project.add_track(TrackKind::Adjustment, "FX");
         let first = project
             .timeline_mut()
             .add_clip(
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn ripple_delete_middle_of_three_adjacent_oscillates() {
         let (_dir, mut project, cache) = setup();
-        let track = project.add_track(TrackKind::Video, "V1");
+        let track = project.add_track(TrackKind::Adjustment, "FX");
         let a = project
             .timeline_mut()
             .add_clip(track, Clip::generated(Generator::Adjustment, tr(0, 10)))
@@ -345,8 +345,8 @@ mod tests {
     #[test]
     fn move_clip_inverse_oscillates() {
         let (_dir, mut project, cache) = setup();
-        let v1 = project.add_track(TrackKind::Video, "V1");
-        let v2 = project.add_track(TrackKind::Video, "V2");
+        let v1 = project.add_track(TrackKind::Text, "T1");
+        let v2 = project.add_track(TrackKind::Text, "T2");
         let clip_id = project
             .timeline_mut()
             .add_clip(
@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn add_generated_inverse_oscillates() {
         let (_dir, mut project, cache) = setup();
-        let track = project.add_track(TrackKind::Video, "V1");
+        let track = project.add_track(TrackKind::Sticker, "S1");
 
         let mut project_path = None;
         let mut history = History::new(32);
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn split_generated_clip_inverse_oscillates() {
         let (_dir, mut project, cache) = setup();
-        let track = project.add_track(TrackKind::Video, "V1");
+        let track = project.add_track(TrackKind::Text, "T1");
         let clip_id = project
             .timeline_mut()
             .add_clip(

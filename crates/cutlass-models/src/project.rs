@@ -317,10 +317,23 @@ impl Project {
             .timeline
             .track_of(clip_id)
             .ok_or(ModelError::UnknownClip(clip_id))?;
+        let clip_content = &self
+            .timeline
+            .clip(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?
+            .content;
+
         let dest = self
             .timeline
             .track(to_track)
             .ok_or(ModelError::UnknownTrack(to_track))?;
+
+        if !dest.kind.accepts_content(clip_content) {
+            return Err(ModelError::IncompatibleTrackKind {
+                track: to_track,
+                kind: dest.kind,
+            });
+        }
 
         let duration = self
             .timeline
@@ -573,7 +586,7 @@ mod tests {
     #[test]
     fn add_generated_without_media() {
         let mut project = Project::new("test", R24);
-        let track = project.add_track(TrackKind::Video, "Titles");
+        let track = project.add_track(TrackKind::Text, "Titles");
         let clip = project
             .add_generated(
                 track,
@@ -645,8 +658,9 @@ mod tests {
         assert_eq!(project.clip(media_clip).unwrap().timeline, tr(0, 40));
         assert_eq!(project.clip(right).unwrap().timeline, tr(40, 60));
 
+        let fx = project.add_track(TrackKind::Adjustment, "FX");
         let generated = project
-            .add_generated(track, Generator::Adjustment, tr(200, 100))
+            .add_generated(fx, Generator::Adjustment, tr(200, 100))
             .unwrap();
         let generated_right = project.split_clip(generated, rt(250)).unwrap();
         assert_eq!(project.clip(generated).unwrap().timeline, tr(200, 50));
@@ -709,7 +723,7 @@ mod tests {
     #[test]
     fn trim_clip_generated_only_moves_timeline() {
         let mut project = Project::new("test", R24);
-        let track = project.add_track(TrackKind::Video, "V1");
+        let track = project.add_track(TrackKind::Adjustment, "FX");
         let clip = project
             .add_generated(track, Generator::Adjustment, tr(0, 100))
             .unwrap();

@@ -38,7 +38,8 @@ fn build_project_and_query_by_id() {
 #[test]
 fn generated_clips_need_no_media() {
     let mut project = Project::new("demo", FPS_24);
-    let title = project.add_track(TrackKind::Video, "Titles");
+    let title = project.add_track(TrackKind::Text, "Titles");
+    let gfx = project.add_track(TrackKind::Sticker, "GFX");
 
     let text = project
         .add_generated(
@@ -51,7 +52,7 @@ fn generated_clips_need_no_media() {
         .unwrap();
     let shape = project
         .add_generated(
-            title,
+            gfx,
             Generator::Shape {
                 shape: Shape::Rectangle,
             },
@@ -280,6 +281,45 @@ fn move_clip_across_tracks_and_rejects_overlap() {
     project.move_clip(clip, v2, rt(200)).unwrap();
     assert_eq!(project.timeline().track_of(clip), Some(v2));
     assert_eq!(project.clip(clip).unwrap().timeline, tr(200, 100));
+}
+
+#[test]
+fn move_clip_rejects_incompatible_track_kind() {
+    let mut project = Project::new("demo", FPS_24);
+    let media_id = project.add_media(sample_media(FPS_24, 1000));
+    let video = project.add_track(TrackKind::Video, "V1");
+    let overlay = project.add_track(TrackKind::Text, "T1");
+    let clip = project
+        .add_clip(video, media_id, tr(0, 100), rt(0))
+        .unwrap();
+
+    assert_eq!(
+        project.move_clip(clip, overlay, rt(0)),
+        Err(ModelError::IncompatibleTrackKind {
+            track: overlay,
+            kind: TrackKind::Text,
+        })
+    );
+}
+
+#[test]
+fn generated_clip_rejects_wrong_track_kind() {
+    let mut project = Project::new("demo", FPS_24);
+    let video = project.add_track(TrackKind::Video, "V1");
+
+    assert_eq!(
+        project.add_generated(
+            video,
+            Generator::Text {
+                content: "nope".into(),
+            },
+            tr(0, 24),
+        ),
+        Err(ModelError::IncompatibleTrackKind {
+            track: video,
+            kind: TrackKind::Video,
+        })
+    );
 }
 
 #[test]

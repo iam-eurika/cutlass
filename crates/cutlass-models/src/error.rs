@@ -3,6 +3,7 @@ use thiserror::Error;
 use crate::ids::{ClipId, MediaId, TrackId};
 use crate::schema::ProjectSchema;
 use crate::time::Rational;
+use crate::track::TrackKind;
 
 /// Errors from model mutations that would violate a referential or layout
 /// invariant.
@@ -28,6 +29,9 @@ pub enum ModelError {
 
     #[error("clip overlaps an existing clip on {0}")]
     Overlap(TrackId),
+
+    #[error("track {track} ({kind:?}) cannot hold this clip")]
+    IncompatibleTrackKind { track: TrackId, kind: TrackKind },
 
     #[error("media {0} is still referenced by one or more clips")]
     MediaReferenced(MediaId),

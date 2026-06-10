@@ -59,7 +59,7 @@ pub fn resolve_layers(
     let mut layers = Vec::new();
 
     for track in project.timeline().tracks_ordered() {
-        if track.kind != TrackKind::Video || !track.enabled {
+        if !track.kind.is_visual() || !track.enabled {
             continue;
         }
         let Some(clip) = track.clip_at(time)? else {
@@ -85,7 +85,12 @@ pub fn resolve_layers(
                 Generator::SolidColor { rgba } => {
                     layers.push(CompositeLayer::Solid { rgba: *rgba });
                 }
-                Generator::Text { .. } | Generator::Shape { .. } | Generator::Adjustment => {
+                Generator::Text { .. }
+                | Generator::Shape { .. }
+                | Generator::Sticker
+                | Generator::Effect
+                | Generator::Filter
+                | Generator::Adjustment => {
                     debug!(?generator, "skipping unsupported generator for composite");
                 }
             },

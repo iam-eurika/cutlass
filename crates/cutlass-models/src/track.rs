@@ -1,16 +1,74 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Map;
-use crate::clip::Clip;
+use crate::clip::{Clip, ClipSource, Generator};
 use crate::error::ModelError;
 use crate::ids::{ClipId, TrackId};
 use crate::time::{RationalTime, TimeRange};
 
-/// Whether a track carries picture or sound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Lane category on the timeline. Drives drag targeting, clip placement rules,
+/// and compositor participation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TrackKind {
+    /// Footage and other imported picture media.
     Video,
+    /// Imported sound media.
     Audio,
+    /// Titles and captions.
+    Text,
+    /// Stickers, shapes, and other graphic overlays.
+    Sticker,
+    /// Motion and composited effects.
+    Effect,
+    /// Blur, mask, and similar filters.
+    Filter,
+    /// Color grade / adjustment layers.
+    Adjustment,
+}
+
+impl TrackKind {
+    /// Picture stack lanes (excludes audio).
+    pub const fn is_visual(self) -> bool {
+        !matches!(self, Self::Audio)
+    }
+
+    /// Whether `content` may be placed on a track of this kind.
+    pub fn accepts_content(self, content: &ClipSource) -> bool {
+        match (self, content) {
+            (Self::Video | Self::Audio, ClipSource::Media { .. }) => true,
+            (Self::Text, ClipSource::Generated(Generator::Text { .. })) => true,
+            (
+                Self::Sticker,
+                ClipSource::Generated(
+                    Generator::Sticker
+                        | Generator::SolidColor { .. }
+                        | Generator::Shape { .. },
+                ),
+            ) => true,
+            (Self::Effect, ClipSource::Generated(Generator::Effect)) => true,
+            (Self::Filter, ClipSource::Generated(Generator::Filter)) => true,
+            (Self::Adjustment, ClipSource::Generated(Generator::Adjustment)) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether `clip` may be placed on a track of this kind.
+    pub fn accepts_clip(self, clip: &Clip) -> bool {
+        self.accepts_content(&clip.content)
+    }
+
+    /// Track kind required for a generated clip variant.
+    pub const fn for_generator(generator: &Generator) -> Option<Self> {
+        match generator {
+            Generator::Text { .. } => Some(Self::Text),
+            Generator::SolidColor { .. } | Generator::Shape { .. } | Generator::Sticker => {
+                Some(Self::Sticker)
+            }
+            Generator::Effect => Some(Self::Effect),
+            Generator::Filter => Some(Self::Filter),
+            Generator::Adjustment => Some(Self::Adjustment),
+        }
+    }
 }
 
 /// A single lane of the timeline holding non-overlapping [`Clip`]s.
@@ -377,5 +435,39 @@ mod tests {
     fn track_kind_equality() {
         assert_eq!(TrackKind::Video, TrackKind::Video);
         assert_ne!(TrackKind::Video, TrackKind::Audio);
+        assert_ne!(TrackKind::Text, TrackKind::Sticker);
+    }
+
+    #[test]
+    fn track_kind_accepts_clip_by_lane() {
+        use crate::clip::{Clip, Generator};
+
+        let media = Clip::from_media(
+            crate::ids::MediaId::next(),
+            tr(0, 10),
+            tr(0, 10),
+        );
+        let text = Clip::generated(
+            Generator::Text {
+                content: "hi".into(),
+            },
+            tr(0, 10),
+        );
+        let sticker = Clip::generated(
+            Generator::SolidColor {
+                rgba: [1, 2, 3, 4],
+            },
+            tr(0, 10),
+        );
+        let adj = Clip::generated(Generator::Adjustment, tr(0, 10));
+
+        assert!(TrackKind::Video.accepts_clip(&media));
+        assert!(!TrackKind::Video.accepts_clip(&text));
+        assert!(TrackKind::Text.accepts_clip(&text));
+        assert!(!TrackKind::Text.accepts_clip(&sticker));
+        assert!(TrackKind::Sticker.accepts_clip(&sticker));
+        assert!(TrackKind::Adjustment.accepts_clip(&adj));
+        assert!(!TrackKind::Adjustment.accepts_clip(&text));
+        assert!(TrackKind::Audio.accepts_clip(&media));
     }
 }

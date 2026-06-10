@@ -82,7 +82,7 @@ fn get_frame_errors_when_timeline_empty() {
 #[test]
 fn get_frame_renders_solid_generated_clip() {
     let (_dir, mut engine) = temp_engine();
-    let track = common::add_track(&mut engine, TrackKind::Video, "V1");
+    let track = common::add_track(&mut engine, TrackKind::Sticker, "T1");
 
     engine
         .apply(Command::Edit(EditCommand::AddGenerated {
@@ -111,7 +111,7 @@ fn get_frame_composites_solid_over_media() {
     let (_dir, mut engine) = temp_engine();
     let media_id = import_asset(&mut engine, &path);
     let v1 = common::add_track(&mut engine, TrackKind::Video, "V1");
-    let v2 = common::add_track(&mut engine, TrackKind::Video, "V2");
+    let v2 = common::add_track(&mut engine, TrackKind::Sticker, "T1");
 
     engine
         .apply(Command::Edit(EditCommand::AddClip {

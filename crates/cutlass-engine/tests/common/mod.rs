@@ -83,6 +83,15 @@ pub fn created_clip(outcome: ApplyOutcome) -> ClipId {
     }
 }
 
+/// Track kind that accepts clips produced by `generator`.
+pub fn track_kind_for(generator: &Generator) -> TrackKind {
+    TrackKind::for_generator(generator).expect("generator maps to a track kind")
+}
+
+pub fn add_track_for_generator(engine: &mut Engine, generator: &Generator, name: &str) -> TrackId {
+    add_track(engine, track_kind_for(generator), name)
+}
+
 pub fn add_generated(
     engine: &mut Engine,
     track: TrackId,

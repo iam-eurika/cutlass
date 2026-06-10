@@ -109,8 +109,16 @@ impl Timeline {
     pub fn add_clip(&mut self, track_id: TrackId, clip: Clip) -> Result<ClipId, ModelError> {
         let track = self
             .tracks
-            .get_mut(&track_id)
+            .get(&track_id)
             .ok_or(ModelError::UnknownTrack(track_id))?;
+        if !track.kind.accepts_clip(&clip) {
+            return Err(ModelError::IncompatibleTrackKind {
+                track: track_id,
+                kind: track.kind,
+            });
+        }
+
+        let track = self.tracks.get_mut(&track_id).expect("track exists");
 
         if track.has_overlap(clip.timeline, None)? {
             return Err(ModelError::Overlap(track_id));
@@ -183,7 +191,7 @@ mod tests {
 
     fn timeline_with_track() -> (Timeline, TrackId) {
         let mut timeline = Timeline::new(R24);
-        let track = timeline.add_track(Track::new(TrackKind::Video, "V1"));
+        let track = timeline.add_track(Track::new(TrackKind::Adjustment, "FX"));
         (timeline, track)
     }
 
@@ -311,8 +319,8 @@ mod tests {
     #[test]
     fn add_clip_allows_same_range_on_different_tracks() {
         let mut timeline = Timeline::new(R24);
-        let v1 = timeline.add_track(Track::new(TrackKind::Video, "V1"));
-        let v2 = timeline.add_track(Track::new(TrackKind::Video, "V2"));
+        let v1 = timeline.add_track(Track::new(TrackKind::Adjustment, "FX1"));
+        let v2 = timeline.add_track(Track::new(TrackKind::Adjustment, "FX2"));
 
         let c1 = timeline.add_clip(v1, generated_clip(0, 50)).unwrap();
         let c2 = timeline.add_clip(v2, generated_clip(0, 50)).unwrap();
@@ -362,8 +370,8 @@ mod tests {
     #[test]
     fn clip_lookup_finds_across_tracks() {
         let mut timeline = Timeline::new(R24);
-        let v1 = timeline.add_track(Track::new(TrackKind::Video, "V1"));
-        let v2 = timeline.add_track(Track::new(TrackKind::Video, "V2"));
+        let v1 = timeline.add_track(Track::new(TrackKind::Adjustment, "FX1"));
+        let v2 = timeline.add_track(Track::new(TrackKind::Adjustment, "FX2"));
         let on_v2 = timeline.add_clip(v2, generated_clip(100, 20)).unwrap();
         timeline.add_clip(v1, generated_clip(0, 10)).unwrap();
 
@@ -382,8 +390,8 @@ mod tests {
     #[test]
     fn duration_is_max_end_across_tracks() {
         let mut timeline = Timeline::new(R24);
-        let v1 = timeline.add_track(Track::new(TrackKind::Video, "V1"));
-        let v2 = timeline.add_track(Track::new(TrackKind::Video, "V2"));
+        let v1 = timeline.add_track(Track::new(TrackKind::Adjustment, "FX1"));
+        let v2 = timeline.add_track(Track::new(TrackKind::Adjustment, "FX2"));
         timeline.add_clip(v1, generated_clip(0, 100)).unwrap();
         timeline.add_clip(v2, generated_clip(50, 200)).unwrap(); // ends at 250
 

@@ -27,7 +27,13 @@ pub enum Generator {
     SolidColor { rgba: [u8; 4] },
     /// A vector shape.
     Shape { shape: Shape },
-    /// A pass-through layer that only affects tracks beneath it.
+    /// Image or animated sticker (asset wiring TBD).
+    Sticker,
+    /// Motion / composited VFX layer (implementation TBD).
+    Effect,
+    /// Blur, mask, and similar pixel filters (implementation TBD).
+    Filter,
+    /// Color grade / pass-through layer affecting tracks beneath it.
     Adjustment,
 }
 

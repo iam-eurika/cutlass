@@ -23,7 +23,7 @@ fn gpu_and_legacy_preview_solid_match() {
     let (_dir_legacy, mut legacy_engine) = legacy_engine();
 
     for engine in [&mut gpu_engine, &mut legacy_engine] {
-        let track = add_track(engine, TrackKind::Video, "V1");
+        let track = add_track(engine, TrackKind::Sticker, "T1");
         add_generated(
             engine,
             track,

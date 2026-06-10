@@ -63,12 +63,17 @@ export struct Clip {
     source-range: TimeRange,
 }
 
-// Drives the "audio always at the bottom" lane invariant and the
-// gesture-layer rule that a clip can only land on a same-kind lane.
+// Drives lane ordering, drag targeting (same-kind blocks), and which
+// clip types each lane accepts once edit commands are wired.
 @rust-attr(derive(serde::Serialize, serde::Deserialize))
 export enum TrackKind {
     video,
     audio,
+    text,
+    sticker,
+    effect,
+    filter,
+    adjustment,
 }
 
 @rust-attr(derive(serde::Serialize, serde::Deserialize))
