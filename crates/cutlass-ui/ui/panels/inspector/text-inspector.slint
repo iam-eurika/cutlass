@@ -1,0 +1,68 @@
+import { LineEdit } from "std-widgets.slint";
+import { CutlassText } from "../../components/index.slint";
+import { AppStore } from "../../store/index.slint";
+import { InspectorBackend } from "../../lib/inspector-backend.slint";
+import { Clip } from "../../models/index.slint";
+
+// Basic property sheet for text / title clips.
+export component TextInspector inherits VerticalLayout {
+    in property <string> track-id;
+    // Named `model` — `clip` is a built-in boolean on Slint elements.
+    in property <Clip> model;
+
+    spacing: AppStore.theme.metrics.spacing.lg;
+    alignment: LayoutAlignment.start;
+
+    private property <string> bound-clip-id: model.id;
+    private property <string> edit-text: model.text-content;
+
+    changed bound-clip-id => {
+        edit-text = model.text-content;
+    }
+
+    CutlassText {
+        text: "Title";
+        style: AppStore.theme.typography.heading-sm;
+    }
+
+    HorizontalLayout {
+        spacing: AppStore.theme.metrics.spacing.lg;
+        horizontal-stretch: 1;
+
+        CutlassText {
+            text: "Name";
+            min-width: 72px;
+            style: AppStore.theme.typography.label;
+            foreground: AppStore.theme.text.secondary;
+        }
+
+        CutlassText {
+            text: model.name;
+            horizontal-stretch: 1;
+            style: AppStore.theme.typography.body;
+        }
+    }
+
+    HorizontalLayout {
+        spacing: AppStore.theme.metrics.spacing.lg;
+        horizontal-stretch: 1;
+
+        CutlassText {
+            text: "Text";
+            min-width: 72px;
+            style: AppStore.theme.typography.label;
+            foreground: AppStore.theme.text.secondary;
+        }
+
+        LineEdit {
+            horizontal-stretch: 1;
+            text: root.edit-text;
+            placeholder-text: "Enter title text";
+
+            edited(new-text) => {
+                root.edit-text = new-text;
+                InspectorBackend.set-text-content(track-id, model.id, new-text);
+            }
+        }
+    }
+}

@@ -19,18 +19,7 @@ export struct ResolvedTarget {
 }
 
 export global DragBackend {
-    pure callback snap-clip-start(
-        Sequence /* sequence */,
-        string /* dragging-source-track-id */,
-        string /* dragging-clip-id */,
-        int    /* cursor-start-value */,
-        int    /* clip-duration-ticks */,
-        int    /* snap-threshold-ticks */,
-    ) -> SnapResult;
+    pure callback snap-clip-start(Sequence /* sequence */, string /* dragging-source-track-id */, string /* dragging-clip-id */, int    /* cursor-start-value */, int    /* clip-duration-ticks */, int    /* snap-threshold-ticks */, ) -> SnapResult;
 
-    pure callback resolve-target-lane(
-        Sequence /* sequence */,
-        string /* source-track-id */,
-        int    /* lane-offset */,
-    ) -> ResolvedTarget;
+    pure callback resolve-target-lane(Sequence /* sequence */, string /* source-track-id */, int    /* lane-offset */, ) -> ResolvedTarget;
 }

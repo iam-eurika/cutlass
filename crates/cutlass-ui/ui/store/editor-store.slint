@@ -1,141 +1,27 @@
-import { Project, TrackKind } from "../models/index.slint";
+import { Project } from "../models/index.slint";
 
-// Slint-side view model. Demo data for UI work — replaced at runtime once
-// the engine publishes a live projection into `EditorStore.project`.
+// Slint-side view model. This is a read-only projection of the engine's
+// project: the worker thread publishes a fresh `project` (built in
+// `src/projection.rs`) on startup and after every mutation. The default below
+// is just an empty placeholder shown for the brief moment before the first
+// projection arrives — keep `width`/`height` non-zero so preview aspect-ratio
+// math never divides by zero.
 export global EditorStore {
     callback on-slider-changed(value: float);
+    callback on-import-clicked();
 
     in-out property <Project> project: {
-        id: "1",
-        title: "Project 1",
+        id: "",
+        title: "",
         sequence: {
-            id: "1",
-            name: "Sequence 1",
+            id: "",
+            name: "",
             fps: { num: 24, den: 1 },
             drop-frame: false,
-            width: 1080px,
-            height: 1920px,
-            tracks: [
-                {
-                    id: "1",
-                    name: "V1",
-                    kind: TrackKind.video,
-                    color: #4A6FA5,
-                    clips: [
-                        {
-                            id: "1",
-                            name: "Clip 1",
-                            timeline-start: { value: 10, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 10, rate: { num: 24, den: 1 } },
-                                duration: { value: 100, rate: { num: 24, den: 1 } },
-                            },
-                        }
-                    ],
-                },
-                {
-                    id: "2",
-                    name: "A1",
-                    kind: TrackKind.audio,
-                    color: #C99846,
-                    clips: [
-                        {
-                            id: "2",
-                            name: "Clip 2",
-                            timeline-start: { value: 30, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 5, rate: { num: 24, den: 1 } },
-                                duration: { value: 70, rate: { num: 24, den: 1 } },
-                            },
-                        },
-                    ],
-                },
-                {
-                    id: "3",
-                    name: "FX1",
-                    kind: TrackKind.effect,
-                    color: #7B68A6,
-                    clips: [
-                        {
-                            id: "3",
-                            name: "Effect 1",
-                            timeline-start: { value: 0, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 0, rate: { num: 24, den: 1 } },
-                                duration: { value: 80, rate: { num: 24, den: 1 } },
-                            },
-                        },
-                    ],
-                },
-                {
-                    id: "4",
-                    name: "T1",
-                    kind: TrackKind.text,
-                    color: #5E8B7E,
-                    clips: [
-                        {
-                            id: "4",
-                            name: "Title 1",
-                            timeline-start: { value: 0, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 0, rate: { num: 24, den: 1 } },
-                                duration: { value: 60, rate: { num: 24, den: 1 } },
-                            },
-                        },
-                    ],
-                },
-                {
-                    id: "5",
-                    name: "ADJ1",
-                    kind: TrackKind.adjustment,
-                    color: #6C5B7B,
-                    clips: [
-                        {
-                            id: "5",
-                            name: "Grade 1",
-                            timeline-start: { value: 20, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 0, rate: { num: 24, den: 1 } },
-                                duration: { value: 90, rate: { num: 24, den: 1 } },
-                            },
-                        },
-                    ],
-                },
-                {
-                    id: "6",
-                    name: "FLT1",
-                    kind: TrackKind.filter,
-                    color: #4A8C8C,
-                    clips: [
-                        {
-                            id: "6",
-                            name: "Blur 1",
-                            timeline-start: { value: 40, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 0, rate: { num: 24, den: 1 } },
-                                duration: { value: 50, rate: { num: 24, den: 1 } },
-                            },
-                        },
-                    ],
-                },
-                {
-                    id: "7",
-                    name: "S1",
-                    kind: TrackKind.sticker,
-                    color: #BF6F4A,
-                    clips: [
-                        {
-                            id: "7",
-                            name: "Sticker 1",
-                            timeline-start: { value: 120, rate: { num: 24, den: 1 } },
-                            source-range: {
-                                start: { value: 0, rate: { num: 24, den: 1 } },
-                                duration: { value: 45, rate: { num: 24, den: 1 } },
-                            },
-                        },
-                    ],
-                },
-            ],
+            width: 1920px,
+            height: 1080px,
+            tracks: [],
         },
+        media: [],
     };
 }

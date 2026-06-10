@@ -93,8 +93,7 @@ fn clip_end_in_target(clip: &Clip, target: &Rational, target_num: i64, target_de
     let n_start = i128::from(start.value) * i128::from(start.rate.den) * i128::from(target_num);
     let d_start = i128::from(start.rate.num) * i128::from(target_den);
 
-    let n_dur =
-        i128::from(duration.value) * i128::from(duration.rate.den) * i128::from(target_num);
+    let n_dur = i128::from(duration.value) * i128::from(duration.rate.den) * i128::from(target_num);
     let d_dur = i128::from(duration.rate.num) * i128::from(target_den);
 
     let num = n_start * d_dur + n_dur * d_start;
@@ -219,9 +218,9 @@ mod tests {
         let d = sequence_duration(sequence(
             r(30, 1),
             vec![track(vec![
-                clip(rt(0, 30, 1), rt(60, 30, 1)),   // ends @ 60
-                clip(rt(60, 30, 1), rt(90, 30, 1)),  // ends @ 150 ← max
-                clip(rt(30, 30, 1), rt(50, 30, 1)),  // ends @ 80
+                clip(rt(0, 30, 1), rt(60, 30, 1)),  // ends @ 60
+                clip(rt(60, 30, 1), rt(90, 30, 1)), // ends @ 150 ← max
+                clip(rt(30, 30, 1), rt(50, 30, 1)), // ends @ 80
             ])],
         ));
         assert_eq!(d.value, 150);
@@ -263,10 +262,7 @@ mod tests {
         // a ruler / scrubber that extends slightly past the last clip.
         let d = sequence_duration(sequence(
             r(30, 1),
-            vec![track(vec![clip(
-                rt(1, 24000, 1001),
-                rt(24, 24000, 1001),
-            )])],
+            vec![track(vec![clip(rt(1, 24000, 1001), rt(24, 24000, 1001))])],
         ));
         assert_eq!(d.value, 32);
     }

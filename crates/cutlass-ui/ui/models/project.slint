@@ -61,6 +61,8 @@ export struct Clip {
     // whose ratio implicitly encodes speed (OTIO does the same: `LinearTimeWarp`
     // / `FreezeFrame` effects on top of a single `source_range`).
     source-range: TimeRange,
+    // Text / title generator content. Empty on non-text clips.
+    text-content: string,
 }
 
 // Drives lane ordering, drag targeting (same-kind blocks), and which
@@ -108,10 +110,23 @@ export struct Sequence {
     height: length,
 }
 
+// An imported source in the project's media pool (the Library bin). This is the
+// asset, not a placement — projected from the engine's `MediaSource`.
+@rust-attr(derive(serde::Serialize, serde::Deserialize))
+export struct Media {
+    id: string,
+    name: string,
+    width: int,
+    height: int,
+    has-audio: bool,
+}
+
 @rust-attr(derive(serde::Serialize, serde::Deserialize))
 export struct Project {
     id: string,
     title: string,
     // A project has exactly one sequence at this stage. Future may allow multiple.
     sequence: Sequence,
+    // Imported media pool, shown in the Library panel.
+    media: [Media],
 }

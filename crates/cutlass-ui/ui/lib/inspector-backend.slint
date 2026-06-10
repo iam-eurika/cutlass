@@ -1,0 +1,24 @@
+import { Clip, Sequence, TrackKind } from "../models/index.slint";
+
+export struct SelectedClipInfo {
+    found: bool,
+    track-kind: TrackKind,
+    clip: Clip,
+}
+
+// Selection lookup and clip-property writes for the inspector panel.
+// Implemented in Rust (`src/inspector.rs`) so nested model traversal
+// stays out of Slint.
+export global InspectorBackend {
+    pure callback resolve-selection(
+        sequence: Sequence,
+        track-id: string,
+        clip-id: string,
+    ) -> SelectedClipInfo;
+
+    callback set-text-content(
+        track-id: string,
+        clip-id: string,
+        content: string,
+    );
+}

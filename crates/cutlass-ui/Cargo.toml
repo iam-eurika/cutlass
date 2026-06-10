@@ -23,6 +23,7 @@ slint = { version = "1.16", features = [
 ] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+rfd = "0.17.2"
 
 [dev-dependencies]
 serde_json = { workspace = true }

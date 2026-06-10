@@ -1,19 +1,31 @@
 import {
     CutlassGridView,
+    CutlassText,
     PanelBase,
     PanelHeader,
 } from "../../components/index.slint";
-import { AppStore } from "../../store/index.slint";
+import { AppStore, EditorStore } from "../../store/index.slint";
+import { Media } from "../../models/index.slint";
+import { Button } from "std-widgets.slint";
 
 export component LibraryPanel inherits PanelBase {
+    // Read-only projection of the engine media pool (see src/projection.rs).
+    property <[Media]> media: EditorStore.project.media;
+
     VerticalLayout {
         spacing: AppStore.theme.metrics.spacing.none;
 
         PanelHeader {
             title: "Library";
-        }
 
-        property <int> tile-count: 30;
+            Button {
+                text: "Import";
+                x: 250px;
+                clicked => {
+                    EditorStore.on-import-clicked();
+                }
+            }
+        }
 
         grid := CutlassGridView {
             show-horizontal-scrollbar: false;
@@ -26,14 +38,35 @@ export component LibraryPanel inherits PanelBase {
             cell-height: 100px;
             spacing: AppStore.theme.metrics.spacing.md;
             inset: AppStore.theme.metrics.spacing.md;
-            item-count: tile-count;
+            item-count: root.media.length;
 
-            for _[i] in tile-count: Rectangle {
+            for m[i] in root.media: Rectangle {
                 x: grid.cell-x(i);
                 y: grid.cell-y(i);
                 width: grid.cell-width;
                 height: grid.cell-height;
                 background: AppStore.theme.surface.content-background;
+                border-radius: 4px;
+                clip: true;
+
+                // Name label strip along the bottom of the tile.
+                VerticalLayout {
+                    alignment: end;
+
+                    Rectangle {
+                        height: 22px;
+                        background: #000000a0;
+
+                        CutlassText {
+                            text: m.name;
+                            style: AppStore.theme.typography.label;
+                            overflow: elide;
+                            x: 4px;
+                            width: parent.width - 8px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
             }
         }
     }

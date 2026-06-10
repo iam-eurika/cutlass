@@ -1,5 +1,7 @@
+mod inspector;
 mod preview;
 mod preview_worker;
+mod projection;
 mod ruler;
 mod snap;
 mod timecode;
@@ -13,7 +15,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use cutlass_engine::EngineConfig;
-use std::path::PathBuf;
 
 slint::include_modules!();
 
@@ -41,26 +42,40 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let app = AppWindow::new()?;
     let preview_store_weak = app.global::<PreviewStore>().as_weak();
+    let editor_store_weak = app.global::<EditorStore>().as_weak();
 
     let (preview_worker, session) = preview_worker::PreviewWorker::spawn(
         EngineConfig::default(),
-        PathBuf::from("assets/16078866_3840_2160_60fps.mp4"),
         preview_store_weak,
+        editor_store_weak,
     )
     .map_err(slint::PlatformError::from)?;
 
     info!(
         duration_ticks = session.duration_ticks,
         tl_rate = ?session.tl_rate,
-        "timeline ready for scrub"
+        "preview worker ready; import media to populate the timeline"
     );
-
-    preview_worker.request_frame(0);
 
     let duration_ticks = session.duration_ticks;
     let editor = app.global::<EditorStore>();
+
+    let frame_handle = preview_worker.handle();
     editor.on_on_slider_changed(move |value| {
-        preview_worker.request_frame(slider_to_timeline_tick(value, duration_ticks));
+        frame_handle.request_frame(slider_to_timeline_tick(value, duration_ticks));
+    });
+
+    let import_handle = preview_worker.handle();
+    editor.on_on_import_clicked(move || {
+        // Native picker is modal and must run on the main thread — which is
+        // exactly where this Slint callback fires. The engine work happens off
+        // this thread once we hand the path to the worker.
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
+            .pick_file()
+        {
+            import_handle.import(path);
+        }
     });
 
     let timeline = app.global::<TimelineLib>();
@@ -110,6 +125,26 @@ fn main() -> Result<(), slint::PlatformError> {
                 track_id: r.track_id,
                 clamped_offset: r.clamped_offset,
             }
+        });
+
+    let editor_weak = app.global::<EditorStore>().as_weak();
+    app.global::<InspectorBackend>()
+        .on_resolve_selection(|sequence, track_id, clip_id| {
+            inspector::resolve_selection(sequence, track_id.as_str(), clip_id.as_str())
+        });
+    app.global::<InspectorBackend>()
+        .on_set_text_content(move |track_id, clip_id, content| {
+            let Some(editor) = editor_weak.upgrade() else {
+                return;
+            };
+            let mut project = editor.get_project();
+            inspector::set_text_content(
+                &mut project,
+                track_id.as_str(),
+                clip_id.as_str(),
+                content.as_str(),
+            );
+            editor.set_project(project);
         });
 
     app.run()

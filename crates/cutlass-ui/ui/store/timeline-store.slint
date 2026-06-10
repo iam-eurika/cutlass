@@ -1,6 +1,11 @@
-// Cross-panel timeline state (zoom, playhead). Ephemeral panel view state
-// lives in `TimelineViewState` (`ui/panels/timeline/state.slint`).
+// Cross-panel timeline state (zoom, playhead, selection). Ephemeral panel
+// view state lives in `TimelineViewState` (`ui/panels/timeline/state.slint`).
+//
+// Selection is keyed on (selected-track-id, selected-clip-id) because clip
+// ids are unique per track, not project-wide. Empty ids ⇔ nothing selected.
 export global TimelineStore {
     in-out property <float> zoom: 3;
     in-out property <int> playhead-tick: 0;
+    in-out property <string> selected-track-id: "";
+    in-out property <string> selected-clip-id: "";
 }
