@@ -5,6 +5,7 @@ import {
     PanelHeader,
 } from "../../components/index.slint";
 import { AppStore, EditorStore } from "../../store/index.slint";
+import { AppState } from "../../state.slint";
 import { Media } from "../../models/index.slint";
 import { Button } from "std-widgets.slint";
 
@@ -47,8 +48,34 @@ export component LibraryPanel inherits PanelBase {
                 height: grid.cell-height;
                 background: AppStore.theme.surface.content-background;
                 border-radius: 4px;
-                clip: true;
 
+                ta := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            AppState.library-drag-w = parent.width;
+                            AppState.library-drag-h = parent.height;
+                            AppState.library-drag-tile-anchor-x = self.mouse-x;
+                            AppState.library-drag-tile-anchor-y = self.mouse-y;
+                            AppState.library-drag-cursor-x = self.absolute-position.x + self.mouse-x;
+                            AppState.library-drag-cursor-y = self.absolute-position.y + self.mouse-y;
+                            AppState.library-drag-active = true;
+                        }
+                        if event.kind == PointerEventKind.up {
+                            AppState.library-drag-active = false;
+                        }
+                    }
+
+                    moved => {
+                        if !self.pressed || !AppState.library-drag-active {
+                            return;
+                        }
+                        AppState.library-drag-cursor-x = self.absolute-position.x + self.mouse-x;
+                        AppState.library-drag-cursor-y = self.absolute-position.y + self.mouse-y;
+                    }
+                }
                 // Name label strip along the bottom of the tile.
                 VerticalLayout {
                     alignment: end;

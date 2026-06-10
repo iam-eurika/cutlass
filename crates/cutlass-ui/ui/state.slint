@@ -3,4 +3,21 @@
 // inside any one panel's state global.
 export global AppState {
     in-out property <bool> preview-maximized: false;
+
+    // Window-space ghost while dragging a library tile onto the timeline.
+    in-out property <bool> library-drag-active: false;
+    in-out property <length> library-drag-w: 0px;
+    in-out property <length> library-drag-h: 0px;
+    // Cursor offset within the library tile at press — used to anchor the square ghost.
+    in-out property <length> library-drag-tile-anchor-x: 0px;
+    in-out property <length> library-drag-tile-anchor-y: 0px;
+
+    // Cursor point in window coords during the drag. Drop targeting keys off
+    // the pointer, not the ghost rectangle's corner.
+    in-out property <length> library-drag-cursor-x: 0px;
+    in-out property <length> library-drag-cursor-y: 0px;
+
+    // Written by TimelinePanel (it knows its own window-space bounds); read by
+    // the library's drop handler and the ghost.
+    in-out property <bool> library-drag-over-timeline: false;
 }

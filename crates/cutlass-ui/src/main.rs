@@ -41,6 +41,13 @@ fn main() -> Result<(), slint::PlatformError> {
         .select()?;
 
     let app = AppWindow::new()?;
+    let app_weak = app.as_weak();
+    slint::invoke_from_event_loop(move || {
+        if let Some(app) = app_weak.upgrade() {
+            app.window().set_maximized(true);
+        }
+    })
+    .map_err(|e| slint::PlatformError::from(format!("failed to schedule maximize: {e}")))?;
     let preview_store_weak = app.global::<PreviewStore>().as_weak();
     let editor_store_weak = app.global::<EditorStore>().as_weak();
 

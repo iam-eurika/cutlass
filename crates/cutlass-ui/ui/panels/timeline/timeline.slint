@@ -14,6 +14,7 @@ import { ClipView } from "clip.slint";
 import { TimelineViewState } from "state.slint";
 import { Sequence } from "../../models/index.slint";
 import { TimelineLib } from "../../lib/timeline-lib.slint";
+import { AppState } from "../../state.slint";
 
 
 
@@ -25,6 +26,22 @@ component ForceHeadSpace inherits Rectangle {
 }
 
 export component TimelinePanel inherits PanelBase {
+
+    // True while a library tile is being dragged and the cursor is inside this
+    // panel. The drag's TouchArea holds the pointer grab, so we never receive
+    // pointer events here — instead hit-test the cursor in window space.
+    private property <bool> library-drag-over:
+        AppState.library-drag-active
+        && AppState.library-drag-cursor-x >= self.absolute-position.x
+        && AppState.library-drag-cursor-x < self.absolute-position.x + self.width
+        && AppState.library-drag-cursor-y >= self.absolute-position.y
+        && AppState.library-drag-cursor-y < self.absolute-position.y + self.height;
+
+    // Mirror into AppState so the library's pointer-up handler (which owns the
+    // drop) and the ghost can react.
+    changed library-drag-over => {
+        AppState.library-drag-over-timeline = self.library-drag-over;
+    }
 
     private property <length> track-spacing: AppStore.theme.metrics.spacing.sm;
     private property <length> track-height: AppStore.theme.track-lane.height;
