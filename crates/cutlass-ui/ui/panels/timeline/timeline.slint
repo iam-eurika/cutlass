@@ -14,7 +14,7 @@ import { ClipView } from "clip.slint";
 import { TimelineViewState } from "state.slint";
 import { Sequence, TrackKind } from "../../models/index.slint";
 import { TimelineLib } from "../../lib/timeline-lib.slint";
-import { DragBackend, SnapResult } from "../../lib/drag-backend.slint";
+import { DragBackend, SnapResult, ClipDragResolution, ClipTrimResolution } from "../../lib/drag-backend.slint";
 import { AppState } from "../../state.slint";
 
 
@@ -56,7 +56,7 @@ export component TimelinePanel inherits PanelBase {
         (AppState.library-drag-cursor-x - lanes.absolute-position.x - TimelineViewState.scroll-x)
         / TimelineStore.zoom / 1px));
 
-    // Magnet against clip edges and tick 0, ~10px of slack. Empty drag ids ⇒
+    // Magnet against clip edges, the playhead, and tick 0. Empty drag ids ⇒
     // every placed clip is a snap candidate.
     private property <SnapResult> library-drop-snap: DragBackend.snap-clip-start(
         root.sequence,
@@ -64,7 +64,8 @@ export component TimelinePanel inherits PanelBase {
         "",
         root.library-drop-cursor-tick,
         AppState.library-drag-duration-ticks,
-        max(1, round(10 / TimelineStore.zoom)));
+        root.snap-threshold-ticks,
+        TimelineStore.playhead-tick);
 
     private property <int> library-drop-tick: max(0, library-drop-snap.snapped-start-value);
 
@@ -99,7 +100,98 @@ export component TimelinePanel inherits PanelBase {
 
     private property <length> track-spacing: AppStore.theme.metrics.spacing.sm;
     private property <length> track-height: AppStore.theme.track-lane.height;
+    // Lane rows repeat every `row-pitch`; row 0 is the ForceHeadSpace spacer,
+    // lane r starts at (r + 1) * row-pitch.
+    private property <length> row-pitch: track-height + track-spacing;
     property <Sequence> sequence: EditorStore.project.sequence;
+
+    // CapCut's magnet: ~10px of pull, in ticks at the current zoom; 0 ⇔ off.
+    private property <int> snap-threshold-ticks:
+        TimelineStore.snap-enabled ? max(1, round(10 / TimelineStore.zoom)) : 0;
+
+    // --- clip drag (move on x and y) -----------------------------------------
+    // ClipView records the gesture (press snapshot + cursor deltas); this
+    // panel resolves the landing spot — ghost, guides, and the commit all read
+    // the same resolution, so the preview is exactly what a release does.
+
+    private property <bool> clip-dragging: TimelineViewState.dragging-clip-id != "";
+
+    private property <int> clip-drag-dx-ticks: round(
+        TimelineViewState.drag-dx-px / TimelineStore.zoom / 1px);
+
+    // Lane row under the dragged clip's vertical center (may be out of range:
+    // above the first lane or below the last ⇒ new-lane insertion there).
+    private property <int> clip-drag-hover-row: floor(
+        ((TimelineViewState.dragging-source-row + 1) * row-pitch
+            + TimelineViewState.drag-dy-px
+            + track-height / 2)
+        / row-pitch) - 1;
+
+    private property <ClipDragResolution> clip-drag-res: DragBackend.resolve-clip-drag(
+        root.sequence,
+        TimelineViewState.dragging-source-track-id,
+        TimelineViewState.dragging-clip-id,
+        root.clip-drag-dx-ticks,
+        root.clip-drag-hover-row,
+        TimelineStore.playhead-tick,
+        root.snap-threshold-ticks);
+
+    // ClipView raises `drag-released` on pointer-up; the commit needs the
+    // dragging ids, so this panel owns the teardown.
+    private property <bool> clip-drag-released: TimelineViewState.drag-released;
+    changed clip-drag-released => {
+        if (!self.clip-drag-released) {
+            return;
+        }
+        if (self.clip-drag-res.valid && !self.clip-drag-res.is-noop) {
+            EditorStore.on-clip-moved(
+                TimelineViewState.dragging-clip-id,
+                self.clip-drag-res.target-track-id,
+                self.clip-drag-res.target-row,
+                self.clip-drag-res.resolved-start);
+        }
+        TimelineViewState.dragging-source-track-id = "";
+        TimelineViewState.dragging-clip-id = "";
+        TimelineViewState.drag-dx-px = 0;
+        TimelineViewState.drag-dy-px = 0;
+        TimelineViewState.drag-released = false;
+    }
+
+    // --- clip trim (edge drag) -----------------------------------------------
+    // The edge handle records the gesture (press snapshot + cursor delta);
+    // this panel resolves the new extent — the stretch preview, guide,
+    // tooltip, and the commit all read the same resolution.
+
+    private property <bool> clip-trimming: TimelineViewState.trimming-clip-id != "";
+
+    private property <int> clip-trim-dx-ticks: round(
+        TimelineViewState.trim-dx-px / TimelineStore.zoom / 1px);
+
+    private property <ClipTrimResolution> clip-trim-res: DragBackend.resolve-clip-trim(
+        root.sequence,
+        TimelineViewState.trimming-track-id,
+        TimelineViewState.trimming-clip-id,
+        TimelineViewState.trimming-head,
+        root.clip-trim-dx-ticks,
+        TimelineStore.playhead-tick,
+        root.snap-threshold-ticks);
+
+    private property <bool> clip-trim-released: TimelineViewState.trim-released;
+    changed clip-trim-released => {
+        if (!self.clip-trim-released) {
+            return;
+        }
+        if (self.clip-trim-res.valid && !self.clip-trim-res.is-noop) {
+            EditorStore.on-clip-trimmed(
+                TimelineViewState.trimming-clip-id,
+                self.clip-trim-res.new-start,
+                self.clip-trim-res.new-duration);
+        }
+        TimelineViewState.trimming-track-id = "";
+        TimelineViewState.trimming-clip-id = "";
+        TimelineViewState.trim-dx-px = 0;
+        TimelineViewState.trim-released = false;
+    }
 
     // Available height for the scrolling rows (everything below toolbar+ruler).
     // Both flickables below share this — it's the row's own `height`.
@@ -206,16 +298,138 @@ export component TimelinePanel inherits PanelBase {
 
                     ForceHeadSpace { }
 
-                    for t in sequence.tracks: TrackLane {
+                    for t[lane-idx] in sequence.tracks: TrackLane {
                         track-id: t.id;
                         kind: t.kind;
                         for c in t.clips: ClipView {
                             model: c;
                             track-id: t.id;
+                            track-row: lane-idx;
                             track-color: t.color;
                             height: parent.height - 5px;
                             zoom: TimelineStore.zoom;
                         }
+                    }
+                }
+
+                // --- clip drag visuals (content space, above the lanes) ------
+
+                // Landing ghost on an existing lane: exactly where a release
+                // puts the clip.
+                if clip-dragging && clip-drag-res.valid && !clip-drag-res.is-new-lane: Rectangle {
+                    x: clip-drag-res.resolved-start * TimelineStore.zoom * 1px;
+                    y: (clip-drag-res.target-row + 1) * row-pitch;
+                    width: clip-drag-res.duration-ticks * TimelineStore.zoom * 1px;
+                    height: track-height - 5px;
+                    background: TimelineViewState.dragging-color.with-alpha(0.3);
+                    border-width: 1px;
+                    border-color: #ffffff;
+                    border-radius: AppStore.theme.track-lane.clip.radius;
+                }
+
+                // New-lane insertion: horizontal guide across the gap where
+                // the lane appears, with a slim ghost riding on it.
+                if clip-dragging && clip-drag-res.valid && clip-drag-res.is-new-lane: Rectangle {
+                    x: 0;
+                    y: (clip-drag-res.target-row + 1) * row-pitch - track-spacing / 2 - self.height / 2;
+                    width: max(parent.width, content-width);
+                    height: 2px;
+                    background: #00E5C7;
+                }
+                if clip-dragging && clip-drag-res.valid && clip-drag-res.is-new-lane: Rectangle {
+                    x: clip-drag-res.resolved-start * TimelineStore.zoom * 1px;
+                    y: (clip-drag-res.target-row + 1) * row-pitch - track-spacing / 2 - self.height / 2;
+                    width: clip-drag-res.duration-ticks * TimelineStore.zoom * 1px;
+                    height: (track-height - 5px) * 0.5;
+                    background: TimelineViewState.dragging-color.with-alpha(0.3);
+                    border-width: 1px;
+                    border-color: #00E5C7;
+                    border-radius: AppStore.theme.track-lane.clip.radius;
+                }
+
+                // Vertical magnet guide at the snapped edge (CapCut-style).
+                if clip-dragging && clip-drag-res.valid && clip-drag-res.has-snap: Rectangle {
+                    x: clip-drag-res.snap-line-tick * TimelineStore.zoom * 1px;
+                    y: 0;
+                    width: 1px;
+                    height: max(parent.height, content-height);
+                    background: #00E5C7;
+                }
+
+                // --- clip trim visuals ----------------------------------------
+
+                // Live stretch: the clip's post-trim extent, opaque over the
+                // dimmed original so it reads as the clip resizing in place.
+                if clip-trimming && clip-trim-res.valid: Rectangle {
+                    x: clip-trim-res.new-start * TimelineStore.zoom * 1px;
+                    y: (TimelineViewState.trimming-source-row + 1) * row-pitch;
+                    width: clip-trim-res.new-duration * TimelineStore.zoom * 1px;
+                    height: track-height - 5px;
+                    background: TimelineViewState.trimming-color.with-alpha(0.9);
+                    border-width: 1px;
+                    border-color: TimelineViewState.trimming-head ? transparent : #ffffff;
+                    border-radius: AppStore.theme.track-lane.clip.radius;
+
+                    // Dragged-edge accent.
+                    Rectangle {
+                        x: TimelineViewState.trimming-head ? 0 : parent.width - self.width;
+                        y: 0;
+                        width: 2px;
+                        height: parent.height;
+                        background: #ffffff;
+                    }
+                }
+
+                // CapCut detail: duration + delta readout above the dragged edge.
+                if clip-trimming && clip-trim-res.valid: Rectangle {
+                    x: (TimelineViewState.trimming-head
+                            ? clip-trim-res.new-start
+                            : clip-trim-res.new-start + clip-trim-res.new-duration)
+                        * TimelineStore.zoom * 1px - self.width / 2;
+                    y: (TimelineViewState.trimming-source-row + 1) * row-pitch - self.height - 4px;
+                    width: trim-tip.preferred-width + 12px;
+                    height: trim-tip.preferred-height + 6px;
+                    background: #000000d0;
+                    border-radius: 4px;
+
+                    trim-tip := Text {
+                        color: #ffffff;
+                        text: TimelineLib.format-timecode(
+                                clip-trim-res.new-duration,
+                                sequence.fps.num,
+                                sequence.fps.den,
+                                sequence.drop-frame)
+                            + "  "
+                            + (clip-trim-res.new-duration >= TimelineViewState.trimming-duration-ticks ? "+" : "")
+                            + (clip-trim-res.new-duration - TimelineViewState.trimming-duration-ticks);
+                    }
+                }
+
+                // Same magnet guide as the move, driven by the trim resolution.
+                if clip-trimming && clip-trim-res.valid && clip-trim-res.has-snap: Rectangle {
+                    x: clip-trim-res.snap-line-tick * TimelineStore.zoom * 1px;
+                    y: 0;
+                    width: 1px;
+                    height: max(parent.height, content-height);
+                    background: #00E5C7;
+                }
+
+                // Floating copy of the grabbed clip, following the cursor on
+                // both axes (the original stays in place, dimmed).
+                if clip-dragging: Rectangle {
+                    x: TimelineViewState.dragging-start-value * TimelineStore.zoom * 1px
+                        + TimelineViewState.drag-dx-px;
+                    y: (TimelineViewState.dragging-source-row + 1) * row-pitch
+                        + TimelineViewState.drag-dy-px;
+                    width: TimelineViewState.dragging-duration-ticks * TimelineStore.zoom * 1px;
+                    height: track-height - 5px;
+                    background: TimelineViewState.dragging-color.with-alpha(0.85);
+                    border-width: 1px;
+                    border-color: #ffffff;
+                    border-radius: AppStore.theme.track-lane.clip.radius;
+
+                    Text {
+                        text: TimelineViewState.dragging-name;
                     }
                 }
 

@@ -58,6 +58,8 @@ pub enum EditCommand {
     },
     /// Remove a clip, leaving a gap where it sat.
     RemoveClip { clip: ClipId },
+    /// Remove a track (and any clips still on it) from the stack.
+    RemoveTrack { track: TrackId },
     /// Remove a clip and slide later clips on its track left to close the gap.
     RippleDelete { clip: ClipId },
 }
@@ -76,4 +78,5 @@ pub enum EditOutcome {
     CreatedTrack(TrackId),
     Updated(ClipId),
     Removed(ClipId),
+    RemovedTrack(TrackId),
 }

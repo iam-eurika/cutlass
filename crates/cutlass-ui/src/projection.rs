@@ -14,8 +14,8 @@ use std::rc::Rc;
 
 use cutlass_models::{
     Clip as EngineClip, ClipSource, Generator, MediaSource, Project as EngineProject,
-    RationalTime as EngineTime, TimeRange as EngineRange, Track as EngineTrack,
-    TrackKind as EngineKind, resample,
+    Rational as EngineRational, RationalTime as EngineTime, TimeRange as EngineRange,
+    Track as EngineTrack, TrackKind as EngineKind, rate_eq, resample,
 };
 use slint::{Color, ModelRc, VecModel};
 
@@ -114,6 +114,7 @@ fn clip_to_slint(project: &EngineProject, clip: &EngineClip) -> Clip {
     // (1:1 playback; the true media in/out isn't needed until time-remap or a
     // live inspector requires it).
     let (name, text_content) = clip_labels(project, clip);
+    let (head_room, tail_room) = trim_rooms(project, clip);
 
     Clip {
         id: clip.id.raw().to_string().into(),
@@ -121,7 +122,60 @@ fn clip_to_slint(project: &EngineProject, clip: &EngineClip) -> Clip {
         timeline_start: rational_time(clip.timeline.start),
         source_range: time_range(clip.timeline),
         text_content: text_content.into(),
+        head_room_ticks: head_room,
+        tail_room_ticks: tail_room,
     }
+}
+
+/// Trim headroom for generated clips, which have no source bounds. Big enough
+/// to never clamp, small enough that `clip end + room` can't overflow `i32`.
+const UNBOUNDED_ROOM: i32 = i32::MAX / 4;
+
+/// How far (sequence ticks) each clip edge can extend before running out of
+/// source media: `(head, tail)`. Head room is the media before the in-point,
+/// tail room the media after the out-point, both projected to the sequence
+/// rate *conservatively* (see [`room_to_sequence_ticks`]) so the trim ghost
+/// never offers an extension `Project::trim_clip` would reject.
+fn trim_rooms(project: &EngineProject, clip: &EngineClip) -> (i32, i32) {
+    let tl_rate = project.timeline().frame_rate;
+    match &clip.content {
+        ClipSource::Media { media, source } => {
+            let Some(media) = project.media(*media) else {
+                return (0, 0);
+            };
+            let head_media = source.start.value;
+            let tail_media = media.duration.value - source.end_tick();
+            (
+                room_to_sequence_ticks(head_media, media.frame_rate, tl_rate),
+                room_to_sequence_ticks(tail_media, media.frame_rate, tl_rate),
+            )
+        }
+        ClipSource::Generated(_) => (UNBOUNDED_ROOM, UNBOUNDED_ROOM),
+    }
+}
+
+/// Largest number of sequence ticks an edge may extend such that the engine's
+/// media-rate resample of that delta stays within `room_media` ticks.
+///
+/// `Project::trim_clip` re-derives the source delta by resampling the
+/// timeline delta (round-to-nearest), so a naive media→sequence conversion
+/// can overshoot by a tick and get the commit rejected. Convert, then verify
+/// by round-tripping and step down until it fits; when the rates differ, keep
+/// one extra media tick in reserve for the duration-resample's own rounding.
+fn room_to_sequence_ticks(
+    room_media: i64,
+    media_rate: EngineRational,
+    tl_rate: EngineRational,
+) -> i32 {
+    let mut room = room_media.max(0);
+    if !rate_eq(media_rate, tl_rate) {
+        room = (room - 1).max(0);
+    }
+    let mut ticks = resample(EngineTime::new(room, media_rate), tl_rate).value;
+    while ticks > 0 && resample(EngineTime::new(ticks, tl_rate), media_rate).value > room {
+        ticks -= 1;
+    }
+    clamp_i32(ticks)
 }
 
 /// `(lane label, text-generator content)` for a clip.

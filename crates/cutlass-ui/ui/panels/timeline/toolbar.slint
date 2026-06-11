@@ -1,5 +1,5 @@
 import { CutlassText, HorizontalDivider } from "../../components/index.slint";
-import { AppStore } from "../../store/index.slint";
+import { AppStore, TimelineStore } from "../../store/index.slint";
 import { Slider } from "std-widgets.slint";
 import { EditorStore } from "../../store/editor-store.slint";
 
@@ -9,6 +9,33 @@ export component Toolbar inherits Rectangle {
     CutlassText {
         text: "Tools";
         style: AppStore.theme.typography.label;
+    }
+
+    // CapCut's auto-snapping magnet toggle: highlighted while active.
+    snap-toggle := Rectangle {
+        x: 60px;
+        y: 4px;
+        width: 52px;
+        height: parent.height - 8px;
+        border-radius: 4px;
+        background: TimelineStore.snap-enabled ? #00E5C766 : transparent;
+        border-width: 1px;
+        border-color: TimelineStore.snap-enabled ? #00E5C7 : #ffffff40;
+
+        CutlassText {
+            text: "Snap";
+            style: AppStore.theme.typography.label;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        TouchArea {
+            clicked => {
+                TimelineStore.snap-enabled = !TimelineStore.snap-enabled;
+            }
+        }
     }
 
     Slider {

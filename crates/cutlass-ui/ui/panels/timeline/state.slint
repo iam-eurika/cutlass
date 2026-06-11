@@ -3,8 +3,43 @@ export global TimelineViewState {
     in-out property <length> scroll-x: 0px;
     in-out property <length> scroll-y: 0px;
 
+    // --- clip drag gesture ---------------------------------------------
+    // Set by ClipView on grab; TimelinePanel resolves the landing spot each
+    // frame (ghost + guides) and commits on release. Empty clip id ⇔ no drag.
     in-out property <string> dragging-source-track-id: "";
     in-out property <string> dragging-clip-id: "";
 
+    // Cursor deltas from the press point (the original clip stays in place,
+    // dimmed; a floating copy follows the cursor).
     in-out property <length> drag-dx-px: 0px;
+    in-out property <length> drag-dy-px: 0px;
+
+    // Snapshot of the grabbed clip, so drag visuals don't have to search the
+    // sequence model per frame.
+    in-out property <int> dragging-source-row: 0;
+    in-out property <int> dragging-start-value: 0;
+    in-out property <int> dragging-duration-ticks: 0;
+    in-out property <color> dragging-color: transparent;
+    in-out property <string> dragging-name: "";
+
+    // Set by ClipView on pointer-up; TimelinePanel commits the move and then
+    // clears the whole drag state (it owns the resolution, ClipView doesn't).
+    in-out property <bool> drag-released: false;
+
+    // --- clip trim gesture (edge drag) -----------------------------------
+    // Same shape as the move gesture: the edge handle records the press +
+    // cursor delta; TimelinePanel resolves the new extent each frame (live
+    // stretch preview + guide) and commits on release. Empty clip id ⇔ no trim.
+    in-out property <string> trimming-track-id: "";
+    in-out property <string> trimming-clip-id: "";
+    // True when the left (head) edge is grabbed, false for the right (tail).
+    in-out property <bool> trimming-head: false;
+    in-out property <length> trim-dx-px: 0px;
+
+    // Press snapshot, so the preview doesn't search the sequence per frame.
+    in-out property <int> trimming-source-row: 0;
+    in-out property <int> trimming-duration-ticks: 0;
+    in-out property <color> trimming-color: transparent;
+
+    in-out property <bool> trim-released: false;
 }

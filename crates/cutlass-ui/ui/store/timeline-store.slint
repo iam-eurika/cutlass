@@ -8,4 +8,7 @@ export global TimelineStore {
     in-out property <int> playhead-tick: 0;
     in-out property <string> selected-track-id: "";
     in-out property <string> selected-clip-id: "";
+    // CapCut's "auto snapping" magnet: drags snap to clip edges on all lanes,
+    // the playhead, and tick 0. Toggled from the timeline toolbar.
+    in-out property <bool> snap-enabled: true;
 }

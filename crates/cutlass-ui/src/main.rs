@@ -118,31 +118,66 @@ fn main() -> Result<(), slint::PlatformError> {
          dragging_clip_id,
          cursor_start_value,
          clip_duration_ticks,
-         snap_threshold_ticks| {
-            let r = snap::compute_drag_snap(
-                sequence,
+         snap_threshold_ticks,
+         playhead_tick| {
+            snap::compute_drag_snap(
+                &sequence,
                 dragging_source_track_id.as_str(),
                 dragging_clip_id.as_str(),
                 cursor_start_value,
                 clip_duration_ticks,
                 snap_threshold_ticks,
-            );
-            SnapResult {
-                has_snap: r.has_snap,
-                snapped_start_value: r.snapped_start_value,
-                snap_line_tick: r.snap_line_tick,
-            }
+                playhead_tick,
+            )
         },
     );
 
-    app.global::<DragBackend>()
-        .on_resolve_target_lane(|sequence, source_track_id, lane_offset| {
-            let r = snap::resolve_drag_target(sequence, source_track_id.as_str(), lane_offset);
-            ResolvedTarget {
-                track_id: r.track_id,
-                clamped_offset: r.clamped_offset,
-            }
-        });
+    app.global::<DragBackend>().on_resolve_clip_drag(
+        |sequence, source_track_id, dragging_clip_id, dx_ticks, hover_row, playhead_tick, snap_threshold_ticks| {
+            snap::resolve_clip_drag(
+                &sequence,
+                source_track_id.as_str(),
+                dragging_clip_id.as_str(),
+                dx_ticks,
+                hover_row,
+                playhead_tick,
+                snap_threshold_ticks,
+            )
+        },
+    );
+
+    app.global::<DragBackend>().on_resolve_clip_trim(
+        |sequence, track_id, clip_id, trim_head, dx_ticks, playhead_tick, snap_threshold_ticks| {
+            snap::resolve_clip_trim(
+                &sequence,
+                track_id.as_str(),
+                clip_id.as_str(),
+                trim_head,
+                dx_ticks,
+                playhead_tick,
+                snap_threshold_ticks,
+            )
+        },
+    );
+
+    let move_handle = preview_worker.handle();
+    editor.on_on_clip_moved(move |clip_id, track_id, insert_row, start_tick| {
+        move_handle.move_clip(
+            clip_id.to_string(),
+            track_id.to_string(),
+            i64::from(insert_row),
+            i64::from(start_tick),
+        );
+    });
+
+    let trim_handle = preview_worker.handle();
+    editor.on_on_clip_trimmed(move |clip_id, start_tick, duration_ticks| {
+        trim_handle.trim_clip(
+            clip_id.to_string(),
+            i64::from(start_tick),
+            i64::from(duration_ticks),
+        );
+    });
 
     let editor_weak = app.global::<EditorStore>().as_weak();
     app.global::<InspectorBackend>()

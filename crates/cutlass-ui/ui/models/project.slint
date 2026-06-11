@@ -63,6 +63,14 @@ export struct Clip {
     source-range: TimeRange,
     // Text / title generator content. Empty on non-text clips.
     text-content: string,
+    // How far (sequence ticks) each edge can EXTEND beyond the current
+    // placement before running out of source media: head = lowering
+    // `timeline-start`, tail = raising the end. Shrinking is always allowed
+    // (down to 1 tick). Generated clips are unbounded (large sentinel).
+    // Computed rate-safely in src/projection.rs so the engine can never
+    // reject an extension the UI offered.
+    head-room-ticks: int,
+    tail-room-ticks: int,
 }
 
 // Drives lane ordering, drag targeting (same-kind blocks), and which

@@ -1,5 +1,6 @@
 use cutlass_commands::{Command, EditCommand, EditOutcome, ProjectCommand};
 
+use super::edit::add_track::RemoveTrackAction;
 use super::edit::{self, remove_clip::RemoveClipAction};
 use super::project::{self, import};
 use super::{ApplyContext, EditAction};
@@ -98,6 +99,10 @@ fn dispatch_edit(
         EditCommand::RemoveClip { clip } => {
             let inverse = Box::new(RemoveClipAction { clip }).apply(ctx)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Removed(clip)), Some(inverse)))
+        }
+        EditCommand::RemoveTrack { track } => {
+            let inverse = Box::new(RemoveTrackAction { track_id: track }).apply(ctx)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::RemovedTrack(track)), Some(inverse)))
         }
         EditCommand::RippleDelete { clip } => {
             let inverse = edit::ripple_delete::execute(ctx, clip)?;

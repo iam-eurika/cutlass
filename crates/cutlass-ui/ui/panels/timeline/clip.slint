@@ -5,32 +5,46 @@ import { TimelineStore } from "../../store/timeline-store.slint";
 import { TimelineViewState } from "state.slint";
 
 // Named `model` because `clip` is a built-in Slint property on visual elements.
+//
+// The drag gesture only records state here (press snapshot + cursor deltas);
+// TimelinePanel owns the resolution, the floating drag visual, the ghost, and
+// the commit — the original clip just stays in place, dimmed, until the
+// engine republishes the projection.
 export component ClipView inherits Rectangle {
     in property <Clip> model;
     in property <string> track-id;
+    in property <int> track-row;
     in property <color> track-color;
     in property <float> zoom;
-
-    private property <length> base-x: TimelineLib.rational-to-length(model.timeline-start, zoom);
 
     private property <bool> is-active-drag:
         TimelineViewState.dragging-source-track-id == track-id
         && TimelineViewState.dragging-clip-id == model.id;
 
+    private property <bool> is-active-trim:
+        TimelineViewState.trimming-track-id == track-id
+        && TimelineViewState.trimming-clip-id == model.id;
+
     private property <bool> is-selected:
         TimelineStore.selected-track-id == track-id
         && TimelineStore.selected-clip-id == model.id;
 
-    x: is-active-drag ? base-x + TimelineViewState.drag-dx-px : base-x;
+    // Edge handles cap at a third of the clip so very short clips keep a
+    // grabbable middle for the move gesture.
+    private property <length> handle-width: min(6px, self.width / 3);
+
+    x: TimelineLib.rational-to-length(model.timeline-start, zoom);
 
     width: TimelineLib.clip-timeline-width(model, zoom);
     height: AppStore.theme.track-lane.clip.height;
     background: track-color;
     border-radius: AppStore.theme.track-lane.clip.radius;
 
-    border-width: is-active-drag || is-selected ? 1px : 0px;
+    border-width: is-selected ? 1px : 0px;
     border-color: AppStore.theme.text.primary;
-    opacity: 1.0;
+    // CapCut dims the source position while the floating copy (move) or the
+    // stretch preview (trim) shows the live result.
+    opacity: is-active-drag || is-active-trim ? 0.35 : 1.0;
 
     ta := TouchArea {
         width: parent.width;
@@ -38,13 +52,22 @@ export component ClipView inherits Rectangle {
 
         changed pressed => {
             if (self.pressed) {
+                // Select on grab (CapCut selects the clip the moment you grab it).
+                TimelineStore.selected-track-id = track-id;
+                TimelineStore.selected-clip-id = model.id;
+
                 TimelineViewState.dragging-source-track-id = track-id;
                 TimelineViewState.dragging-clip-id = model.id;
+                TimelineViewState.dragging-source-row = track-row;
+                TimelineViewState.dragging-start-value = model.timeline-start.value;
+                TimelineViewState.dragging-duration-ticks = model.source-range.duration.value;
+                TimelineViewState.dragging-color = track-color;
+                TimelineViewState.dragging-name = model.name;
                 TimelineViewState.drag-dx-px = 0px;
+                TimelineViewState.drag-dy-px = 0px;
             } else if (is-active-drag) {
-                TimelineViewState.dragging-source-track-id = "";
-                TimelineViewState.dragging-clip-id = "";
-                TimelineViewState.drag-dx-px = 0px;
+                // TimelinePanel commits (if the drag moved) and clears the state.
+                TimelineViewState.drag-released = true;
             }
         }
 
@@ -52,18 +75,90 @@ export component ClipView inherits Rectangle {
             if (!is-active-drag) {
                 return;
             }
-            TimelineViewState.drag-dx-px += self.mouse-x - self.pressed-x;
-            // Don't let the clip slide left of tick 0 (ruler origin).
-            TimelineViewState.drag-dx-px = max(-base-x, TimelineViewState.drag-dx-px);
-        }
-
-        clicked => {
-            TimelineStore.selected-track-id = track-id;
-            TimelineStore.selected-clip-id = model.id;
+            // The element itself never moves, so the totals are just the
+            // offsets from the press point.
+            TimelineViewState.drag-dx-px = self.mouse-x - self.pressed-x;
+            TimelineViewState.drag-dy-px = self.mouse-y - self.pressed-y;
         }
     }
 
     Text {
         text: model.name;
+    }
+
+    // --- trim handles (declared last ⇒ on top of the move TouchArea) -----
+    // Like the move, the handle only records the gesture; TimelinePanel
+    // resolves the new extent (stretch preview + guide + tooltip) and commits.
+
+    function begin-trim(head: bool) {
+        // Select on grab, like the move gesture.
+        TimelineStore.selected-track-id = track-id;
+        TimelineStore.selected-clip-id = model.id;
+
+        TimelineViewState.trimming-track-id = track-id;
+        TimelineViewState.trimming-clip-id = model.id;
+        TimelineViewState.trimming-head = head;
+        TimelineViewState.trimming-source-row = track-row;
+        TimelineViewState.trimming-duration-ticks = model.source-range.duration.value;
+        TimelineViewState.trimming-color = track-color;
+        TimelineViewState.trim-dx-px = 0px;
+    }
+
+    head-ta := TouchArea {
+        x: 0;
+        width: root.handle-width;
+        height: parent.height;
+        mouse-cursor: ew-resize;
+
+        changed pressed => {
+            if (self.pressed) {
+                begin-trim(true);
+            } else if (is-active-trim) {
+                TimelineViewState.trim-released = true;
+            }
+        }
+
+        moved => {
+            if (is-active-trim) {
+                TimelineViewState.trim-dx-px = self.mouse-x - self.pressed-x;
+            }
+        }
+    }
+
+    tail-ta := TouchArea {
+        x: parent.width - root.handle-width;
+        width: root.handle-width;
+        height: parent.height;
+        mouse-cursor: ew-resize;
+
+        changed pressed => {
+            if (self.pressed) {
+                begin-trim(false);
+            } else if (is-active-trim) {
+                TimelineViewState.trim-released = true;
+            }
+        }
+
+        moved => {
+            if (is-active-trim) {
+                TimelineViewState.trim-dx-px = self.mouse-x - self.pressed-x;
+            }
+        }
+    }
+
+    // CapCut-style bracket bars hinting the grabbable edges.
+    if is-selected || head-ta.has-hover: Rectangle {
+        x: 2px;
+        width: 2px;
+        height: parent.height * 0.5;
+        background: AppStore.theme.text.primary;
+        border-radius: 1px;
+    }
+    if is-selected || tail-ta.has-hover: Rectangle {
+        x: parent.width - 4px;
+        width: 2px;
+        height: parent.height * 0.5;
+        background: AppStore.theme.text.primary;
+        border-radius: 1px;
     }
 }

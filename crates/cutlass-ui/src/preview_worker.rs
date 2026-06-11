@@ -6,7 +6,9 @@ use std::thread::JoinHandle;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use cutlass_commands::{Command, EditCommand, EditOutcome, ProjectCommand};
 use cutlass_engine::{ApplyOutcome, Engine, EngineConfig};
-use cutlass_models::{MediaId, Rational, RationalTime, Track, TrackId, TrackKind, resample};
+use cutlass_models::{
+    ClipId, MediaId, Rational, RationalTime, TimeRange, Track, TrackId, TrackKind, resample,
+};
 use tracing::{error, info};
 
 use crate::{EditorStore, PreviewStore};
@@ -31,6 +33,21 @@ enum WorkerMsg {
         track: String,
         start_tick: i64,
         drop_row: i64,
+    },
+    /// Move `clip` (raw id) to `track` at `start_tick`, or — when `track` is
+    /// empty — to a new lane of the clip's kind inserted at `insert_row`.
+    MoveClip {
+        clip: String,
+        track: String,
+        insert_row: i64,
+        start_tick: i64,
+    },
+    /// Re-place `clip` (raw id) at `[start_tick, start_tick + duration_ticks)`
+    /// on its own lane (edge trim; the engine re-derives the source in/out).
+    TrimClip {
+        clip: String,
+        start_tick: i64,
+        duration_ticks: i64,
     },
 }
 
@@ -57,6 +74,23 @@ impl WorkerHandle {
             track,
             start_tick,
             drop_row,
+        });
+    }
+
+    pub fn move_clip(&self, clip: String, track: String, insert_row: i64, start_tick: i64) {
+        let _ = self.tx.send(WorkerMsg::MoveClip {
+            clip,
+            track,
+            insert_row,
+            start_tick,
+        });
+    }
+
+    pub fn trim_clip(&self, clip: String, start_tick: i64, duration_ticks: i64) {
+        let _ = self.tx.send(WorkerMsg::TrimClip {
+            clip,
+            start_tick,
+            duration_ticks,
         });
     }
 }
@@ -139,8 +173,8 @@ fn worker_main(
 }
 
 /// Single consumer for the engine thread. Scrub frames coalesce to the latest
-/// pending tick, but every mutation ([`WorkerMsg::Import`], [`WorkerMsg::AddClip`])
-/// is executed in order — it must never be discarded by the coalescing drain.
+/// pending tick, but every mutation (import, add-clip, move-clip, …) is
+/// executed in order — it must never be discarded by the coalescing drain.
 fn worker_loop(
     engine: &mut Engine,
     tl_rate: Rational,
@@ -156,6 +190,17 @@ fn worker_loop(
             start_tick,
             drop_row,
         } => add_clip_and_publish(engine, &media, &track, start_tick, drop_row, &editor_weak),
+        WorkerMsg::MoveClip {
+            clip,
+            track,
+            insert_row,
+            start_tick,
+        } => move_clip_and_publish(engine, &clip, &track, insert_row, start_tick, &editor_weak),
+        WorkerMsg::TrimClip {
+            clip,
+            start_tick,
+            duration_ticks,
+        } => trim_clip_and_publish(engine, &clip, start_tick, duration_ticks, &editor_weak),
         WorkerMsg::Frame(_) => unreachable!("frames are handled by the drain below"),
     };
 
@@ -237,7 +282,7 @@ fn add_clip_and_publish(
                 .expect("video_lane returned an existing track");
             (lane, first_fit_start(lane_track, desired, duration_ticks))
         }
-        None => match create_video_track(engine, drop_row) {
+        None => match create_track(engine, TrackKind::Video, drop_row) {
             Ok(id) => (id, desired),
             Err(e) => {
                 error!(%media_id, "drop failed creating video track: {e}");
@@ -279,10 +324,127 @@ fn video_lane(engine: &Engine, track: &str) -> Option<TrackId> {
         .then_some(id)
 }
 
-/// Create a new video track (named V1, V2, … by video-lane count) for drops
-/// that don't target an existing lane, inserted so it appears at `drop_row`
-/// in the lane list.
-fn create_video_track(engine: &mut Engine, drop_row: i64) -> Result<TrackId, String> {
+/// Move a dragged clip to its resolved landing spot: an existing lane
+/// (`track` set) or a new lane of the clip's kind inserted at `insert_row`.
+/// A cross-lane move that empties its source lane removes that lane
+/// (CapCut deletes overlay tracks that empty out).
+fn move_clip_and_publish(
+    engine: &mut Engine,
+    clip: &str,
+    track: &str,
+    insert_row: i64,
+    start_tick: i64,
+    editor_weak: &slint::Weak<EditorStore<'static>>,
+) {
+    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+        error!(clip, "move ignored: unparsable clip id");
+        return;
+    };
+    let Some(source_track) = engine.project().timeline().track_of(clip_id) else {
+        error!(%clip_id, "move ignored: clip not on the timeline");
+        return;
+    };
+    let kind = engine
+        .project()
+        .timeline()
+        .track(source_track)
+        .expect("track_of returned an existing track")
+        .kind;
+    let tl_rate = engine.project().timeline().frame_rate;
+
+    let mut created_lane = false;
+    let to_track = match parse_raw_id(track).map(TrackId::from_raw) {
+        Some(id) => id,
+        None => match create_track(engine, kind, insert_row) {
+            Ok(id) => {
+                created_lane = true;
+                id
+            }
+            Err(e) => {
+                error!(%clip_id, "move failed creating {kind:?} track: {e}");
+                return;
+            }
+        },
+    };
+
+    match engine.apply(Command::Edit(EditCommand::MoveClip {
+        clip: clip_id,
+        to_track,
+        start: RationalTime::new(start_tick.max(0), tl_rate),
+    })) {
+        Ok(ApplyOutcome::Edited(EditOutcome::Updated(_))) => {
+            info!(%clip_id, %to_track, start_tick, "moved clip");
+            remove_track_if_empty(engine, source_track, to_track);
+            publish_projection(engine, editor_weak);
+        }
+        Ok(other) => error!(%clip_id, "unexpected move-clip outcome: {other:?}"),
+        // The drag resolver previewed a valid spot; the engine still rejects
+        // atomically if the projection raced a concurrent edit.
+        Err(e) => {
+            error!(%clip_id, %to_track, start_tick, "move clip failed: {e}");
+            // Don't leave a lane we just created lingering empty.
+            if created_lane {
+                remove_track_if_empty(engine, to_track, source_track);
+            }
+            publish_projection(engine, editor_weak);
+        }
+    }
+}
+
+/// Re-place a trimmed clip at its resolved extent. The trim resolver already
+/// clamped to neighbors and source headroom, so this should always apply; the
+/// engine still validates atomically (overlap, source bounds) and we surface
+/// any rejection rather than mutating the projection optimistically.
+fn trim_clip_and_publish(
+    engine: &mut Engine,
+    clip: &str,
+    start_tick: i64,
+    duration_ticks: i64,
+    editor_weak: &slint::Weak<EditorStore<'static>>,
+) {
+    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+        error!(clip, "trim ignored: unparsable clip id");
+        return;
+    };
+    let tl_rate = engine.project().timeline().frame_rate;
+    let timeline = TimeRange::at_rate(start_tick.max(0), duration_ticks.max(1), tl_rate);
+
+    match engine.apply(Command::Edit(EditCommand::TrimClip {
+        clip: clip_id,
+        timeline,
+    })) {
+        Ok(ApplyOutcome::Edited(EditOutcome::Updated(_))) => {
+            info!(%clip_id, start_tick, duration_ticks, "trimmed clip");
+            publish_projection(engine, editor_weak);
+        }
+        Ok(other) => error!(%clip_id, "unexpected trim-clip outcome: {other:?}"),
+        Err(e) => error!(%clip_id, start_tick, duration_ticks, "trim clip failed: {e}"),
+    }
+}
+
+/// Remove `track` when a move left it empty (skipped if it's the lane the
+/// clip just landed on).
+fn remove_track_if_empty(engine: &mut Engine, track: TrackId, just_used: TrackId) {
+    if track == just_used {
+        return;
+    }
+    let emptied = engine
+        .project()
+        .timeline()
+        .track(track)
+        .is_some_and(|t| t.is_empty());
+    if !emptied {
+        return;
+    }
+    if let Err(e) = engine.apply(Command::Edit(EditCommand::RemoveTrack { track })) {
+        error!(%track, "failed to remove emptied track: {e}");
+    }
+}
+
+/// Create a new track of `kind` for drops/moves that don't target an existing
+/// lane, inserted so it appears at `drop_row` in the lane list. Named by
+/// kind + per-kind count (V1, V2, A1, …).
+fn create_track(engine: &mut Engine, kind: TrackKind, drop_row: i64) -> Result<TrackId, String> {
     let timeline = engine.project().timeline();
     // The lane list shows the stack top-first (see projection.rs), so the new
     // lane appears at UI row r when inserted at stack index (len - r). The
@@ -290,18 +452,27 @@ fn create_video_track(engine: &mut Engine, drop_row: i64) -> Result<TrackId, Str
     // last (⇒ bottom).
     let stack_len = timeline.order().len() as i64;
     let order_index = (stack_len - drop_row).clamp(0, stack_len) as usize;
-    let count = timeline
-        .tracks_ordered()
-        .filter(|t| t.kind == TrackKind::Video)
-        .count();
+    let count = timeline.tracks_ordered().filter(|t| t.kind == kind).count();
     match engine.apply(Command::Edit(EditCommand::AddTrack {
-        kind: TrackKind::Video,
-        name: format!("V{}", count + 1),
+        kind,
+        name: format!("{}{}", kind_prefix(kind), count + 1),
         index: Some(order_index),
     })) {
         Ok(ApplyOutcome::Edited(EditOutcome::CreatedTrack(id))) => Ok(id),
         Ok(other) => Err(format!("unexpected add-track outcome: {other:?}")),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+fn kind_prefix(kind: TrackKind) -> &'static str {
+    match kind {
+        TrackKind::Video => "V",
+        TrackKind::Audio => "A",
+        TrackKind::Text => "T",
+        TrackKind::Sticker => "ST",
+        TrackKind::Effect => "FX",
+        TrackKind::Filter => "F",
+        TrackKind::Adjustment => "ADJ",
     }
 }
 

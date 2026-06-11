@@ -1,11 +1,9 @@
 import { Sequence } from "../models/index.slint";
 
-// Bridge between the timeline clip-drag gesture and the Rust snap helpers.
-// Each drag frame the gesture layer calls `DragBackend.snap-clip-start(...)`
-// with the current sequence snapshot and gets back a possibly-adjusted start
-// tick plus the timeline tick where the snap guide line should be drawn.
-//
-// Reactivity: pure callbacks re-invoke whenever arguments change during drag.
+// Bridge between timeline drag gestures and the Rust placement helpers
+// (src/snap.rs). Pure callbacks re-invoke whenever arguments change during a
+// drag, so the ghost preview and the commit on release share one resolution
+// and can never disagree.
 
 export struct SnapResult {
     has-snap: bool,
@@ -13,13 +11,43 @@ export struct SnapResult {
     snap-line-tick: int,
 }
 
-export struct ResolvedTarget {
-    track-id: string,
-    clamped-offset: int,
+// Where a dragged clip would land if released right now (CapCut policy:
+// same-kind lanes only; conflicts and foreign rows insert a new lane).
+export struct ClipDragResolution {
+    valid: bool,
+    // Landing: an existing lane (`target-track-id` at `target-row`) or a new
+    // lane inserted at `target-row` (pushing the current row down).
+    is-new-lane: bool,
+    target-track-id: string,
+    target-row: int,
+    resolved-start: int,
+    duration-ticks: int,
+    // Magnet guide: vertical line at `snap-line-tick` while snapped.
+    has-snap: bool,
+    snap-line-tick: int,
+    // Release would land exactly where the clip already is — skip the commit.
+    is-noop: bool,
+}
+
+// Where a trimmed clip edge would settle if released right now. The dragged
+// edge magnets like a move, then clamps to the lane's neighbor clips, the
+// source media headroom (`Clip.head/tail-room-ticks`), tick 0, and a 1-tick
+// minimum duration — so the live stretch is exactly what the engine accepts.
+export struct ClipTrimResolution {
+    valid: bool,
+    new-start: int,
+    new-duration: int,
+    // Magnet guide: vertical line at `snap-line-tick` while snapped.
+    has-snap: bool,
+    snap-line-tick: int,
+    // Release would leave the clip exactly as it is — skip the commit.
+    is-noop: bool,
 }
 
 export global DragBackend {
-    pure callback snap-clip-start(Sequence /* sequence */, string /* dragging-source-track-id */, string /* dragging-clip-id */, int    /* cursor-start-value */, int    /* clip-duration-ticks */, int    /* snap-threshold-ticks */, ) -> SnapResult;
+    pure callback snap-clip-start(Sequence /* sequence */, string /* dragging-source-track-id */, string /* dragging-clip-id */, int    /* cursor-start-value */, int    /* clip-duration-ticks */, int    /* snap-threshold-ticks */, int    /* playhead-tick */, ) -> SnapResult;
 
-    pure callback resolve-target-lane(Sequence /* sequence */, string /* source-track-id */, int    /* lane-offset */, ) -> ResolvedTarget;
+    pure callback resolve-clip-drag(Sequence /* sequence */, string /* source-track-id */, string /* dragging-clip-id */, int    /* dx-ticks */, int    /* hover-row */, int    /* playhead-tick */, int    /* snap-threshold-ticks */, ) -> ClipDragResolution;
+
+    pure callback resolve-clip-trim(Sequence /* sequence */, string /* track-id */, string /* clip-id */, bool   /* trim-head (left edge) */, int    /* dx-ticks */, int    /* playhead-tick */, int    /* snap-threshold-ticks */, ) -> ClipTrimResolution;
 }
