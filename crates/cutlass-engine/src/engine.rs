@@ -190,6 +190,19 @@ impl Engine {
         Ok(outcome)
     }
 
+    /// Warm decoders and the frame cache for `time` without compositing —
+    /// playback read-ahead (see [`preview::prefetch_frame`]). Errors are the
+    /// caller's to ignore: a tick past the content or mid-edit is expected.
+    pub fn prefetch(&mut self, time: RationalTime) -> Result<(), EngineError> {
+        preview::prefetch_frame(
+            &self.project,
+            &self.cache,
+            &mut self.decoder_pool,
+            time,
+            self.config.color_convert,
+        )
+    }
+
     /// Composite enabled video layers at `time` and return an RGBA preview frame.
     pub fn get_frame(&mut self, time: RationalTime) -> Result<RgbaFrame, EngineError> {
         preview::get_frame(

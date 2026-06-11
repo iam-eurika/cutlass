@@ -363,14 +363,9 @@ export component TimelinePanel inherits PanelBase {
         TimelineViewState.viewport-w = lanes.width;
     }
 
-    // Every playhead mutation — ruler scrub, frame-step keys, Home/End —
-    // funnels through this one watcher into a preview frame request
-    // (coalesced to the newest tick on the worker thread).
-    private property <int> playhead: TimelineStore.playhead-tick;
-
-    changed playhead => {
-        EditorStore.on-playhead-changed(self.playhead);
-    }
+    // The playhead → preview-frame-request watcher lives at window scope
+    // (app.slint), not here: this panel unmounts in fullscreen preview
+    // mode and playback must keep rendering there.
 
     VerticalLayout {
 

@@ -5,7 +5,7 @@
 // bar that auto-hides after mouse idle (CapCut-style).
 import { AppState } from "state.slint";
 import { AppStore } from "store/index.slint";
-import { EditorStore, TimelineStore } from "store/index.slint";
+import { EditorStore, TimelineStore, PreviewStore, TimelineActions } from "store/index.slint";
 import { TimelineLib } from "lib/timeline-lib.slint";
 import { RationalTime } from "models/index.slint";
 import { Slider } from "std-widgets.slint";
@@ -53,6 +53,23 @@ export component FullscreenPreview inherits Rectangle {
         }
     }
 
+    // The seek slider's handle follows the playhead through this watcher
+    // (and the init below for the position on entry) — see seek-slider for
+    // why it can't be a `value` binding.
+    private property <int> slider-playhead: TimelineStore.playhead-tick;
+
+    changed slider-playhead => {
+        seek-slider.value = root.sequence-duration.value > 0
+            ? 100 * root.slider-playhead / root.sequence-duration.value
+            : 0;
+    }
+
+    init => {
+        seek-slider.value = root.sequence-duration.value > 0
+            ? 100 * TimelineStore.playhead-tick / root.sequence-duration.value
+            : 0;
+    }
+
     background: AppStore.theme.panel.background;
 
     // Catches movement in letterbox padding (areas outside the preview).
@@ -75,10 +92,13 @@ export component FullscreenPreview inherits Rectangle {
         y: (parent.height - self.height) / 2;
         background: black;
 
+        // Live preview frames — the same worker-delivered image as the
+        // docked panel (the playhead → frame-request watcher lives at
+        // window scope, so playback keeps rendering in fullscreen).
         Image {
             width: parent.width;
             height: parent.height;
-            source: @image-url("../assets/texture.png");
+            source: PreviewStore.frame;
             image-fit: ImageFit.contain;
         }
 
@@ -124,8 +144,12 @@ export component FullscreenPreview inherits Rectangle {
             }
         }
 
+        // Play/pause: same TimelineActions path as Space and the docked
+        // panel button, so gating can never diverge.
         Image {
-            source: @image-url("assets/icon/play.svg");
+            source: TimelineStore.playing
+                ? @image-url("assets/icon/pause.svg")
+                : @image-url("assets/icon/play.svg");
             image-fit: ImageFit.contain;
             colorize: #ffffff;
 
@@ -133,6 +157,14 @@ export component FullscreenPreview inherits Rectangle {
             height: 20px;
             x: 20px;
             y: (parent.height - self.height) / 2;
+
+            TouchArea {
+                enabled: root.controls-visible;
+                clicked => {
+                    root.note-activity();
+                    TimelineActions.toggle-play();
+                }
+            }
         }
 
         Text {
@@ -187,7 +219,13 @@ export component FullscreenPreview inherits Rectangle {
             y: 0px;
         }
 
-        Slider {
+        // Seek slider (percent of duration). The handle follows the
+        // playhead via the watcher below rather than a `value` binding:
+        // the Slider assigns `value` internally on drag, which would
+        // permanently drop a binding. `changed` only fires from user
+        // interaction, so the watcher can't loop; a seek mid-playback
+        // re-anchors the transport clock (TimelineActions.playback-step).
+        seek-slider := Slider {
             minimum: 0;
             maximum: 100;
             value: 0;
@@ -196,6 +234,12 @@ export component FullscreenPreview inherits Rectangle {
             width: 170px;
             x: 330px;
             y: (parent.height - self.height) / 2;
+
+            changed(value) => {
+                root.note-activity();
+                TimelineStore.playhead-tick = Math.round(
+                    value / 100 * root.sequence-duration.value);
+            }
         }
 
         Rectangle {

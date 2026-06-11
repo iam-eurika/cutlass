@@ -2,7 +2,7 @@ import { PanelBase, PanelHeader } from "../../components/index.slint";
 import { AppStore } from "../../store/index.slint";
 import { EditorStore, PreviewStore } from "../../store/index.slint";
 import { TimelineLib } from "../../lib/timeline-lib.slint";
-import { TimelineStore } from "../../store/index.slint";
+import { TimelineStore, TimelineActions } from "../../store/index.slint";
 import { RationalTime } from "../../models/index.slint";
 import { AppState } from "../../state.slint";
 
@@ -87,13 +87,23 @@ export component PreviewPanel inherits PanelBase {
                     HorizontalLayout {
                         alignment: LayoutAlignment.center;
 
+                        // Play/pause: same TimelineActions path as the
+                        // Space shortcut, so gating can never diverge.
                         Image {
-                            source: @image-url("../../assets/icon/play.svg");
+                            source: TimelineStore.playing
+                                ? @image-url("../../assets/icon/pause.svg")
+                                : @image-url("../../assets/icon/play.svg");
                             image-fit: ImageFit.contain;
                             colorize: #ffffff;
 
                             horizontal-alignment: ImageHorizontalAlignment.center;
                             vertical-alignment: ImageVerticalAlignment.center;
+
+                            TouchArea {
+                                clicked => {
+                                    TimelineActions.toggle-play();
+                                }
+                            }
                         }
                     }
                 }

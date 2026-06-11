@@ -35,6 +35,7 @@ export {
 export { SelectionBackend, SelectionUpdate }from "lib/selection-backend.slint";
 export { InspectorBackend, SelectedClipInfo }from "lib/inspector-backend.slint";
 export { StripBackend, StripTile }from "lib/strip-backend.slint";
+export { TransportBackend }from "lib/transport-backend.slint";
 
 export component AppWindow inherits Window {
     title: "Cutlass";
@@ -66,6 +67,29 @@ export component AppWindow inherits Window {
         shortcuts.focus();
     }
 
+    // Every playhead mutation — ruler scrub, frame-step keys, Home/End,
+    // the playback clock — funnels through this one watcher into a preview
+    // frame request (coalesced to the newest tick on the worker thread).
+    // Window scope, not TimelinePanel: the panel unmounts in fullscreen
+    // preview mode and playback must keep rendering there.
+    private property <int> playhead: TimelineStore.playhead-tick;
+
+    changed playhead => {
+        EditorStore.on-playhead-changed(self.playhead);
+    }
+
+    // Playback clock (playback roadmap Phase 1). Sub-frame interval so
+    // frame boundaries land within ~8ms at any sequence rate; each step
+    // recomputes the playhead from the wall-clock anchor (TimelineActions
+    // owns the math), so a missed step never slows the transport.
+    playback-timer := Timer {
+        interval: 8ms;
+        running: TimelineStore.playing;
+        triggered => {
+            TimelineActions.playback-step();
+        }
+    }
+
     shortcuts := FocusScope {
         key-pressed(event) => {
             // Accept both Ctrl and Cmd (macOS) as the command modifier.
@@ -94,7 +118,17 @@ export component AppWindow inherits Window {
                     TimelineActions.duplicate-selected();
                     return accept;
                 }
+                // Loop playback toggle (Phase 4). Plain L is JKL shuttle.
+                if (event.text == "l" || event.text == "L") {
+                    TimelineActions.toggle-loop();
+                    return accept;
+                }
                 return reject;
+            }
+            // Clear the in/out range (Alt+X, Premiere-style).
+            if (event.modifiers.alt && (event.text == "x" || event.text == "X")) {
+                TimelineActions.clear-range();
+                return accept;
             }
             if (event.text == Key.Delete || event.text == Key.Backspace) {
                 TimelineActions.delete-selected();
@@ -102,6 +136,34 @@ export component AppWindow inherits Window {
             }
             if (event.text == Key.Escape) {
                 TimelineActions.clear-selection();
+                return accept;
+            }
+            // Playback transport: Space toggles play/pause (CapCut).
+            if (event.text == Key.Space) {
+                TimelineActions.toggle-play();
+                return accept;
+            }
+            // JKL shuttle (Phase 4): J reverse (repeat doubles), K pause,
+            // L forward (repeat doubles). Audio plays at 1x only.
+            if (event.text == "j" || event.text == "J") {
+                TimelineActions.shuttle-reverse();
+                return accept;
+            }
+            if (event.text == "k" || event.text == "K") {
+                TimelineActions.pause();
+                return accept;
+            }
+            if (event.text == "l" || event.text == "L") {
+                TimelineActions.shuttle-forward();
+                return accept;
+            }
+            // In/out range marks at the playhead (Phase 4).
+            if (event.text == "i" || event.text == "I") {
+                TimelineActions.set-range-in();
+                return accept;
+            }
+            if (event.text == "o" || event.text == "O") {
+                TimelineActions.set-range-out();
                 return accept;
             }
             // Phase 4 transport keys: frame-step and jump to start/end.

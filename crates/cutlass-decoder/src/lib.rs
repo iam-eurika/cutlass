@@ -1,13 +1,13 @@
 //! Media demux + decode.
 //!
-//! Video decode lives under [`video`]; [`audio`] currently covers waveform
-//! peak extraction (playback decode comes later).
+//! Video decode lives under [`video`]; [`audio`] covers waveform peak
+//! extraction and clocked playback streaming ([`AudioReader`]).
 
 pub mod audio;
 mod error;
 pub mod video;
 
-pub use audio::{AudioPeaks, audio_peaks, audio_peaks_per_second};
+pub use audio::{AUDIO_CHANNELS, AudioPeaks, AudioReader, audio_peaks, audio_peaks_per_second};
 pub use error::DecodeError;
 pub use video::{
     DecodeOptions, DecodedFrame, Decoder, HwAccel, KeyframeIndex, PixelFormat, Plane, SourceInfo,

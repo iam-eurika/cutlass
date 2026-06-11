@@ -126,6 +126,16 @@ export component Toolbar inherits Rectangle {
             }
         }
 
+        // Loop playback (playback roadmap Phase 4): reaching the end (or
+        // the out-mark) wraps to the start instead of pausing. Cmd/Ctrl+L.
+        ToolButton {
+            label: "Loop";
+            active: TimelineStore.loop-enabled;
+            clicked => {
+                TimelineActions.toggle-loop();
+            }
+        }
+
         // CapCut's main-track magnet: the bottom video lane stays gapless
         // (drops/moves insert, deletes ripple). Separate from Snap, as in
         // CapCut; routed through TimelineActions so the worker can mirror

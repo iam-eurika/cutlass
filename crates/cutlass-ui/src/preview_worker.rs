@@ -12,9 +12,18 @@ use cutlass_models::{
 };
 use tracing::{error, info};
 
+use crate::audio::{AudioHandle, AudioSnapshot, AudioSpan};
 use crate::strips::StripHandle;
 use crate::thumbnails::{ThumbKind, ThumbnailHandle};
 use crate::{EditorStore, PreviewStore};
+
+/// Everything a mutation publishes to: the Slint view model and the audio
+/// mixer's timeline snapshot. One value threaded through the worker so the
+/// two can never diverge.
+struct UiSink {
+    editor: slint::Weak<EditorStore<'static>>,
+    audio: AudioHandle,
+}
 
 pub struct PreviewSession {
     pub duration_ticks: i64,
@@ -244,6 +253,7 @@ impl PreviewWorker {
         editor_weak: slint::Weak<EditorStore<'static>>,
         thumbs: ThumbnailHandle,
         strips: StripHandle,
+        audio: AudioHandle,
     ) -> Result<(Self, PreviewSession), String> {
         let (ready_tx, ready_rx) = bounded(1);
         let (req_tx, req_rx) = unbounded();
@@ -257,6 +267,7 @@ impl PreviewWorker {
                     editor_weak,
                     thumbs,
                     strips,
+                    audio,
                     req_rx,
                     ready_tx,
                 ) {
@@ -291,6 +302,7 @@ fn worker_main(
     editor_weak: slint::Weak<EditorStore<'static>>,
     thumbs: ThumbnailHandle,
     strips: StripHandle,
+    audio: AudioHandle,
     req_rx: Receiver<WorkerMsg>,
     ready_tx: Sender<Result<PreviewSession, String>>,
 ) -> Result<(), String> {
@@ -314,9 +326,13 @@ fn worker_main(
 
     // Seed the UI with the engine's project so the editor reads from the engine
     // from the first frame (rather than any Slint-side placeholder).
-    publish_projection(&engine, &editor_weak);
+    let ui = UiSink {
+        editor: editor_weak,
+        audio,
+    };
+    publish_projection(&engine, &ui);
 
-    worker_loop(&mut engine, tl_rate, preview_weak, editor_weak, thumbs, strips, req_rx);
+    worker_loop(&mut engine, tl_rate, preview_weak, ui, thumbs, strips, req_rx);
     Ok(())
 }
 
@@ -327,7 +343,7 @@ fn worker_loop(
     engine: &mut Engine,
     tl_rate: Rational,
     preview_weak: slint::Weak<PreviewStore<'static>>,
-    editor_weak: slint::Weak<EditorStore<'static>>,
+    ui: UiSink,
     thumbs: ThumbnailHandle,
     strips: StripHandle,
     req_rx: Receiver<WorkerMsg>,
@@ -350,7 +366,7 @@ fn worker_loop(
                   msg: WorkerMsg| {
         match msg {
             WorkerMsg::Import(path) => {
-                import_and_publish(engine, &path, &editor_weak, &thumbs, &strips)
+                import_and_publish(engine, &path, &ui, &thumbs, &strips)
             }
             WorkerMsg::AddClip {
                 media,
@@ -366,7 +382,7 @@ fn worker_loop(
                 drop_row,
                 insert,
                 *linkage,
-                &editor_weak,
+                &ui,
             ),
             WorkerMsg::MoveClip {
                 clip,
@@ -382,10 +398,10 @@ fn worker_loop(
                 start_tick,
                 insert,
                 *main_magnet,
-                &editor_weak,
+                &ui,
             ),
             WorkerMsg::MoveGroup { moves } => {
-                move_group_and_publish(engine, &moves, &editor_weak)
+                move_group_and_publish(engine, &moves, &ui)
             }
             WorkerMsg::TrimClip {
                 clip,
@@ -397,16 +413,16 @@ fn worker_loop(
                 start_tick,
                 duration_ticks,
                 *linkage,
-                &editor_weak,
+                &ui,
             ),
             WorkerMsg::RemoveClips { clips } => {
-                remove_clips_and_publish(engine, &clips, *main_magnet, &editor_weak)
+                remove_clips_and_publish(engine, &clips, *main_magnet, &ui)
             }
             WorkerMsg::SplitClip { clip, at_tick } => {
-                split_clip_and_publish(engine, &clip, at_tick, *linkage, &editor_weak)
+                split_clip_and_publish(engine, &clip, at_tick, *linkage, &ui)
             }
-            WorkerMsg::Undo => history_step_and_publish(engine, false, &editor_weak),
-            WorkerMsg::Redo => history_step_and_publish(engine, true, &editor_weak),
+            WorkerMsg::Undo => history_step_and_publish(engine, false, &ui),
+            WorkerMsg::Redo => history_step_and_publish(engine, true, &ui),
             WorkerMsg::CopyClip { clip } => {
                 if let Some(snapshot) = snapshot_clip(engine, &clip) {
                     info!(clip, "copied clip to clipboard");
@@ -414,17 +430,17 @@ fn worker_loop(
                 }
             }
             WorkerMsg::PasteAt { tick } => match clipboard {
-                Some(content) => paste_and_publish(engine, content, tick, *main_magnet, &editor_weak),
+                Some(content) => paste_and_publish(engine, content, tick, *main_magnet, &ui),
                 None => info!("paste ignored: clipboard empty"),
             },
             WorkerMsg::DuplicateClip { clip } => {
-                duplicate_clip_and_publish(engine, &clip, *main_magnet, &editor_weak)
+                duplicate_clip_and_publish(engine, &clip, *main_magnet, &ui)
             }
             WorkerMsg::SetMainMagnet(enabled) => {
                 *main_magnet = enabled;
                 info!(enabled, "main-track magnet toggled");
                 if enabled {
-                    pack_main_track_and_publish(engine, &editor_weak);
+                    pack_main_track_and_publish(engine, &ui);
                 }
             }
             WorkerMsg::SetLinkage(enabled) => {
@@ -432,7 +448,7 @@ fn worker_loop(
                 info!(enabled, "linkage toggled");
             }
             WorkerMsg::SetTrackFlag { track, flag, value } => {
-                set_track_flag_and_publish(engine, &track, flag, value, &editor_weak)
+                set_track_flag_and_publish(engine, &track, flag, value, &ui)
             }
             WorkerMsg::Frame(_) => unreachable!("frames are handled by the drain below"),
         }
@@ -450,16 +466,43 @@ fn worker_loop(
                     }
                 }
                 render_frame(engine, tl_rate, &preview_weak, tick);
+                prefetch_ahead(engine, tl_rate, tick, &req_rx);
             }
             other => mutate(engine, &mut clipboard, &mut main_magnet, &mut linkage, other),
         }
     }
 }
 
+/// Playback read-ahead (playback roadmap Phase 2): with the queue idle after
+/// a rendered frame, warm the decode/cache path for the next few ticks so a
+/// GOP boundary's decode spike is paid *before* the playback cadence reaches
+/// it. Stops the instant a new message arrives (the real request supersedes
+/// the guess) and at the sequence end; a wrong guess (about-to-seek, reverse
+/// shuttle) only warms the cache.
+const READ_AHEAD_TICKS: i64 = 4;
+
+fn prefetch_ahead(
+    engine: &mut Engine,
+    tl_rate: Rational,
+    tick: i64,
+    req_rx: &Receiver<WorkerMsg>,
+) {
+    let end = engine.project().timeline().duration().value;
+    for ahead in 1..=READ_AHEAD_TICKS {
+        let target = tick + ahead;
+        if target >= end || !req_rx.is_empty() {
+            return;
+        }
+        // Failures are expected (gap in the timeline, mid-edit churn) and
+        // the real request will surface them if they matter.
+        let _ = engine.prefetch(RationalTime::new(target, tl_rate));
+    }
+}
+
 fn import_and_publish(
     engine: &mut Engine,
     path: &Path,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
     thumbs: &ThumbnailHandle,
     strips: &StripHandle,
 ) {
@@ -486,7 +529,7 @@ fn import_and_publish(
                 // media id alone; it needs the path on record (src/strips.rs).
                 strips.register_media(media.raw(), source.path().to_path_buf());
             }
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         Ok(other) => error!(path = %path.display(), "unexpected import outcome: {other:?}"),
         Err(e) => error!(path = %path.display(), "import failed: {e}"),
@@ -517,7 +560,7 @@ fn add_clip_and_publish(
     drop_row: i64,
     insert: bool,
     linkage: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let Some(media_id) = parse_raw_id(media).map(MediaId::from_raw) else {
         error!(media, "drop ignored: unparsable media id");
@@ -576,7 +619,7 @@ fn add_clip_and_publish(
                 engine.rollback_group();
             }
         }
-        publish_projection(engine, editor_weak);
+        publish_projection(engine, ui);
         return;
     }
     let desired = start_tick.max(0);
@@ -625,7 +668,7 @@ fn add_clip_and_publish(
             } else {
                 engine.rollback_group();
             }
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         // First-fit should have made the placement valid; the engine still
         // rejects atomically if not. Surface the reason and roll the group
@@ -633,12 +676,12 @@ fn add_clip_and_publish(
         Ok(other) => {
             error!(%media_id, "unexpected add-clip outcome: {other:?}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         Err(e) => {
             error!(%media_id, %track_id, start_tick = start_value, "add clip failed: {e}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
     }
 }
@@ -730,7 +773,7 @@ fn move_clip_and_publish(
     start_tick: i64,
     insert: bool,
     main_magnet: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
         error!(clip, "move ignored: unparsable clip id");
@@ -778,7 +821,7 @@ fn move_clip_and_publish(
                 engine.rollback_group();
             }
         }
-        publish_projection(engine, editor_weak);
+        publish_projection(engine, ui);
         return;
     }
 
@@ -830,12 +873,12 @@ fn move_clip_and_publish(
             } else {
                 engine.rollback_group();
             }
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         Ok(other) => {
             error!(%clip_id, "unexpected move-clip outcome: {other:?}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         // The drag resolver previewed a valid spot; the engine still rejects
         // atomically if the projection raced a concurrent edit. Rolling back
@@ -843,7 +886,7 @@ fn move_clip_and_publish(
         Err(e) => {
             error!(%clip_id, %to_track, start_tick, "move clip failed: {e}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
     }
 }
@@ -943,7 +986,7 @@ fn trim_clip_and_publish(
     start_tick: i64,
     duration_ticks: i64,
     linkage: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
         error!(clip, "trim ignored: unparsable clip id");
@@ -985,13 +1028,13 @@ fn trim_clip_and_publish(
         if let Err(e) = apply_edit(engine, EditCommand::TrimClip { clip: id, timeline }) {
             error!(%id, "trim clip failed: {e}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
             return;
         }
     }
     engine.commit_group();
     info!(%clip_id, start_tick, duration_ticks, linkage, "trimmed clip");
-    publish_projection(engine, editor_weak);
+    publish_projection(engine, ui);
 }
 
 /// Every clip sharing `clip`'s link group (including itself); just the clip
@@ -1019,7 +1062,7 @@ fn set_track_flag_and_publish(
     track: &str,
     flag: TrackFlag,
     value: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let Some(track_id) = parse_raw_id(track).map(TrackId::from_raw) else {
         error!(track, "set-track-flag ignored: unparsable track id");
@@ -1042,7 +1085,7 @@ fn set_track_flag_and_publish(
     match engine.apply(Command::Edit(command)) {
         Ok(ApplyOutcome::Edited(EditOutcome::UpdatedTrack(_))) => {
             info!(%track_id, value, "set track flag");
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         Ok(other) => error!(%track_id, "unexpected set-track-flag outcome: {other:?}"),
         Err(e) => error!(%track_id, "set track flag failed: {e}"),
@@ -1058,7 +1101,7 @@ fn remove_clips_and_publish(
     engine: &mut Engine,
     clips: &[String],
     main_magnet: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let main = main_video_track(engine);
     // Resolve every member up front: a single bad id voids the whole batch
@@ -1100,7 +1143,7 @@ fn remove_clips_and_publish(
         if let Err(e) = apply_edit(engine, command) {
             error!(%clip_id, "remove clip failed: {e}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
             return;
         }
     }
@@ -1113,7 +1156,7 @@ fn remove_clips_and_publish(
     }
     engine.commit_group();
     info!(count = targets.len(), "removed clips");
-    publish_projection(engine, editor_weak);
+    publish_projection(engine, ui);
 }
 
 /// Split a clip into two abutting clips at `at_tick`. The UI only offers the
@@ -1128,7 +1171,7 @@ fn split_clip_and_publish(
     clip: &str,
     at_tick: i64,
     linkage: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
         error!(clip, "split ignored: unparsable clip id");
@@ -1184,7 +1227,7 @@ fn split_clip_and_publish(
     }
     engine.commit_group();
     info!(%clip_id, ?tails, at_tick, "split clip");
-    publish_projection(engine, editor_weak);
+    publish_projection(engine, ui);
 }
 
 /// Land a group-drag batch. The resolver already validated every member
@@ -1198,7 +1241,7 @@ fn split_clip_and_publish(
 fn move_group_and_publish(
     engine: &mut Engine,
     moves: &[GroupMove],
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     // Resolve raw ids up front; any stale entry voids the batch.
     let mut resolved = Vec::with_capacity(moves.len());
@@ -1245,7 +1288,7 @@ fn move_group_and_publish(
         }) {
             error!(%clip_id, %to_track, "group move failed parking: {e}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
             return;
         }
         park += duration;
@@ -1258,7 +1301,7 @@ fn move_group_and_publish(
         }) {
             error!(%clip_id, %to_track, start_tick, "group move failed landing: {e}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
             return;
         }
     }
@@ -1271,7 +1314,7 @@ fn move_group_and_publish(
     }
     engine.commit_group();
     info!(count = resolved.len(), "moved clip group");
-    publish_projection(engine, editor_weak);
+    publish_projection(engine, ui);
 }
 
 /// Step the engine history (`redo == false` ⇒ undo). Publishes even on a
@@ -1279,11 +1322,11 @@ fn move_group_and_publish(
 fn history_step_and_publish(
     engine: &mut Engine,
     redo: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let stepped = if redo { engine.redo() } else { engine.undo() };
     info!(redo, stepped, "history step");
-    publish_projection(engine, editor_weak);
+    publish_projection(engine, ui);
 }
 
 /// Snapshot `clip` (raw id) for the clipboard.
@@ -1311,7 +1354,7 @@ fn paste_and_publish(
     content: &ClipboardClip,
     tick: i64,
     main_magnet: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let tl_rate = engine.project().timeline().frame_rate;
     let duration = content.duration_ticks.max(1);
@@ -1352,7 +1395,7 @@ fn paste_and_publish(
     {
         error!(%track, start_tick = start, "paste failed opening hole: {e}");
         engine.rollback_group();
-        publish_projection(engine, editor_weak);
+        publish_projection(engine, ui);
         return;
     }
 
@@ -1360,14 +1403,14 @@ fn paste_and_publish(
         Ok(clip_id) => {
             engine.commit_group();
             info!(%clip_id, %track, start_tick = start, ripple, "pasted clip");
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         // Rolling back removes a lane this paste just recreated (and closes
         // a hole the ripple shift just opened).
         Err(e) => {
             error!(%track, start_tick = start, "paste failed: {e}");
             engine.rollback_group();
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
     }
 }
@@ -1379,7 +1422,7 @@ fn duplicate_clip_and_publish(
     engine: &mut Engine,
     clip: &str,
     main_magnet: bool,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
         error!(clip, "duplicate ignored: unparsable clip id");
@@ -1418,7 +1461,7 @@ fn duplicate_clip_and_publish(
                 engine.rollback_group();
             }
         }
-        publish_projection(engine, editor_weak);
+        publish_projection(engine, ui);
         return;
     }
 
@@ -1432,7 +1475,7 @@ fn duplicate_clip_and_publish(
     match add_clip_content(engine, track, &content, duration_ticks, start) {
         Ok(copy_id) => {
             info!(%clip_id, %copy_id, %track, start_tick = start, "duplicated clip");
-            publish_projection(engine, editor_weak);
+            publish_projection(engine, ui);
         }
         Err(e) => error!(%clip_id, start_tick = start, "duplicate failed: {e}"),
     }
@@ -1443,7 +1486,7 @@ fn duplicate_clip_and_publish(
 /// One history group: a single undo restores the gaps.
 fn pack_main_track_and_publish(
     engine: &mut Engine,
-    editor_weak: &slint::Weak<EditorStore<'static>>,
+    ui: &UiSink,
 ) {
     let Some(track) = main_video_track(engine) else {
         return;
@@ -1477,7 +1520,7 @@ fn pack_main_track_and_publish(
             }) {
                 error!(%track, "magnet pack failed: {e}");
                 engine.rollback_group();
-                publish_projection(engine, editor_weak);
+                publish_projection(engine, ui);
                 return;
             }
             shifted_so_far += current - expected;
@@ -1486,7 +1529,7 @@ fn pack_main_track_and_publish(
     }
     // An already-packed lane records nothing (empty groups are dropped).
     engine.commit_group();
-    publish_projection(engine, editor_weak);
+    publish_projection(engine, ui);
 }
 
 /// The main track under CapCut's magnet: the *bottom* video lane (the engine
@@ -1631,11 +1674,17 @@ fn parse_raw_id(raw: &str) -> Option<u64> {
 /// the `!Send` Slint model types are constructed inside the event-loop closure.
 /// History availability rides along so the toolbar's undo/redo states always
 /// match the projection they were published with.
-fn publish_projection(engine: &Engine, editor_weak: &slint::Weak<EditorStore<'static>>) {
+///
+/// The audio mixer gets its own snapshot from the same chokepoint, so what
+/// playback *sounds* like always matches the project the UI shows (mute
+/// toggles, trims, moves — every mutation lands here).
+fn publish_projection(engine: &Engine, ui: &UiSink) {
+    ui.audio.publish_snapshot(audio_snapshot(engine));
+
     let project = engine.project().clone();
     let can_undo = engine.can_undo();
     let can_redo = engine.can_redo();
-    let editor_weak = editor_weak.clone();
+    let editor_weak = ui.editor.clone();
     if let Err(e) = slint::invoke_from_event_loop(move || {
         if let Some(store) = editor_weak.upgrade() {
             store.set_project(crate::projection::project_to_slint(&project));
@@ -1644,6 +1693,47 @@ fn publish_projection(engine: &Engine, editor_weak: &slint::Weak<EditorStore<'st
         }
     }) {
         error!("failed to publish project projection to UI: {e}");
+    }
+}
+
+/// Every audible clip on the timeline, in rational time: clips on unmuted
+/// audio lanes whose media carries an audio stream. Video lanes contribute
+/// no sound — imports land a linked audio companion for that (linkage), so
+/// audio is always *on* audio lanes, CapCut-style.
+fn audio_snapshot(engine: &Engine) -> AudioSnapshot {
+    let project = engine.project();
+    let timeline = project.timeline();
+    let fps = timeline.frame_rate;
+    let mut spans = Vec::new();
+    for track in timeline.tracks_ordered() {
+        if track.kind != TrackKind::Audio || track.muted {
+            continue;
+        }
+        for clip in track.clips_ordered() {
+            let Some(media_id) = clip.media() else {
+                continue;
+            };
+            let Some(media) = project.media(media_id) else {
+                continue;
+            };
+            if !media.has_audio {
+                continue;
+            }
+            let Some(source) = clip.source_range() else {
+                continue;
+            };
+            spans.push(AudioSpan {
+                path: media.path().to_path_buf(),
+                start_tick: clip.timeline.start.value,
+                end_tick: clip.timeline.end_tick(),
+                source_start: source.start.value,
+                source_rate: (source.start.rate.num, source.start.rate.den),
+            });
+        }
+    }
+    AudioSnapshot {
+        fps: (fps.num, fps.den),
+        spans,
     }
 }
 

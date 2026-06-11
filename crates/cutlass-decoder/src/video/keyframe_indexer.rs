@@ -222,6 +222,26 @@ impl KeyframeIndex {
             .map(|kf| self.ticks_to_av_time_base(kf))
     }
 
+    /// Convert `value` frames at `fps_num/fps_den` frames-per-second into
+    /// stream `time_base` ticks, exactly (i128, truncating toward zero).
+    ///
+    /// The hot-path conversion for callers that hold rational timestamps:
+    /// hopping through [`Duration`] instead truncates twice, which can land a
+    /// target that is *exactly* on a frame boundary one tick below the
+    /// frame's true PTS — a wrong cache key and a needlessly early decode
+    /// target. Returns 0 for non-positive rates.
+    pub fn rate_ticks_to_stream_ticks(&self, value: i64, fps_num: i32, fps_den: i32) -> i64 {
+        let tb_num = i128::from(self.time_base.numerator());
+        let tb_den = i128::from(self.time_base.denominator());
+        if tb_num <= 0 || tb_den <= 0 || fps_num <= 0 || fps_den <= 0 {
+            return 0;
+        }
+        // seconds = value · fps_den / fps_num; ticks = seconds · tb_den / tb_num.
+        let ticks = i128::from(value) * i128::from(fps_den) * tb_den
+            / (i128::from(fps_num) * tb_num);
+        ticks.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+    }
+
     // ---- display / UI only: NOT for seek decisions -------------------------
 
     /// Keyframe presentation times as wall-clock [`Duration`]s, ascending.
@@ -499,6 +519,35 @@ mod tests {
             assert_eq!(gop.start, kf);
             assert!(gop.contains(kf));
         }
+    }
+
+    #[test]
+    fn rate_ticks_to_stream_ticks_is_exact_where_duration_hop_truncates() {
+        // mp4-style time base: 12288 ticks/s, 24fps ⇒ 512 ticks per frame.
+        let index = KeyframeIndex::from_keyframes(tb(1, 12288), vec![0]);
+        assert_eq!(index.rate_ticks_to_stream_ticks(1, 24, 1), 512);
+        assert_eq!(index.rate_ticks_to_stream_ticks(120, 24, 1), 61_440);
+
+        // The Duration hop loses a tick on the same boundary (1/24s →
+        // 41666666ns → 511.99…): the bug this conversion exists to avoid.
+        let via_duration = index.duration_to_ticks(Duration::from_nanos(41_666_666));
+        assert_eq!(via_duration, 511);
+    }
+
+    #[test]
+    fn rate_ticks_to_stream_ticks_ntsc_is_exact() {
+        // 30000/1001 fps against a 1/30000 time base: 1001 ticks per frame.
+        let index = KeyframeIndex::from_keyframes(tb(1, 30_000), vec![0]);
+        assert_eq!(index.rate_ticks_to_stream_ticks(1, 30_000, 1001), 1001);
+        assert_eq!(index.rate_ticks_to_stream_ticks(30, 30_000, 1001), 30_030);
+    }
+
+    #[test]
+    fn rate_ticks_to_stream_ticks_rejects_invalid_rates() {
+        let index = KeyframeIndex::from_keyframes(tb(1, 12288), vec![0]);
+        assert_eq!(index.rate_ticks_to_stream_ticks(10, 0, 1), 0);
+        assert_eq!(index.rate_ticks_to_stream_ticks(10, 24, 0), 0);
+        assert_eq!(index.rate_ticks_to_stream_ticks(10, -24, 1), 0);
     }
 
     #[test]

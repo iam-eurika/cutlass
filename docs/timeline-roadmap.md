@@ -104,7 +104,8 @@ The next gesture CapCut users reach for.
       the viewport and capped.
 - [x] Click/drag on the ruler moves the playhead (replaced the temporary
       toolbar slider as the scrub control; playhead changes funnel
-      through one `TimelinePanel` watcher into coalesced frame requests).
+      through one watcher into coalesced frame requests — moved to
+      window scope when playback landed, see `playback-roadmap.md`).
 - [x] Scrubbing snaps the playhead to clip edges / tick 0 when the magnet
       is on (same resolver as clip drags, zero-width span).
 - [x] Keyboard: ←/→ frame step, Home/End.
@@ -273,7 +274,8 @@ gestures is a polish item for later.
 
 Deliberate gap: **mute is persisted + shown but silent-in-name only** — there
 is no audio playback path yet (`Track.muted` is honored by no one), so the
-speaker toggle is a stored flag awaiting the mixer.
+speaker toggle is a stored flag awaiting the mixer (playback roadmap
+Phase 3, see `playback-roadmap.md`).
 
 ## Phase 10 — Multi-clip & linking ✅
 

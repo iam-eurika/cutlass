@@ -56,6 +56,10 @@ pub struct Decoder {
     /// Packet the demuxer produced but the decoder couldn't accept yet (`EAGAIN`).
     pending_packet: Option<Packet>,
     indexer: KeyframeIndex,
+    /// PTS of the last frame this decoder emitted — the roll-forward
+    /// decision point for [`frame_at`](Self::frame_at). Cleared whenever
+    /// decoder buffers flush (`seek`, `set_skip_frame`).
+    last_pts: Option<i64>,
     _hw_device: Option<*mut ffmpeg_next::ffi::AVBufferRef>,
 }
 
@@ -132,6 +136,7 @@ impl Decoder {
             sw_frame: Video::empty(),
             pending_packet: None,
             indexer,
+            last_pts: None,
             _hw_device: hw_device,
         })
     }
@@ -148,7 +153,12 @@ impl Decoder {
 
     /// Seek to the keyframe at or before `target` and flush decoder buffers.
     pub fn seek(&mut self, target: Duration) -> Result<(), DecodeError> {
-        let target_ticks = self.indexer.duration_to_ticks(target);
+        self.seek_ticks(self.indexer.duration_to_ticks(target))
+    }
+
+    /// [`seek`](Self::seek) with the target already in stream `time_base`
+    /// ticks — the exact-math entry point (no `Duration` truncation).
+    pub fn seek_ticks(&mut self, target_ticks: i64) -> Result<(), DecodeError> {
         let ts = self
             .indexer
             .seek_us_at_or_before(target_ticks)
@@ -157,6 +167,7 @@ impl Decoder {
         self.decoder.flush();
         self.demuxer_done = false;
         self.pending_packet = None;
+        self.last_pts = None;
         debug!(target_micros = ts, target_ticks, "seeked to keyframe");
         Ok(())
     }
@@ -164,8 +175,47 @@ impl Decoder {
     /// Seek and decode forward to the first frame at or after `target`.
     pub fn seek_to_frame(&mut self, target: Duration) -> Result<Option<DecodedFrame>, DecodeError> {
         self.seek(target)?;
-
         let target_ticks = self.indexer.duration_to_ticks(target);
+        self.walk_to_frame(target_ticks)
+    }
+
+    /// Decode the first frame at or after `target`, reusing the decoder's
+    /// position when it helps — the sequential-playback fast path.
+    pub fn frame_at(&mut self, target: Duration) -> Result<Option<DecodedFrame>, DecodeError> {
+        self.frame_at_ticks(self.indexer.duration_to_ticks(target))
+    }
+
+    /// [`frame_at`](Self::frame_at) with the target already in stream
+    /// `time_base` ticks (see
+    /// [`KeyframeIndex::rate_ticks_to_stream_ticks`]).
+    ///
+    /// When the target lies *ahead* of the last emitted frame and that frame
+    /// sits inside the target's GOP, every frame in between has to be decoded
+    /// regardless, so this rolls forward instead of re-seeking (a seek would
+    /// flush and re-decode the whole GOP prefix: O(GOP²) per GOP across a
+    /// playback run). Anything else — backward targets, GOP jumps, a fresh
+    /// decoder — falls back to seek + walk, byte-identical to
+    /// [`seek_to_frame`](Self::seek_to_frame).
+    pub fn frame_at_ticks(
+        &mut self,
+        target_ticks: i64,
+    ) -> Result<Option<DecodedFrame>, DecodeError> {
+        let roll = self.last_pts.is_some_and(|last_pts| {
+            target_ticks > last_pts
+                && self
+                    .indexer
+                    .gop_containing(target_ticks)
+                    .is_some_and(|gop| gop.contains(last_pts))
+        });
+        if !roll {
+            self.seek_ticks(target_ticks)?;
+        }
+        self.walk_to_frame(target_ticks)
+    }
+
+    /// Decode forward from the current position to the first frame with
+    /// `pts >= target_ticks`, recording it as the roll-forward anchor.
+    fn walk_to_frame(&mut self, target_ticks: i64) -> Result<Option<DecodedFrame>, DecodeError> {
         while let Some(frame) = self.next_video_frame()? {
             let pts = frame_pts(&frame).unwrap_or(i64::MIN);
             if pts >= target_ticks {
@@ -175,7 +225,9 @@ impl Decoder {
                 } else {
                     &frame
                 };
-                return Ok(Some(DecodedFrame::from_ffmpeg(cpu)?));
+                let decoded = DecodedFrame::from_ffmpeg(cpu)?;
+                self.last_pts = Some(decoded.pts_ticks);
+                return Ok(Some(decoded));
             }
         }
         Ok(None)
@@ -187,6 +239,7 @@ impl Decoder {
         }
 
         self.decoder.flush();
+        self.last_pts = None;
     }
     pub fn seek_dirty_to_frame(
         &mut self,
@@ -195,7 +248,7 @@ impl Decoder {
         let target_ticks = self.indexer.duration_to_ticks(target);
         self.seek(target)?;
         self.set_skip_frame(Discard::NonKey);
-        if let Some(frame) = self.seek_dirty_walk_to_target(target_ticks)? {
+        if let Some(frame) = self.walk_to_frame(target_ticks)? {
             self.set_skip_frame(Discard::Default);
             return Ok(Some(frame));
         }
@@ -203,26 +256,7 @@ impl Decoder {
         // full decode from a fresh seek.
         self.set_skip_frame(Discard::Default);
         self.seek(target)?;
-        self.seek_dirty_walk_to_target(target_ticks)
-    }
-
-    fn seek_dirty_walk_to_target(
-        &mut self,
-        target_ticks: i64,
-    ) -> Result<Option<DecodedFrame>, DecodeError> {
-        while let Some(frame) = self.next_video_frame()? {
-            let pts = frame_pts(&frame).unwrap_or(i64::MIN);
-            if pts >= target_ticks {
-                let cpu = if is_hardware_pixel_format(frame.format()) {
-                    transfer_to_cpu(&frame, &mut self.sw_frame)?;
-                    &self.sw_frame
-                } else {
-                    &frame
-                };
-                return Ok(Some(DecodedFrame::from_ffmpeg(cpu)?));
-            }
-        }
-        Ok(None)
+        self.walk_to_frame(target_ticks)
     }
 
     pub fn next_video_frame(&mut self) -> Result<Option<Video>, DecodeError> {
@@ -263,6 +297,9 @@ impl Decoder {
                         hw = self.info.hw_accel.name(),
                         "decoded frame"
                     );
+                    // Keep the roll-forward anchor honest when callers mix
+                    // sequential pulls with frame_at on one decoder.
+                    self.last_pts = Some(decoded.pts_ticks);
                     return Ok(Some(decoded));
                 }
                 Err(FfmpegError::Eof) => return Ok(None),
@@ -478,6 +515,74 @@ mod tests {
         let f0 = dec.next_frame().expect("decode").expect("frame 0");
         let f1 = dec.next_frame().expect("decode").expect("frame 1");
         assert!(f1.pts_ticks >= f0.pts_ticks);
+    }
+
+    #[test]
+    fn frame_at_matches_seek_to_frame_on_sequential_targets() {
+        let Some(path) = any_video_asset() else {
+            return;
+        };
+        let opts = DecodeOptions::default().hw_accel(HwAccel::None);
+        let mut rolled = Decoder::open_with(&path, opts).expect("open rolled");
+        let mut seeked = Decoder::open_with(&path, opts).expect("open seeked");
+
+        // ~2s of sequential 30fps playback targets, plus fractional offsets
+        // (a 24fps timeline over mismatched-rate media never lands exactly
+        // on source frame times).
+        for i in 0..60_u64 {
+            let target = Duration::from_micros(i * 33_333 + 7);
+            let a = rolled.frame_at(target).expect("frame_at").expect("frame");
+            let b = seeked
+                .seek_to_frame(target)
+                .expect("seek_to_frame")
+                .expect("frame");
+            assert_eq!(a.pts_ticks, b.pts_ticks, "diverged at target {i}");
+        }
+    }
+
+    #[test]
+    fn frame_at_handles_backward_and_repeated_targets() {
+        let Some(path) = any_video_asset() else {
+            return;
+        };
+        let opts = DecodeOptions::default().hw_accel(HwAccel::None);
+        let mut rolled = Decoder::open_with(&path, opts).expect("open rolled");
+        let mut seeked = Decoder::open_with(&path, opts).expect("open seeked");
+
+        // Forward, repeat, backward, forward jump — the scrub pattern.
+        for ms in [0_u64, 500, 500, 100, 1500, 200] {
+            let target = Duration::from_millis(ms);
+            let a = rolled.frame_at(target).expect("frame_at").expect("frame");
+            let b = seeked
+                .seek_to_frame(target)
+                .expect("seek_to_frame")
+                .expect("frame");
+            assert_eq!(a.pts_ticks, b.pts_ticks, "diverged at {ms}ms");
+        }
+    }
+
+    #[test]
+    fn frame_at_stays_correct_after_sequential_pulls() {
+        let Some(path) = any_video_asset() else {
+            return;
+        };
+        let opts = DecodeOptions::default().hw_accel(HwAccel::None);
+        let mut dec = Decoder::open_with(&path, opts).expect("open");
+        let mut reference = Decoder::open_with(&path, opts).expect("open reference");
+
+        // Advance the decoder position outside frame_at...
+        for _ in 0..5 {
+            dec.next_frame().expect("decode").expect("frame");
+        }
+        // ...then ask for a target the position may have passed; the answer
+        // must match a clean seek.
+        let target = Duration::from_millis(50);
+        let a = dec.frame_at(target).expect("frame_at").expect("frame");
+        let b = reference
+            .seek_to_frame(target)
+            .expect("seek")
+            .expect("frame");
+        assert_eq!(a.pts_ticks, b.pts_ticks);
     }
 
     #[test]

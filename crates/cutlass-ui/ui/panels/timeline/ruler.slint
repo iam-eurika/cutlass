@@ -71,6 +71,41 @@ export component Ruler inherits Rectangle {
             0).snapped-start-value);
     }
 
+    // --- in/out playback range (playback roadmap Phase 4) -------------
+    // Drawn under the marks: a translucent band between the in/out marks
+    // (I / O keys at the playhead, Alt+X clears) plus an edge pin per set
+    // mark, in the same accent the toolbar toggles latch with.
+
+    private property <length> range-in-x:
+        TimelineStore.range-in-tick * zoom * 1px + scroll-x;
+    private property <length> range-out-x:
+        TimelineStore.range-out-tick * zoom * 1px + scroll-x;
+
+    if TimelineStore.range-in-tick >= 0
+        && TimelineStore.range-out-tick > TimelineStore.range-in-tick: Rectangle {
+        x: range-in-x;
+        y: 0;
+        width: range-out-x - range-in-x;
+        height: parent.height;
+        background: #00E5C71A;
+    }
+
+    if TimelineStore.range-in-tick >= 0: Rectangle {
+        x: range-in-x;
+        y: 0;
+        width: 2px;
+        height: parent.height;
+        background: #00E5C7;
+    }
+
+    if TimelineStore.range-out-tick >= 0: Rectangle {
+        x: range-out-x - 2px;
+        y: 0;
+        width: 2px;
+        height: parent.height;
+        background: #00E5C7;
+    }
+
     // One zero-width anchor per mark; the dot or label hangs off it,
     // centered on the position (children are not clipped to parents).
     for tick in tick-model: Rectangle {

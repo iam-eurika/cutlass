@@ -1,6 +1,6 @@
 //! Timeline layer resolution and decode helpers for GPU compositing.
 
-use std::time::Duration;
+use std::time::Instant;
 
 use cutlass_cache::{FrameCache, SourceFingerprint};
 use cutlass_compositor::{CompositeLayer, CompositorConfig};
@@ -120,20 +120,39 @@ fn decode_media_frame(
 
     let fingerprint = SourceFingerprint::from_path(media.path())?;
     let source_id = fingerprint.id();
-    let target = rational_time_to_duration(source_time);
 
-    let (decoder, _index) = pool.decoder_and_index(media_id, media.path())?;
-    let pts = _index.duration_to_ticks(target);
+    let (decoder, index) = pool.decoder_and_index(media_id, media.path())?;
+    // Exact rational → stream-tick conversion. The old `RationalTime →
+    // Duration → ticks` path truncated twice, landing rate-matched targets
+    // one tick below the frame's stored PTS — a guaranteed cache miss on
+    // every revisit (measured: 1080p24 media on the 24fps timeline only hit
+    // on ticks where the nanosecond hop happened to be exact).
+    let target_ticks = index.rate_ticks_to_stream_ticks(
+        source_time.value,
+        source_time.rate.num,
+        source_time.rate.den,
+    );
 
+    let start = Instant::now();
     if let Some(cache) = cache
-        && let Some(packed) = cache.get(source_id, pts)
+        && let Some(packed) = cache.get(source_id, target_ticks)
     {
+        debug!(
+            us = start.elapsed().as_micros() as u64,
+            pts = target_ticks,
+            "preview frame cache hit"
+        );
         return crate::frame::unpack_yuv420p(&packed, media.width, media.height);
     }
 
     let decoded = decoder
-        .seek_to_frame(target)?
+        .frame_at_ticks(target_ticks)?
         .ok_or_else(|| EngineError::Preview("decoder returned no frame".into()))?;
+    debug!(
+        ms = start.elapsed().as_secs_f64() * 1000.0,
+        pts = decoded.pts_ticks,
+        "decoded media frame"
+    );
 
     if let Some(cache) = cache
         && let Ok(packed) = crate::frame::pack_yuv420p(&decoded)
@@ -218,16 +237,6 @@ fn sample_bilinear(bytes: &[u8], w: u32, h: u32, x: f32, y: f32) -> [u8; 4] {
 
 fn to_even(v: u32) -> u32 {
     if v.is_multiple_of(2) { v } else { v + 1 }
-}
-
-fn rational_time_to_duration(time: RationalTime) -> Duration {
-    let num = i128::from(time.rate.num);
-    let den = i128::from(time.rate.den);
-    if num <= 0 || den <= 0 || time.value <= 0 {
-        return Duration::ZERO;
-    }
-    let nanos = (i128::from(time.value) * 1_000_000_000 * den) / num;
-    Duration::from_nanos(nanos.clamp(0, i128::from(u64::MAX)) as u64)
 }
 
 #[cfg(test)]

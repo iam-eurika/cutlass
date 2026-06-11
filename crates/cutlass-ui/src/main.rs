@@ -1,3 +1,4 @@
+mod audio;
 mod inspector;
 mod preview;
 mod preview_worker;
@@ -9,6 +10,7 @@ mod strips;
 mod thumbnails;
 mod timecode;
 mod timeline;
+mod transport;
 
 use slint::BackendSelector;
 use slint::Model;
@@ -59,12 +61,20 @@ fn main() -> Result<(), slint::PlatformError> {
     let strip_worker = strips::StripWorker::spawn(app.global::<StripBackend>().as_weak())
         .map_err(slint::PlatformError::from)?;
 
+    // Audio playback (playback roadmap Phase 3): device output + mixer
+    // thread. The `!Send` cpal stream lives here on the main thread for the
+    // app's lifetime; handles go to the worker (snapshots) and the
+    // transport callbacks (clock + play/pause). A machine without an
+    // output device degrades to the wall-clock transport, silent.
+    let audio_system = audio::AudioSystem::start();
+
     let (preview_worker, session) = preview_worker::PreviewWorker::spawn(
         EngineConfig::default(),
         preview_store_weak,
         editor_store_weak,
         thumbnail_worker.handle(),
         strip_worker.handle(),
+        audio_system.handle(),
     )
     .map_err(slint::PlatformError::from)?;
 
@@ -130,6 +140,41 @@ fn main() -> Result<(), slint::PlatformError> {
 
     app.global::<RulerBackend>().on_ticks(|scroll_x, viewport_w, zoom, fps_num, fps_den| {
         ruler::ticks_model(scroll_x, viewport_w, zoom, fps_num, fps_den)
+    });
+
+    // Playback clock (playback roadmap Phases 1 + 3): at speed 1/1 with a
+    // live output device, *consumed audio frames* are the clock — video
+    // follows the sound card, which is what keeps A/V locked. Shuttle
+    // speeds and deviceless machines use the scaled wall clock instead.
+    let clock_audio = audio_system.handle();
+    app.global::<TransportBackend>().on_playback_tick(
+        move |anchor_tick, anchor_ms, now_ms, fps_num, fps_den, speed_num, speed_den| {
+            if clock_audio.active() && speed_num == 1 && speed_den == 1 {
+                clock_audio
+                    .current_tick(fps_num, fps_den)
+                    .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+            } else {
+                transport::playback_tick_scaled(
+                    anchor_tick, anchor_ms, now_ms, fps_num, fps_den, speed_num, speed_den,
+                )
+            }
+        },
+    );
+
+    // Transport intent → audio engine. Play doubles as the mid-playback
+    // seek; non-1x speeds play muted (varispeed audio is a later phase).
+    let play_audio = audio_system.handle();
+    app.global::<TransportBackend>().on_transport_play(move |tick, speed_num, speed_den| {
+        if speed_num == 1 && speed_den == 1 {
+            play_audio.play(i64::from(tick));
+        } else {
+            play_audio.pause();
+        }
+    });
+
+    let pause_audio = audio_system.handle();
+    app.global::<TransportBackend>().on_transport_pause(move || {
+        pause_audio.pause();
     });
 
     // Timeline clip content tiles (Phase 8). Cache lookups on the UI thread;

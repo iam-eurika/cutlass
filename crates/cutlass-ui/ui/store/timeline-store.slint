@@ -11,6 +11,24 @@ import { SelectionUpdate } from "../lib/selection-backend.slint";
 export global TimelineStore {
     in-out property <float> zoom: 3;
     in-out property <int> playhead-tick: 0;
+    // Playback transport (playback roadmap Phase 1): true while the
+    // window-level clock Timer advances the playhead. Session state, not
+    // project state — flip it only through TimelineActions.play/pause so
+    // the clock anchor stays consistent.
+    in-out property <bool> playing: false;
+    // Playback speed as a signed rational (JKL shuttle, Phase 4). 1/1 is
+    // normal forward; negative num is reverse. Audio plays only at 1/1 —
+    // other speeds run muted on the wall clock. Set only through
+    // TimelineActions (play resets it, shuttle-* steps it).
+    in-out property <int> play-speed-num: 1;
+    in-out property <int> play-speed-den: 1;
+    // Loop playback (Phase 4): reaching the end bound jumps back to the
+    // start bound instead of parking-and-pausing.
+    in-out property <bool> loop-enabled: false;
+    // In/out range marks in sequence ticks, -1 = unset (Phase 4). With
+    // both set (in < out), play and loop confine to [in, out).
+    in-out property <int> range-in-tick: -1;
+    in-out property <int> range-out-tick: -1;
     in-out property <string> selected-track-id: "";
     in-out property <string> selected-clip-id: "";
     // Full multi-selection (shift-click, marquee, link groups). Replaced

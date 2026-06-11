@@ -1,9 +1,13 @@
-//! Audio decode for waveform peak extraction.
+//! Audio decode: waveform peak extraction and clocked playback streaming.
 //!
-//! Decodes the best audio stream, downmixes to mono f32 via swresample, and
-//! reduces the samples to per-bucket peak amplitudes — enough for a static
-//! waveform image. Playback decode (clocked, seekable) is a separate concern
-//! and will live here later.
+//! Peaks: decodes the best audio stream, downmixes to mono f32 via
+//! swresample, and reduces the samples to per-bucket peak amplitudes —
+//! enough for a static waveform image. Playback decode (clocked, seekable)
+//! lives in [`playback`].
+
+mod playback;
+
+pub use playback::{AudioReader, CHANNELS as AUDIO_CHANNELS};
 
 use std::path::Path;
 
