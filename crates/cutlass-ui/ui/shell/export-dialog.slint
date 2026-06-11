@@ -134,7 +134,7 @@ export component ExportDialog inherits Rectangle {
                     label: "Browse…";
                     enabled: root.configuring;
                     clicked => {
-                        ExportBackend.output-path = ExportBackend.pick-output(ExportBackend.output-path);
+                        ExportBackend.browse-output-clicked();
                     }
                 }
             }

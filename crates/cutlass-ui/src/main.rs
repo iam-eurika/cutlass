@@ -28,6 +28,38 @@ slint::include_modules!();
 /// Prefilled export destination: ~/Movies when present, else the home
 /// directory, else the working directory. Only seeds the save panel — the
 /// user picks the real spot from the dialog.
+/// macOS winit 0.30 panics if a modal NSOpenPanel/NSSavePanel runs while it is
+/// still dispatching another event (common after drag/drop mouse-up). Run dialogs
+/// on the next event-loop turn instead.
+fn defer_main_thread(f: impl FnOnce() + Send + 'static) {
+    slint::Timer::single_shot(std::time::Duration::ZERO, f);
+}
+
+fn pick_import_path() -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter(
+            "Media",
+            &["mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac", "flac", "ogg"],
+        )
+        .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
+        .add_filter("Audio", &["mp3", "wav", "m4a", "aac", "flac", "ogg"])
+        .pick_file()
+}
+
+fn pick_export_path(current: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut dialog = rfd::FileDialog::new().add_filter("MP4 video", &["mp4"]);
+    if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
+        dialog = dialog.set_directory(dir);
+    }
+    dialog = dialog.set_file_name(
+        current
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "untitled.mp4".into()),
+    );
+    dialog.save_file()
+}
+
 fn default_export_path() -> SharedString {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -203,20 +235,12 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let import_handle = preview_worker.handle();
     editor.on_on_import_clicked(move || {
-        // Native picker is modal and must run on the main thread — which is
-        // exactly where this Slint callback fires. The engine work happens off
-        // this thread once we hand the path to the worker.
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter(
-                "Media",
-                &["mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac", "flac", "ogg"],
-            )
-            .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
-            .add_filter("Audio", &["mp3", "wav", "m4a", "aac", "flac", "ogg"])
-            .pick_file()
-        {
-            import_handle.import(path);
-        }
+        let import_handle = import_handle.clone();
+        defer_main_thread(move || {
+            if let Some(path) = pick_import_path() {
+                import_handle.import(path);
+            }
+        });
     });
 
     // --- export (title bar → dialog → engine thread → export thread) -----
@@ -224,25 +248,21 @@ fn main() -> Result<(), slint::PlatformError> {
     let export_backend = app.global::<ExportBackend>();
     export_backend.set_output_path(default_export_path());
 
-    // Native save panel, seeded from the previous choice. Modal on the main
-    // thread (same policy as the import picker); returns the current path
-    // unchanged when dismissed so the dialog binding is a plain assignment.
-    export_backend.on_pick_output(|current| {
-        let current = std::path::Path::new(current.as_str());
-        let mut dialog = rfd::FileDialog::new().add_filter("MP4 video", &["mp4"]);
-        if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
-            dialog = dialog.set_directory(dir);
-        }
-        dialog = dialog.set_file_name(
-            current
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "untitled.mp4".into()),
-        );
-        match dialog.save_file() {
-            Some(path) => path.to_string_lossy().into_owned().into(),
-            None => current.to_string_lossy().into_owned().into(),
-        }
+    let export_backend_weak = export_backend.as_weak();
+    export_backend.on_browse_output_clicked(move || {
+        let backend_weak = export_backend_weak.clone();
+        let current = backend_weak
+            .upgrade()
+            .map(|b| b.get_output_path().to_string())
+            .unwrap_or_default();
+        defer_main_thread(move || {
+            let current = std::path::PathBuf::from(current);
+            if let Some(path) = pick_export_path(&current) {
+                if let Some(backend) = backend_weak.upgrade() {
+                    backend.set_output_path(path.to_string_lossy().into_owned().into());
+                }
+            }
+        });
     });
 
     let export_handle = preview_worker.handle();
