@@ -1,3 +1,5 @@
+import { TrackKind } from "models/index.slint";
+
 // App-wide window/view state. Anything that affects the whole shell
 // (chrome visibility, full-window overlays, …) lives here rather than
 // inside any one panel's state global.
@@ -24,6 +26,13 @@ export global AppState {
     // press, consumed by the timeline's drop handler.
     in-out property <string> library-drag-media-id: "";
     in-out property <int> library-drag-duration-ticks: 0;
+    // Lane kind the dragged tile targets: video for media, text/sticker for
+    // generated tiles. Drives the kind-aware drop resolver (src/snap.rs).
+    in-out property <TrackKind> library-drag-lane-kind: TrackKind.video;
+    // Generator catalog key for a generated-tile drag ("text" | "solid" |
+    // "rect" | "ellipse"); "" while dragging imported media. Selects which
+    // drop callback the timeline fires on release.
+    in-out property <string> library-drag-generator: "";
     in-out property <length> library-drag-w: 0px;
     in-out property <length> library-drag-h: 0px;
     // Cursor offset within the library tile at press — used to anchor the square ghost.

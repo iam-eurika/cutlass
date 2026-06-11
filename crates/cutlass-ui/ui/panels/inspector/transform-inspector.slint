@@ -1,0 +1,238 @@
+import { Slider, LineEdit } from "std-widgets.slint";
+import { CutlassText } from "../../components/index.slint";
+import { AppStore, EditorStore, TimelineStore, PreviewStore } from "../../store/index.slint";
+import { Clip } from "../../models/index.slint";
+
+// One transform property row: slider for coarse motion, numeric entry for
+// precision, double-click the label to reset (CapCut). Works in display
+// units (px / % / °); the parent converts to and from the normalized model
+// space. Slider motion previews (uncommitted worker override), slider
+// release / Enter / reset commit one undoable SetClipTransform.
+component TransformRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <float> value;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <string> suffix;
+    in property <float> reset-value: 0;
+
+    callback preview(value: float);
+    callback commit(value: float);
+
+    spacing: AppStore.theme.metrics.spacing.md;
+
+    // The slider assigns `value` internally on drag and the box assigns
+    // `text` on typing — both would permanently drop a plain binding, so
+    // external updates (projection republish, live gestures, selection
+    // changes) re-sync through this watcher instead.
+    changed value => {
+        sl.value = clamp(root.value, root.minimum, root.maximum);
+        num.text = Math.round(root.value) + "";
+    }
+
+    TouchArea {
+        width: 80px;
+        mouse-cursor: MouseCursor.pointer;
+        double-clicked => {
+            root.commit(root.reset-value);
+        }
+
+        CutlassText {
+            width: 100%;
+            height: 100%;
+            text: root.label;
+            style: AppStore.theme.typography.label;
+            foreground: AppStore.theme.text.secondary;
+            vertical-alignment: TextVerticalAlignment.center;
+            overflow: TextOverflow.elide;
+        }
+    }
+
+    sl := Slider {
+        horizontal-stretch: 1;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        value: clamp(root.value, root.minimum, root.maximum);
+
+        changed(v) => {
+            root.preview(v);
+        }
+        released(v) => {
+            root.commit(v);
+        }
+    }
+
+    num := LineEdit {
+        width: 56px;
+        horizontal-alignment: TextHorizontalAlignment.right;
+        text: Math.round(root.value) + "";
+
+        accepted(entered) => {
+            if (entered.is-float()) {
+                root.commit(entered.to-float());
+            }
+            // Re-sync the display whether or not the entry committed
+            // (rejected parse, clamped value, or no-op).
+            self.text = Math.round(root.value) + "";
+        }
+    }
+
+    CutlassText {
+        width: 18px;
+        height: 100%;
+        text: root.suffix;
+        style: AppStore.theme.typography.label;
+        foreground: AppStore.theme.text.muted;
+        vertical-alignment: TextVerticalAlignment.center;
+    }
+}
+
+// CapCut's "Basic" transform block (preview roadmap Phase 5): numeric truth
+// for what the mouse does in the preview. Reads live values mid-gesture
+// from PreviewStore (the projection is frozen during one), and its own
+// slider drags ride the same override-then-commit pipeline as preview
+// gestures — so the preview frame and selection box follow the sliders.
+export component TransformInspector inherits VerticalLayout {
+    // Named `model` — `clip` is a built-in boolean on Slint elements.
+    in property <Clip> model;
+
+    spacing: AppStore.theme.metrics.spacing.lg;
+    alignment: LayoutAlignment.start;
+
+    private property <float> canvas-w: EditorStore.project.sequence.width / 1px;
+    private property <float> canvas-h: EditorStore.project.sequence.height / 1px;
+
+    // Mid-gesture the projection still holds committed values; the live
+    // resolution is mirrored in PreviewStore by whoever drives the gesture.
+    private property <bool> live: PreviewStore.gesture-active
+        && PreviewStore.gesture-clip == model.id
+        && PreviewStore.gesture.valid;
+    private property <float> pos-x: live ? PreviewStore.gesture.position-x : model.transform-position-x;
+    private property <float> pos-y: live ? PreviewStore.gesture.position-y : model.transform-position-y;
+    private property <float> scale-v: live ? PreviewStore.gesture.scale : model.transform-scale;
+    private property <float> rot-v: live ? PreviewStore.gesture.rotation : model.transform-rotation;
+    private property <float> opacity-v: live ? PreviewStore.gesture.opacity : model.transform-opacity;
+
+    // One funnel for every row, in normalized model units. Previews render
+    // as an uncommitted worker override (no history, projection frozen);
+    // commits land one undoable SetClipTransform — unless nothing changed
+    // (slider released without motion, Enter on the same value, reset of an
+    // already-default property), which only drops any active override.
+    function apply(px: float, py: float, s: float, r: float, o: float, commit: bool) {
+        if (commit) {
+            if (px == model.transform-position-x
+                && py == model.transform-position-y
+                && s == model.transform-scale
+                && r == model.transform-rotation
+                && o == model.transform-opacity) {
+                if (PreviewStore.gesture-active && PreviewStore.gesture-clip == model.id) {
+                    EditorStore.on-preview-override-cleared(TimelineStore.playhead-tick);
+                }
+            } else {
+                EditorStore.on-clip-transform-committed(
+                    model.id, px, py, s, r, o, TimelineStore.playhead-tick);
+            }
+            PreviewStore.gesture-active = false;
+        } else {
+            PreviewStore.gesture-clip = model.id;
+            PreviewStore.gesture = {
+                valid: true,
+                moved: true,
+                position-x: px,
+                position-y: py,
+                scale: s,
+                rotation: r,
+                opacity: o,
+                snap-h: false,
+                snap-v: false,
+                guide-x: 0,
+                guide-y: 0,
+            };
+            PreviewStore.gesture-active = true;
+            EditorStore.on-preview-transform-overridden(
+                model.id, px, py, s, r, o, TimelineStore.playhead-tick);
+        }
+    }
+
+    CutlassText {
+        text: "Transform";
+        style: AppStore.theme.typography.heading-sm;
+    }
+
+    TransformRow {
+        label: "Position X";
+        suffix: "px";
+        value: root.pos-x * root.canvas-w;
+        minimum: -root.canvas-w;
+        maximum: root.canvas-w;
+        reset-value: 0;
+        preview(v) => {
+            root.apply(v / root.canvas-w, root.pos-y, root.scale-v, root.rot-v, root.opacity-v, false);
+        }
+        commit(v) => {
+            root.apply(v / root.canvas-w, root.pos-y, root.scale-v, root.rot-v, root.opacity-v, true);
+        }
+    }
+
+    TransformRow {
+        label: "Position Y";
+        suffix: "px";
+        value: root.pos-y * root.canvas-h;
+        minimum: -root.canvas-h;
+        maximum: root.canvas-h;
+        reset-value: 0;
+        preview(v) => {
+            root.apply(root.pos-x, v / root.canvas-h, root.scale-v, root.rot-v, root.opacity-v, false);
+        }
+        commit(v) => {
+            root.apply(root.pos-x, v / root.canvas-h, root.scale-v, root.rot-v, root.opacity-v, true);
+        }
+    }
+
+    TransformRow {
+        label: "Scale";
+        suffix: "%";
+        value: root.scale-v * 100;
+        // Engine validation requires a positive scale; floor numeric entry
+        // at 1% too.
+        minimum: 1;
+        maximum: 400;
+        reset-value: 100;
+        preview(v) => {
+            root.apply(root.pos-x, root.pos-y, max(v, 1) / 100, root.rot-v, root.opacity-v, false);
+        }
+        commit(v) => {
+            root.apply(root.pos-x, root.pos-y, max(v, 1) / 100, root.rot-v, root.opacity-v, true);
+        }
+    }
+
+    TransformRow {
+        label: "Rotation";
+        suffix: "°";
+        value: root.rot-v;
+        minimum: -180;
+        maximum: 180;
+        reset-value: 0;
+        preview(v) => {
+            root.apply(root.pos-x, root.pos-y, root.scale-v, v, root.opacity-v, false);
+        }
+        commit(v) => {
+            root.apply(root.pos-x, root.pos-y, root.scale-v, v, root.opacity-v, true);
+        }
+    }
+
+    TransformRow {
+        label: "Opacity";
+        suffix: "%";
+        value: root.opacity-v * 100;
+        minimum: 0;
+        maximum: 100;
+        reset-value: 100;
+        preview(v) => {
+            root.apply(root.pos-x, root.pos-y, root.scale-v, root.rot-v, clamp(v, 0, 100) / 100, false);
+        }
+        commit(v) => {
+            root.apply(root.pos-x, root.pos-y, root.scale-v, root.rot-v, clamp(v, 0, 100) / 100, true);
+        }
+    }
+}

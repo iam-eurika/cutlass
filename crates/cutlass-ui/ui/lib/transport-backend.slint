@@ -27,4 +27,12 @@ export global TransportBackend {
     // than 1/1 silence audio (varispeed audio is a later phase).
     callback transport-play(tick: int, speed-num: int, speed-den: int);
     callback transport-pause();
+
+    // End-of-playback auto-stop. Called from `playback-step`, which is the
+    // playback Timer's own `triggered` callback: flipping `TimelineStore.playing`
+    // there (the property the Timer's `running` is bound to) re-enters Slint's
+    // timer machinery and panics with "Recursion in timer code"
+    // (slint-ui/slint#6332). Rust pauses audio immediately and defers the
+    // `playing = false` write to the next event-loop turn, off the callback.
+    callback request-stop();
 }

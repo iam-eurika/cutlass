@@ -8,10 +8,12 @@ mod error;
 mod export;
 mod export_audio;
 mod frame;
+mod generator_raster;
 mod import;
 mod preview;
 
 pub use action::ApplyOutcome;
+pub use composite::layer_placement;
 pub use engine::{ColorConvertPath, DEFAULT_CACHE_BUDGET_BYTES, Engine, EngineConfig};
 pub use error::EngineError;
 pub use export::{

@@ -1,6 +1,8 @@
 mod audio;
 mod inspector;
 mod preview;
+mod preview_gesture;
+mod preview_select;
 mod preview_worker;
 mod projection;
 mod ruler;
@@ -25,18 +27,47 @@ use cutlass_engine::EngineConfig;
 
 slint::include_modules!();
 
-/// Prefilled export destination: ~/Movies when present, else the home
-/// directory, else the working directory. Only seeds the save panel — the
-/// user picks the real spot from the dialog.
-/// macOS winit 0.30 panics if a modal NSOpenPanel/NSSavePanel runs while it is
-/// still dispatching another event (common after drag/drop mouse-up). Run dialogs
-/// on the next event-loop turn instead.
+/// Run `f` on the next event-loop turn, outside whatever callback is
+/// currently executing. Used to flip Timer-bound state (see `request-stop`)
+/// without re-entering Slint's timer machinery. Must never run anything that
+/// blocks on a nested run loop (e.g. a modal `rfd::FileDialog`): the closure
+/// executes inside Slint's timer activation, and the display link re-entering
+/// it aborts with "Recursion in timer code".
 fn defer_main_thread(f: impl FnOnce() + Send + 'static) {
     slint::Timer::single_shot(std::time::Duration::ZERO, f);
 }
 
-fn pick_import_path() -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new()
+/// Map a "Titles & shapes" tile key to the engine generator it creates, with
+/// the default styling for a freshly dropped clip. `None` for an unknown key.
+fn generator_from_key(key: &str) -> Option<cutlass_models::Generator> {
+    use cutlass_models::{Generator, Shape};
+    Some(match key {
+        "text" => Generator::Text {
+            content: "Title".to_owned(),
+        },
+        "solid" => Generator::SolidColor {
+            rgba: [30, 30, 30, 255],
+        },
+        "rect" => Generator::Shape {
+            shape: Shape::Rectangle,
+            rgba: [255, 255, 255, 255],
+        },
+        "ellipse" => Generator::Shape {
+            shape: Shape::Ellipse,
+            rgba: [255, 255, 255, 255],
+        },
+        _ => return None,
+    })
+}
+
+// File dialogs use `rfd::AsyncFileDialog`: on macOS it presents a sheet via
+// `beginSheetModalForWindow:completionHandler:` and never blocks the main
+// thread. The blocking `rfd::FileDialog` spins a nested `runModal` run loop,
+// during which Slint's display-link tick re-enters timer processing and
+// aborts with "Recursion in timer code".
+
+async fn pick_import_path() -> Option<std::path::PathBuf> {
+    rfd::AsyncFileDialog::new()
         .add_filter(
             "Media",
             &["mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac", "flac", "ogg"],
@@ -44,10 +75,12 @@ fn pick_import_path() -> Option<std::path::PathBuf> {
         .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
         .add_filter("Audio", &["mp3", "wav", "m4a", "aac", "flac", "ogg"])
         .pick_file()
+        .await
+        .map(|file| file.path().to_path_buf())
 }
 
-fn pick_export_path(current: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut dialog = rfd::FileDialog::new().add_filter("MP4 video", &["mp4"]);
+async fn pick_export_path(current: std::path::PathBuf) -> Option<std::path::PathBuf> {
+    let mut dialog = rfd::AsyncFileDialog::new().add_filter("MP4 video", &["mp4"]);
     if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
         dialog = dialog.set_directory(dir);
     }
@@ -57,9 +90,12 @@ fn pick_export_path(current: &std::path::Path) -> Option<std::path::PathBuf> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "untitled.mp4".into()),
     );
-    dialog.save_file()
+    dialog.save_file().await.map(|file| file.path().to_path_buf())
 }
 
+/// Prefilled export destination: ~/Movies when present, else the home
+/// directory, else the working directory. Only seeds the save panel — the
+/// user picks the real spot from the dialog.
 fn default_export_path() -> SharedString {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -228,6 +264,23 @@ fn main() -> Result<(), slint::PlatformError> {
         );
     });
 
+    let generated_drop_handle = preview_worker.handle();
+    editor.on_on_generated_dropped(
+        move |generator, track_id, start_tick, duration_ticks, drop_row| {
+            let Some(generator) = generator_from_key(generator.as_str()) else {
+                tracing::warn!(%generator, "ignoring drop of unknown generator key");
+                return;
+            };
+            generated_drop_handle.add_generated(
+                generator,
+                track_id.to_string(),
+                i64::from(start_tick),
+                i64::from(duration_ticks),
+                i64::from(drop_row),
+            );
+        },
+    );
+
     let magnet_handle = preview_worker.handle();
     editor.on_on_main_magnet_changed(move |enabled| {
         magnet_handle.set_main_magnet(enabled);
@@ -236,11 +289,14 @@ fn main() -> Result<(), slint::PlatformError> {
     let import_handle = preview_worker.handle();
     editor.on_on_import_clicked(move || {
         let import_handle = import_handle.clone();
-        defer_main_thread(move || {
-            if let Some(path) = pick_import_path() {
+        let task = slint::spawn_local(async move {
+            if let Some(path) = pick_import_path().await {
                 import_handle.import(path);
             }
         });
+        if let Err(e) = task {
+            tracing::error!("failed to open import dialog: {e}");
+        }
     });
 
     // --- export (title bar → dialog → engine thread → export thread) -----
@@ -255,14 +311,17 @@ fn main() -> Result<(), slint::PlatformError> {
             .upgrade()
             .map(|b| b.get_output_path().to_string())
             .unwrap_or_default();
-        defer_main_thread(move || {
+        let task = slint::spawn_local(async move {
             let current = std::path::PathBuf::from(current);
-            if let Some(path) = pick_export_path(&current) {
+            if let Some(path) = pick_export_path(current).await {
                 if let Some(backend) = backend_weak.upgrade() {
                     backend.set_output_path(path.to_string_lossy().into_owned().into());
                 }
             }
         });
+        if let Err(e) = task {
+            tracing::error!("failed to open export dialog: {e}");
+        }
     });
 
     let export_handle = preview_worker.handle();
@@ -328,6 +387,25 @@ fn main() -> Result<(), slint::PlatformError> {
     let pause_audio = audio_system.handle();
     app.global::<TransportBackend>().on_transport_pause(move || {
         pause_audio.pause();
+    });
+
+    // End-of-playback auto-stop, deferred off the playback Timer's own
+    // callback. `playback-step` calls this instead of flipping
+    // `TimelineStore.playing` (the Timer's `running` binding) inline, which
+    // re-enters Slint's timer machinery and panics with "Recursion in timer
+    // code" (slint-ui/slint#6332). Audio stops now (lock-free); the Slint
+    // `playing = false` write — which is what actually stops the Timer — runs
+    // on the next event-loop turn, outside the callback.
+    let stop_audio = audio_system.handle();
+    let stop_weak = app.as_weak();
+    app.global::<TransportBackend>().on_request_stop(move || {
+        stop_audio.pause();
+        let stop_weak = stop_weak.clone();
+        defer_main_thread(move || {
+            if let Some(app) = stop_weak.upgrade() {
+                app.global::<TimelineStore>().set_playing(false);
+            }
+        });
     });
 
     // Timeline clip content tiles (Phase 8). Cache lookups on the UI thread;
@@ -404,9 +482,10 @@ fn main() -> Result<(), slint::PlatformError> {
     );
 
     app.global::<DragBackend>().on_resolve_library_drop(
-        |sequence, duration_ticks, cursor_tick, drop_row, playhead_tick, snap_threshold_ticks, main_magnet| {
+        |sequence, lane_kind, duration_ticks, cursor_tick, drop_row, playhead_tick, snap_threshold_ticks, main_magnet| {
             snap::resolve_library_drop(
                 &sequence,
+                lane_kind,
                 duration_ticks,
                 cursor_tick,
                 drop_row,
@@ -457,6 +536,117 @@ fn main() -> Result<(), slint::PlatformError> {
         .on_resolve_marquee(|sequence, tick0, tick1, row0, row1, link_enabled| {
             selection::resolve_marquee(&sequence, tick0, tick1, row0, row1, link_enabled)
         });
+
+    // --- preview roadmap Phase 2: click-to-select in the viewport ---------
+
+    app.global::<PreviewBackend>().on_hit_test(|sequence, tick, x, y, view_w, view_h| {
+        preview_select::hit_test(&sequence, tick, x, y, view_w, view_h)
+    });
+
+    app.global::<PreviewBackend>().on_selection_box(
+        |sequence, clip_id, tick, view_w, view_h, gesture_active, gesture| {
+            preview_select::selection_box(
+                &sequence,
+                clip_id.as_str(),
+                tick,
+                view_w,
+                view_h,
+                gesture_active.then_some(&gesture),
+            )
+        },
+    );
+
+    // --- preview roadmap Phase 3: move gesture, guides, nudges ------------
+
+    app.global::<PreviewBackend>().on_resolve_drag(
+        |sequence, clip_id, press_x, press_y, cursor_x, cursor_y, view_w, view_h, snap_tol| {
+            preview_gesture::resolve_drag(
+                &sequence,
+                clip_id.as_str(),
+                press_x,
+                press_y,
+                cursor_x,
+                cursor_y,
+                view_w,
+                view_h,
+                snap_tol,
+            )
+        },
+    );
+
+    app.global::<PreviewBackend>().on_nudge(|sequence, clip_id, dx, dy| {
+        preview_gesture::nudge(&sequence, clip_id.as_str(), dx, dy)
+    });
+
+    // --- preview roadmap Phase 4: scale & rotate handles -------------------
+
+    app.global::<PreviewBackend>().on_resolve_scale(
+        |sequence, clip_id, press_x, press_y, cursor_x, cursor_y, view_w, view_h| {
+            preview_gesture::resolve_scale(
+                &sequence,
+                clip_id.as_str(),
+                press_x,
+                press_y,
+                cursor_x,
+                cursor_y,
+                view_w,
+                view_h,
+            )
+        },
+    );
+
+    app.global::<PreviewBackend>().on_resolve_rotate(
+        |sequence, clip_id, press_x, press_y, cursor_x, cursor_y, view_w, view_h, snap_deg| {
+            preview_gesture::resolve_rotate(
+                &sequence,
+                clip_id.as_str(),
+                press_x,
+                press_y,
+                cursor_x,
+                cursor_y,
+                view_w,
+                view_h,
+                snap_deg,
+            )
+        },
+    );
+
+    let override_handle = preview_worker.handle();
+    editor.on_on_preview_transform_overridden(
+        move |clip_id, pos_x, pos_y, scale, rotation, opacity, tick| {
+            override_handle.transform_override(
+                clip_id.to_string(),
+                cutlass_models::ClipTransform {
+                    position: [pos_x, pos_y],
+                    scale,
+                    rotation,
+                    opacity,
+                },
+                i64::from(tick),
+            );
+        },
+    );
+
+    let override_clear_handle = preview_worker.handle();
+    editor.on_on_preview_override_cleared(move |tick| {
+        override_clear_handle.clear_transform_override(i64::from(tick));
+    });
+
+    let transform_commit_handle = preview_worker.handle();
+    editor.on_on_clip_transform_committed(
+        move |clip_id, pos_x, pos_y, scale, rotation, opacity, tick| {
+            transform_commit_handle.set_transform(
+                clip_id.to_string(),
+                cutlass_models::ClipTransform {
+                    position: [pos_x, pos_y],
+                    scale,
+                    rotation,
+                    opacity,
+                },
+                i64::from(tick),
+            );
+        },
+    );
 
     app.global::<DragBackend>()
         .on_group_floaters(|sequence, ids| selection::group_floaters(&sequence, &ids));
@@ -566,24 +756,21 @@ fn main() -> Result<(), slint::PlatformError> {
         track_flag_handle.set_track_flag(track_id.to_string(), flag, value);
     });
 
-    let editor_weak = app.global::<EditorStore>().as_weak();
     app.global::<InspectorBackend>()
         .on_resolve_selection(|sequence, track_id, clip_id| {
             inspector::resolve_selection(sequence, track_id.as_str(), clip_id.as_str())
         });
+    let set_text_handle = preview_worker.handle();
     app.global::<InspectorBackend>()
-        .on_set_text_content(move |track_id, clip_id, content| {
-            let Some(editor) = editor_weak.upgrade() else {
-                return;
-            };
-            let mut project = editor.get_project();
-            inspector::set_text_content(
-                &mut project,
-                track_id.as_str(),
-                clip_id.as_str(),
-                content.as_str(),
+        .on_set_text_content(move |_track_id, clip_id, content| {
+            // Route the edit through the engine (undoable) rather than mutating
+            // the Slint model, which the next projection republish would revert.
+            set_text_handle.set_generator(
+                clip_id.to_string(),
+                cutlass_models::Generator::Text {
+                    content: content.to_string(),
+                },
             );
-            editor.set_project(project);
         });
 
     app.run()

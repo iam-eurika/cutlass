@@ -21,6 +21,12 @@ export global EditorStore {
     // fits. `insert` (main-track magnet) ripple-inserts at `start-tick`
     // instead, shifting later clips right.
     callback on-clip-dropped(media-id: string, track-id: string, start-tick: int, drop-row: int, insert: bool);
+    // A generated tile (text title, solid color, shape) was dropped on the
+    // timeline. `generator` is the catalog key ("text" | "solid" | "rect" |
+    // "ellipse"); `track-id` names a matching-kind lane, or is empty when the
+    // worker must create one of the generator's kind at `drop-row`. Generated
+    // lanes are never the main track, so there is no insert mode.
+    callback on-generated-dropped(generator: string, track-id: string, start-tick: int, duration-ticks: int, drop-row: int);
     // A clip drag-move was released. `track-id` names the destination lane,
     // or is empty when a new lane of the clip's kind must be inserted at
     // `insert-row` (lane-list row, top-first). The position was already
@@ -70,6 +76,22 @@ export global EditorStore {
     // The linkage toggle flipped; the worker mirrors the flag (drops of
     // media with audio create linked pairs, trims/splits follow links).
     callback on-linkage-changed(enabled: bool);
+
+    // --- preview transform gestures (preview roadmap Phase 3) -------------
+    // Transform values are the `ClipTransform` fields flattened (normalized
+    // position, uniform scale, degrees, opacity); `tick` is the playhead, so
+    // the worker re-renders the frame the user is looking at.
+
+    // Live drag motion: render with an uncommitted override — session state
+    // on the engine, no history entry, no projection republish. Fires at
+    // pointer-move rate; the worker coalesces to the newest value.
+    callback on-preview-transform-overridden(clip-id: string, position-x: float, position-y: float, scale: float, rotation: float, opacity: float, tick: int);
+    // Gesture ended without a commit (no-op click / cancelled drag): drop
+    // the override and re-render from committed state.
+    callback on-preview-override-cleared(tick: int);
+    // Gesture commit (drag release / arrow nudge): one undoable
+    // SetClipTransform; the worker clears any override in the same step.
+    callback on-clip-transform-committed(clip-id: string, position-x: float, position-y: float, scale: float, rotation: float, opacity: float, tick: int);
 
     // Engine history state, republished by the worker after every
     // mutation — drives the toolbar's undo/redo enabled states.

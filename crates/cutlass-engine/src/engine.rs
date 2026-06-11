@@ -7,12 +7,13 @@ use cutlass_commands::{Command, ProjectCommand};
 use cutlass_compositor::{Compositor, GpuContext};
 use cutlass_models::Project;
 
-use cutlass_models::RationalTime;
+use cutlass_models::{ClipId, ClipTransform, RationalTime};
 
 use crate::action::{ApplyContext, ApplyOutcome, History, dispatch};
 use crate::decoder_pool::DecoderPool;
 use crate::error::EngineError;
 use crate::frame::RgbaFrame;
+use crate::generator_raster::GeneratorRaster;
 use crate::preview;
 
 fn gpu_init_err(err: cutlass_compositor::CompositorError) -> std::io::Error {
@@ -64,8 +65,13 @@ pub struct Engine {
     history: History,
     project_path: Option<PathBuf>,
     decoder_pool: DecoderPool,
+    raster: GeneratorRaster,
     gpu: GpuContext,
     compositor: Compositor,
+    /// Live gesture override (preview roadmap Phase 3): one clip rendered
+    /// with this transform instead of its committed one. Session state —
+    /// never serialized, never in history, never seen by export.
+    transform_override: Option<(ClipId, ClipTransform)>,
 }
 
 impl Engine {
@@ -80,9 +86,11 @@ impl Engine {
             history: History::new(undo_limit),
             project_path: None,
             decoder_pool: DecoderPool::new(),
+            raster: GeneratorRaster::new(),
             gpu,
             compositor,
             config,
+            transform_override: None,
         })
     }
 
@@ -97,9 +105,11 @@ impl Engine {
             history: History::new(undo_limit),
             project_path: None,
             decoder_pool: DecoderPool::new(),
+            raster: GeneratorRaster::new(),
             gpu,
             compositor,
             config,
+            transform_override: None,
         })
     }
 
@@ -198,6 +208,7 @@ impl Engine {
             &self.project,
             &self.cache,
             &mut self.decoder_pool,
+            &mut self.raster,
             time,
             self.config.color_convert,
         )
@@ -209,11 +220,21 @@ impl Engine {
             &self.project,
             &self.cache,
             &mut self.decoder_pool,
+            &mut self.raster,
             &self.gpu,
             &mut self.compositor,
             time,
             self.config.color_convert,
+            self.transform_override,
         )
+    }
+
+    /// Replace (or clear) the live gesture transform override. Preview frames
+    /// render the overridden clip at this transform until cleared; project
+    /// state, history, and export are untouched. The drag-release commit
+    /// clears it and applies one `SetClipTransform` instead.
+    pub fn set_transform_override(&mut self, override_transform: Option<(ClipId, ClipTransform)>) {
+        self.transform_override = override_transform;
     }
 
     pub fn undo(&mut self) -> bool {

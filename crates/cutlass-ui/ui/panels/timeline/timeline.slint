@@ -87,6 +87,7 @@ export component TimelinePanel inherits PanelBase {
     // on, an insertion between clips (caret preview below).
     private property <LibraryDropResolution> library-drop-res: DragBackend.resolve-library-drop(
         root.sequence,
+        AppState.library-drag-lane-kind,
         AppState.library-drag-duration-ticks,
         root.library-drop-cursor-tick,
         root.library-drop-row,
@@ -100,12 +101,21 @@ export component TimelinePanel inherits PanelBase {
     private property <bool> library-drag-live: AppState.library-drag-active;
     changed library-drag-live => {
         if (!self.library-drag-live && self.library-cursor-inside) {
-            EditorStore.on-clip-dropped(
-                AppState.library-drag-media-id,
-                self.library-drop-res.target-track-id,
-                self.library-drop-res.resolved-start,
-                self.library-drop-res.target-row,
-                self.library-drop-res.is-insert);
+            if (AppState.library-drag-generator != "") {
+                EditorStore.on-generated-dropped(
+                    AppState.library-drag-generator,
+                    self.library-drop-res.target-track-id,
+                    self.library-drop-res.resolved-start,
+                    AppState.library-drag-duration-ticks,
+                    self.library-drop-res.target-row);
+            } else {
+                EditorStore.on-clip-dropped(
+                    AppState.library-drag-media-id,
+                    self.library-drop-res.target-track-id,
+                    self.library-drop-res.resolved-start,
+                    self.library-drop-res.target-row,
+                    self.library-drop-res.is-insert);
+            }
         }
     }
 

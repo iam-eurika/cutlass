@@ -25,8 +25,14 @@ pub enum Generator {
     Text { content: String },
     /// A solid fill (RGBA, 0-255).
     SolidColor { rgba: [u8; 4] },
-    /// A vector shape.
-    Shape { shape: Shape },
+    /// A vector shape with a fill color (RGBA, 0-255). Geometry (a centered
+    /// rect/ellipse) is fixed until per-layer transforms land.
+    Shape {
+        shape: Shape,
+        /// Fill color. Old projects without this field default to white.
+        #[serde(default = "default_shape_rgba")]
+        rgba: [u8; 4],
+    },
     /// Image or animated sticker (asset wiring TBD).
     Sticker,
     /// Motion / composited VFX layer (implementation TBD).
@@ -43,6 +49,72 @@ pub enum Shape {
     Ellipse,
 }
 
+/// Default fill color for a shape without one (opaque white).
+fn default_shape_rgba() -> [u8; 4] {
+    [255, 255, 255, 255]
+}
+
+/// Spatial placement of a clip's content on the canvas (CapCut "Basic"
+/// transform: position, scale, rotation, opacity).
+///
+/// Coordinates are normalized to the canvas so projects survive canvas-size
+/// changes: `position` is the offset of the content center from the canvas
+/// center as a fraction of canvas width/height (+x right, +y down — screen
+/// convention). `scale` is uniform with 1.0 = aspect-fit inside the canvas
+/// (CapCut's 100%). `rotation` is degrees clockwise about the content center.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ClipTransform {
+    /// Content-center offset from canvas center, normalized to canvas
+    /// dimensions. `[0.0, 0.0]` = centered; `[0.5, 0.0]` = center sits on
+    /// the right canvas edge.
+    pub position: [f32; 2],
+    /// Uniform scale; 1.0 aspect-fits the content inside the canvas.
+    pub scale: f32,
+    /// Clockwise rotation in degrees about the content center.
+    pub rotation: f32,
+    /// Layer opacity, 0.0 (transparent) ..= 1.0 (opaque).
+    pub opacity: f32,
+}
+
+impl ClipTransform {
+    pub const IDENTITY: Self = Self {
+        position: [0.0, 0.0],
+        scale: 1.0,
+        rotation: 0.0,
+        opacity: 1.0,
+    };
+
+    pub fn is_identity(&self) -> bool {
+        *self == Self::IDENTITY
+    }
+
+    /// `Ok` iff every component is finite, scale is positive, and opacity is
+    /// within `0..=1` — the invariant [`crate::Project::set_transform`]
+    /// enforces before storing.
+    pub fn validate(&self) -> Result<(), ModelError> {
+        let finite = self.position.iter().all(|v| v.is_finite())
+            && self.scale.is_finite()
+            && self.rotation.is_finite()
+            && self.opacity.is_finite();
+        if !finite {
+            return Err(ModelError::InvalidTransform("non-finite component".into()));
+        }
+        if self.scale <= 0.0 {
+            return Err(ModelError::InvalidTransform("scale must be positive".into()));
+        }
+        if !(0.0..=1.0).contains(&self.opacity) {
+            return Err(ModelError::InvalidTransform("opacity must be in 0..=1".into()));
+        }
+        Ok(())
+    }
+}
+
+impl Default for ClipTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
 /// A placement of some [`ClipSource`] on a track.
 ///
 /// `timeline` is where the clip sits on the sequence, at the timeline rate.
@@ -56,6 +128,10 @@ pub struct Clip {
     /// dropping media with an audio stream. `None` ⇔ unlinked.
     #[serde(default)]
     pub link: Option<LinkId>,
+    /// Spatial placement on the canvas. Identity (aspect-fit, centered) for
+    /// clips created before transforms existed. Ignored on audio tracks.
+    #[serde(default)]
+    pub transform: ClipTransform,
 }
 
 impl Clip {
@@ -66,6 +142,7 @@ impl Clip {
             content: ClipSource::Media { media, source },
             timeline,
             link: None,
+            transform: ClipTransform::IDENTITY,
         }
     }
 
@@ -76,6 +153,7 @@ impl Clip {
             content: ClipSource::Generated(generator),
             timeline,
             link: None,
+            transform: ClipTransform::IDENTITY,
         }
     }
 
@@ -216,13 +294,15 @@ mod tests {
         let shape = Clip::generated(
             Generator::Shape {
                 shape: Shape::Ellipse,
+                rgba: [0, 128, 255, 255],
             },
             timeline,
         );
         assert!(matches!(
             shape.content,
             ClipSource::Generated(Generator::Shape {
-                shape: Shape::Ellipse
+                shape: Shape::Ellipse,
+                ..
             })
         ));
 
@@ -372,6 +452,92 @@ mod tests {
         // 40 timeline ticks @ 24fps -> 50 source ticks @ 30fps from in-point.
         let mid = clip.source_time_at(rt(40, R24)).unwrap().unwrap();
         assert_eq!(mid, rt(250, R30));
+    }
+
+    // --- transform ----------------------------------------------------------
+
+    #[test]
+    fn new_clips_have_identity_transform() {
+        let clip = Clip::generated(Generator::Adjustment, tr(0, 10, R24));
+        assert!(clip.transform.is_identity());
+        assert_eq!(clip.transform, ClipTransform::default());
+    }
+
+    #[test]
+    fn clip_without_transform_field_deserializes_to_identity() {
+        // A clip serialized before transforms existed: no `transform` key.
+        let clip = Clip::generated(
+            Generator::Text {
+                content: "old".into(),
+            },
+            tr(0, 10, R24),
+        );
+        let mut value = serde_json::to_value(&clip).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("clip serializes to a map")
+            .remove("transform")
+            .expect("transform field present");
+
+        let loaded: Clip = serde_json::from_value(value).expect("deserialize legacy clip");
+        assert!(loaded.transform.is_identity());
+        assert_eq!(loaded.content, clip.content);
+    }
+
+    #[test]
+    fn transform_roundtrips_through_serde() {
+        let mut clip = Clip::generated(Generator::Adjustment, tr(0, 10, R24));
+        clip.transform = ClipTransform {
+            position: [-0.25, 0.5],
+            scale: 1.5,
+            rotation: 90.0,
+            opacity: 0.25,
+        };
+        let json = serde_json::to_string(&clip).expect("serialize");
+        let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(loaded.transform, clip.transform);
+    }
+
+    #[test]
+    fn transform_validation() {
+        assert!(ClipTransform::IDENTITY.validate().is_ok());
+        assert!(
+            ClipTransform {
+                position: [0.4, -0.4],
+                scale: 3.0,
+                rotation: -720.0,
+                opacity: 0.0,
+            }
+            .validate()
+            .is_ok()
+        );
+
+        let bad_scale = ClipTransform {
+            scale: -0.5,
+            ..ClipTransform::IDENTITY
+        };
+        assert!(matches!(
+            bad_scale.validate(),
+            Err(ModelError::InvalidTransform(_))
+        ));
+
+        let bad_opacity = ClipTransform {
+            opacity: -0.1,
+            ..ClipTransform::IDENTITY
+        };
+        assert!(matches!(
+            bad_opacity.validate(),
+            Err(ModelError::InvalidTransform(_))
+        ));
+
+        let bad_position = ClipTransform {
+            position: [0.0, f32::NAN],
+            ..ClipTransform::IDENTITY
+        };
+        assert!(matches!(
+            bad_position.validate(),
+            Err(ModelError::InvalidTransform(_))
+        ));
     }
 
     // --- source_time_at: errors -------------------------------------------

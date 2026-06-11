@@ -5,7 +5,7 @@ mod common;
 use common::{import_asset, rt, small_video_asset, temp_engine, tr};
 use cutlass_commands::{Command, EditCommand, EditOutcome};
 use cutlass_engine::ApplyOutcome;
-use cutlass_models::{Generator, TrackKind};
+use cutlass_models::{ClipTransform, Generator, TrackKind};
 
 fn created(outcome: ApplyOutcome) -> cutlass_models::ClipId {
     match outcome {
@@ -320,6 +320,151 @@ fn undo_add_generated() {
 
     assert!(engine.redo());
     assert!(engine.project().clip(clip_id).is_some());
+}
+
+#[test]
+fn undo_redo_set_generator_oscillates_content() {
+    let (_dir, mut engine) = temp_engine();
+    let track = common::add_track(&mut engine, TrackKind::Text, "T1");
+
+    let clip_id = created(
+        engine
+            .apply(Command::Edit(EditCommand::AddGenerated {
+                track,
+                generator: Generator::Text {
+                    content: "before".into(),
+                },
+                timeline: tr(0, 24),
+            }))
+            .expect("add"),
+    );
+
+    engine
+        .apply(Command::Edit(EditCommand::SetGenerator {
+            clip: clip_id,
+            generator: Generator::Text {
+                content: "after".into(),
+            },
+        }))
+        .expect("set generator");
+
+    let content = |engine: &cutlass_engine::Engine| match &engine.project().clip(clip_id).unwrap().content {
+        cutlass_models::ClipSource::Generated(Generator::Text { content }) => content.clone(),
+        other => panic!("expected text generator, got {other:?}"),
+    };
+    assert_eq!(content(&engine), "after");
+
+    assert!(engine.undo());
+    assert_eq!(content(&engine), "before");
+
+    assert!(engine.redo());
+    assert_eq!(content(&engine), "after");
+}
+
+#[test]
+fn set_generator_rejects_media_clip() {
+    let Some(path) = small_video_asset() else {
+        return;
+    };
+    let (_dir, mut engine) = temp_engine();
+    let media_id = import_asset(&mut engine, &path);
+    let track = common::add_track(&mut engine, TrackKind::Video, "V1");
+
+    let clip_id = created(
+        engine
+            .apply(Command::Edit(EditCommand::AddClip {
+                track,
+                media: media_id,
+                source: tr(0, 48),
+                start: rt(0),
+            }))
+            .expect("add"),
+    );
+
+    // A media-backed clip has no generator to replace.
+    assert!(
+        engine
+            .apply(Command::Edit(EditCommand::SetGenerator {
+                clip: clip_id,
+                generator: Generator::Text {
+                    content: "nope".into(),
+                },
+            }))
+            .is_err()
+    );
+}
+
+#[test]
+fn undo_redo_set_clip_transform_oscillates() {
+    let (_dir, mut engine) = temp_engine();
+    let track = common::add_track(&mut engine, TrackKind::Text, "T1");
+
+    let clip_id = created(
+        engine
+            .apply(Command::Edit(EditCommand::AddGenerated {
+                track,
+                generator: Generator::Text {
+                    content: "title".into(),
+                },
+                timeline: tr(0, 24),
+            }))
+            .expect("add"),
+    );
+
+    let moved = ClipTransform {
+        position: [0.25, -0.1],
+        scale: 0.5,
+        rotation: 45.0,
+        opacity: 0.8,
+    };
+    engine
+        .apply(Command::Edit(EditCommand::SetClipTransform {
+            clip: clip_id,
+            transform: moved,
+        }))
+        .expect("set transform");
+
+    let transform =
+        |engine: &cutlass_engine::Engine| engine.project().clip(clip_id).unwrap().transform;
+    assert_eq!(transform(&engine), moved);
+
+    assert!(engine.undo());
+    assert!(transform(&engine).is_identity());
+
+    assert!(engine.redo());
+    assert_eq!(transform(&engine), moved);
+}
+
+#[test]
+fn invalid_transform_rejected_and_state_unchanged() {
+    let (_dir, mut engine) = temp_engine();
+    let track = common::add_track(&mut engine, TrackKind::Text, "T1");
+
+    let clip_id = created(
+        engine
+            .apply(Command::Edit(EditCommand::AddGenerated {
+                track,
+                generator: Generator::Text {
+                    content: "title".into(),
+                },
+                timeline: tr(0, 24),
+            }))
+            .expect("add"),
+    );
+
+    // Zero scale is rejected; the clip keeps its identity transform.
+    assert!(
+        engine
+            .apply(Command::Edit(EditCommand::SetClipTransform {
+                clip: clip_id,
+                transform: ClipTransform {
+                    scale: 0.0,
+                    ..ClipTransform::IDENTITY
+                },
+            }))
+            .is_err()
+    );
+    assert!(engine.project().clip(clip_id).unwrap().transform.is_identity());
 }
 
 #[test]

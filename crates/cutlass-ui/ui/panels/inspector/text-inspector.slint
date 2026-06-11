@@ -59,7 +59,14 @@ export component TextInspector inherits VerticalLayout {
             text: root.edit-text;
             placeholder-text: "Enter title text";
 
+            // Typing only updates the local field; the engine edit (one
+            // undoable history entry) commits on Enter so undo isn't spammed
+            // per keystroke and the projection republish can't fight the box.
             edited(new-text) => {
+                root.edit-text = new-text;
+            }
+
+            accepted(new-text) => {
                 root.edit-text = new-text;
                 InspectorBackend.set-text-content(track-id, model.id, new-text);
             }

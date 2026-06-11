@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::Map;
-use crate::clip::{Clip, ClipSource, Generator};
+use crate::clip::{Clip, ClipSource, ClipTransform, Generator};
 use crate::error::ModelError;
 use crate::ids::{ClipId, MediaId, ProjectId, TrackId};
 use crate::media::MediaSource;
@@ -182,6 +182,80 @@ impl Project {
         }
         let clip = Clip::generated(generator, timeline);
         self.timeline.add_clip(track_id, clip)
+    }
+
+    /// Replace a generated clip's content (edit a title's text, recolor a
+    /// shape, …). Errors if the clip is unknown, is media-backed, or the new
+    /// generator isn't accepted by the clip's track.
+    pub fn set_generator(
+        &mut self,
+        clip_id: ClipId,
+        generator: Generator,
+    ) -> Result<(), ModelError> {
+        let track_id = self
+            .timeline
+            .track_of(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        let kind = self
+            .timeline
+            .track(track_id)
+            .ok_or(ModelError::UnknownTrack(track_id))?
+            .kind;
+        let clip = self
+            .timeline
+            .clip(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        // Media clips have no generator to replace; reject rather than convert.
+        if !clip.is_generated() {
+            return Err(ModelError::IncompatibleTrackKind {
+                track: track_id,
+                kind,
+            });
+        }
+        let content = ClipSource::Generated(generator);
+        if !kind.accepts_content(&content) {
+            return Err(ModelError::IncompatibleTrackKind {
+                track: track_id,
+                kind,
+            });
+        }
+        self.timeline
+            .clip_mut(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?
+            .content = content;
+        Ok(())
+    }
+
+    /// Set a clip's spatial transform (preview move/scale/rotate, inspector
+    /// numerics). Errors if the clip is unknown, sits on an audio track
+    /// (nothing to place), or the transform is invalid (non-finite, scale
+    /// ≤ 0, opacity outside 0..=1).
+    pub fn set_transform(
+        &mut self,
+        clip_id: ClipId,
+        transform: ClipTransform,
+    ) -> Result<(), ModelError> {
+        transform.validate()?;
+        let track_id = self
+            .timeline
+            .track_of(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        let kind = self
+            .timeline
+            .track(track_id)
+            .ok_or(ModelError::UnknownTrack(track_id))?
+            .kind;
+        if !kind.is_visual() {
+            return Err(ModelError::IncompatibleTrackKind {
+                track: track_id,
+                kind,
+            });
+        }
+        self.timeline
+            .clip_mut(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?
+            .transform = transform;
+        Ok(())
     }
 
     /// Find a clip by ID anywhere on the timeline (O(1)).
@@ -723,6 +797,7 @@ mod tests {
                 track,
                 Generator::Shape {
                     shape: Shape::Rectangle,
+                    rgba: [255, 255, 255, 255],
                 },
                 tr_at(0, 10, R30),
             ),

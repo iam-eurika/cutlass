@@ -80,6 +80,14 @@ fn dispatch_edit(
             let (id, inverse) = edit::add_generated::execute(ctx, track, generator, timeline)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Created(id)), Some(inverse)))
         }
+        EditCommand::SetGenerator { clip, generator } => {
+            let inverse = edit::set_generator::execute(ctx, clip, generator)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
+        EditCommand::SetClipTransform { clip, transform } => {
+            let inverse = edit::set_transform::execute(ctx, clip, transform)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
         EditCommand::SplitClip { clip, at } => {
             let (id, inverse) = edit::split_clip::execute(ctx, clip, at)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Created(id)), Some(inverse)))

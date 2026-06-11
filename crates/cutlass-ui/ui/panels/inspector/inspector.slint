@@ -9,6 +9,7 @@ import {
 } from "../../lib/inspector-backend.slint";
 import { TrackKind } from "../../models/index.slint";
 import { TextInspector } from "text-inspector.slint";
+import { TransformInspector } from "transform-inspector.slint";
 
 struct InspectorField {
     label: string,
@@ -86,12 +87,37 @@ export component InspectorPanel inherits PanelBase {
                     font-size: AppStore.theme.typography.body.size;
                 }
 
-                if has-selection && selection.found && selection.track-kind == TrackKind.text: TextInspector {
-                    track-id: TimelineStore.selected-track-id;
-                    model: selection.clip;
+                if has-selection && selection.found && selection.track-kind == TrackKind.text: VerticalLayout {
+                    spacing: AppStore.theme.metrics.spacing.xl;
+
+                    TextInspector {
+                        track-id: TimelineStore.selected-track-id;
+                        model: selection.clip;
+                    }
+
+                    TransformInspector {
+                        model: selection.clip;
+                    }
                 }
 
-                if has-selection && selection.found && selection.track-kind != TrackKind.text: VerticalLayout {
+                // Every other visual clip kind (video, solid, shapes) gets
+                // the transform block; audio has no spatial properties.
+                if has-selection && selection.found && selection.track-kind != TrackKind.text && selection.track-kind != TrackKind.audio: VerticalLayout {
+                    spacing: AppStore.theme.metrics.spacing.xl;
+
+                    Text {
+                        text: selection.clip.name;
+                        font-size: AppStore.theme.typography.heading-sm.size;
+                        font-weight: AppStore.theme.typography.heading-sm.weight;
+                        color: AppStore.theme.text.primary;
+                    }
+
+                    TransformInspector {
+                        model: selection.clip;
+                    }
+                }
+
+                if has-selection && selection.found && selection.track-kind == TrackKind.audio: VerticalLayout {
                     spacing: AppStore.theme.metrics.spacing.xl;
 
                     Text {

@@ -6,16 +6,56 @@ use wgpu::util::DeviceExt;
 use crate::error::CompositorError;
 use crate::gpu::GpuContext;
 use crate::image::RgbaImage;
-use crate::layer::{CompositeLayer, CompositorConfig};
+use crate::layer::{CompositeLayer, CompositorConfig, LayerContent, LayerPlacement};
 use crate::yuv::{Yuv420pImage, Yuv420pLayer};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const R8: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
+/// Per-layer quad placement, precomputed to clip space. Mirrors the
+/// `Placement` struct in the WGSL shaders.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct PlacementUniforms {
+    /// Columns of the 2×2 linear part mapping unit-quad corners
+    /// ([-0.5, 0.5]², +y down) to clip space: (m00, m10, m01, m11).
+    linear: [f32; 4],
+    /// Clip-space translation (x, y), opacity, pad.
+    trans_opacity: [f32; 4],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SolidUniforms {
     color: [f32; 4],
+    placement: PlacementUniforms,
+}
+
+/// Build the unit-quad → clip-space affine for a placement on this canvas.
+fn placement_uniforms(config: &CompositorConfig, p: &LayerPlacement) -> PlacementUniforms {
+    let (cw, ch) = (config.width as f32, config.height as f32);
+    let (cos, sin) = (p.rotation.cos(), p.rotation.sin());
+    // Canvas space (+y down): pos = center + R·(corner ⊙ size), with R the
+    // clockwise rotation [cos, -sin; sin, cos] in screen coordinates.
+    let a = cos * p.size[0]; // ∂pos.x/∂corner.x
+    let b = sin * p.size[0]; // ∂pos.y/∂corner.x
+    let c = -sin * p.size[1]; // ∂pos.x/∂corner.y
+    let d = cos * p.size[1]; // ∂pos.y/∂corner.y
+    // Canvas px → clip space: x' = 2x/cw − 1, y' = 1 − 2y/ch (flip y).
+    PlacementUniforms {
+        linear: [
+            2.0 * a / cw,
+            -2.0 * b / ch,
+            2.0 * c / cw,
+            -2.0 * d / ch,
+        ],
+        trans_opacity: [
+            2.0 * p.center[0] / cw - 1.0,
+            1.0 - 2.0 * p.center[1] / ch,
+            p.opacity,
+            0.0,
+        ],
+    }
 }
 
 #[repr(C)]
@@ -39,7 +79,6 @@ pub struct Compositor {
     yuv_bind_layout: wgpu::BindGroupLayout,
     rgba_to_yuv_bind_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    solid_uniform: wgpu::Buffer,
     rgba_to_yuv_params: wgpu::Buffer,
     /// Reused each composite when canvas size matches.
     target: Option<CachedTarget>,
@@ -67,23 +106,26 @@ impl Compositor {
             include_str!("../shaders/rgba_to_yuv.wgsl"),
         );
 
+        // Placement matrices live in the vertex stage; opacity in the fragment.
+        let uniform_stages = wgpu::ShaderStages::VERTEX_FRAGMENT;
+
         let solid_bind_layout = gpu
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("solid_bind"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
+                entries: &[uniform_binding(0, uniform_stages)],
             });
 
-        let blit_bind_layout = texture_sampler_bind_layout(gpu, "blit_bind");
+        let blit_bind_layout =
+            gpu.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("blit_bind"),
+                    entries: &[
+                        texture_binding(0, wgpu::ShaderStages::FRAGMENT),
+                        sampler_binding(1, wgpu::ShaderStages::FRAGMENT),
+                        uniform_binding(2, uniform_stages),
+                    ],
+                });
 
         let yuv_bind_layout =
             gpu.device
@@ -94,6 +136,7 @@ impl Compositor {
                         texture_binding(1, wgpu::ShaderStages::FRAGMENT),
                         texture_binding(2, wgpu::ShaderStages::FRAGMENT),
                         sampler_binding(3, wgpu::ShaderStages::FRAGMENT),
+                        uniform_binding(4, uniform_stages),
                     ],
                 });
 
@@ -166,9 +209,6 @@ impl Compositor {
             ..Default::default()
         });
 
-        let solid_uniform = uniform_buffer(gpu, "solid_uniform", &SolidUniforms {
-            color: [0.0; 4],
-        });
         let rgba_to_yuv_params = uniform_buffer(
             gpu,
             "rgba_to_yuv_params",
@@ -190,7 +230,6 @@ impl Compositor {
             yuv_bind_layout,
             rgba_to_yuv_bind_layout,
             sampler,
-            solid_uniform,
             rgba_to_yuv_params,
             target: None,
         })
@@ -289,7 +328,10 @@ impl Compositor {
                     view: &target.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        // Opaque black canvas: placed layers may leave parts
+                        // of the canvas uncovered (transforms), and preview/
+                        // export both define the background as black.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -299,8 +341,12 @@ impl Compositor {
             });
 
             for layer in layers {
-                match layer {
-                    CompositeLayer::Solid { rgba } => {
+                // Per-layer uniform buffer: each draw needs its own values
+                // alive at submit time (a single reused buffer would be
+                // clobbered by later `write_buffer` calls in the same pass).
+                let placement = placement_uniforms(config, &layer.placement);
+                match &layer.content {
+                    LayerContent::Solid { rgba } => {
                         let uniforms = SolidUniforms {
                             color: [
                                 rgba[0] as f32 / 255.0,
@@ -308,33 +354,52 @@ impl Compositor {
                                 rgba[2] as f32 / 255.0,
                                 rgba[3] as f32 / 255.0,
                             ],
+                            placement,
                         };
-                        gpu.queue.write_buffer(
-                            &self.solid_uniform,
-                            0,
-                            bytemuck::bytes_of(&uniforms),
-                        );
+                        let buffer = uniform_buffer(gpu, "solid_uniform", &uniforms);
                         let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("solid_bind"),
                             layout: &self.solid_bind_layout,
                             entries: &[wgpu::BindGroupEntry {
                                 binding: 0,
-                                resource: self.solid_uniform.as_entire_binding(),
+                                resource: buffer.as_entire_binding(),
                             }],
                         });
                         pass.set_pipeline(&self.solid_pipeline);
                         pass.set_bind_group(0, &bind, &[]);
-                        pass.draw(0..3, 0..1);
+                        pass.draw(0..6, 0..1);
                     }
-                    CompositeLayer::Rgba { bytes } => {
-                        let texture = upload_rgba_texture(gpu, bytes, config.width, config.height);
+                    LayerContent::Rgba {
+                        bytes,
+                        width,
+                        height,
+                    } => {
+                        let texture = upload_rgba_texture(gpu, bytes, *width, *height);
                         let view = texture.create_view(&Default::default());
-                        let bind = blit_bind(gpu, &self.blit_bind_layout, &view, &self.sampler);
+                        let buffer = uniform_buffer(gpu, "blit_placement", &placement);
+                        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("blit_bind"),
+                            layout: &self.blit_bind_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: buffer.as_entire_binding(),
+                                },
+                            ],
+                        });
                         pass.set_pipeline(&self.blit_pipeline);
                         pass.set_bind_group(0, &bind, &[]);
-                        pass.draw(0..3, 0..1);
+                        pass.draw(0..6, 0..1);
                     }
-                    CompositeLayer::Yuv420p(layer) => {
+                    LayerContent::Yuv420p(layer) => {
                         let y_tex = upload_r8_texture(
                             gpu,
                             "y_plane",
@@ -348,6 +413,7 @@ impl Compositor {
                             upload_r8_texture(gpu, "u_plane", &layer.tight_u(), uv_w, uv_h);
                         let v_tex =
                             upload_r8_texture(gpu, "v_plane", &layer.tight_v(), uv_w, uv_h);
+                        let buffer = uniform_buffer(gpu, "yuv_placement", &placement);
                         let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("yuv_bind"),
                             layout: &self.yuv_bind_layout,
@@ -374,11 +440,15 @@ impl Compositor {
                                     binding: 3,
                                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                                 },
+                                wgpu::BindGroupEntry {
+                                    binding: 4,
+                                    resource: buffer.as_entire_binding(),
+                                },
                             ],
                         });
                         pass.set_pipeline(&self.yuv_pipeline);
                         pass.set_bind_group(0, &bind, &[]);
-                        pass.draw(0..3, 0..1);
+                        pass.draw(0..6, 0..1);
                     }
                 }
             }
@@ -548,17 +618,25 @@ fn validate_layers(
     layers: &[CompositeLayer],
 ) -> Result<(), CompositorError> {
     validate_config(config)?;
-    let expected = layer_byte_len(config);
     for layer in layers {
-        match layer {
-            CompositeLayer::Rgba { bytes } if bytes.len() != expected => {
-                return Err(CompositorError::LayerSizeMismatch {
-                    got: bytes.len(),
-                    expected,
-                });
+        match &layer.content {
+            LayerContent::Rgba {
+                bytes,
+                width,
+                height,
+            } => {
+                let expected = (*width as usize)
+                    .saturating_mul(*height as usize)
+                    .saturating_mul(4);
+                if *width == 0 || *height == 0 || bytes.len() != expected {
+                    return Err(CompositorError::LayerSizeMismatch {
+                        got: bytes.len(),
+                        expected,
+                    });
+                }
             }
-            CompositeLayer::Yuv420p(yuv) => validate_yuv_layer(yuv)?,
-            _ => {}
+            LayerContent::Yuv420p(yuv) => validate_yuv_layer(yuv)?,
+            LayerContent::Solid { .. } => {}
         }
     }
     Ok(())
@@ -586,13 +664,6 @@ fn validate_config(config: &CompositorConfig) -> Result<(), CompositorError> {
         });
     }
     Ok(())
-}
-
-fn layer_byte_len(config: &CompositorConfig) -> usize {
-    usize::try_from(config.width)
-        .unwrap_or(0)
-        .saturating_mul(usize::try_from(config.height).unwrap_or(0))
-        .saturating_mul(4)
 }
 
 fn align_row_bytes(bytes_per_row: u32) -> u32 {
@@ -695,6 +766,19 @@ fn sampler_binding(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGr
     }
 }
 
+fn uniform_binding(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
 fn storage_binding(binding: u32, read_write: bool) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -710,17 +794,6 @@ fn storage_binding(binding: u32, read_write: bool) -> wgpu::BindGroupLayoutEntry
         },
         count: None,
     }
-}
-
-fn texture_sampler_bind_layout(gpu: &GpuContext, label: &str) -> wgpu::BindGroupLayout {
-    gpu.device
-        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(label),
-            entries: &[
-                texture_binding(0, wgpu::ShaderStages::FRAGMENT),
-                sampler_binding(1, wgpu::ShaderStages::FRAGMENT),
-            ],
-        })
 }
 
 fn uniform_buffer<T: Pod>(gpu: &GpuContext, label: &str, value: &T) -> wgpu::Buffer {
@@ -823,28 +896,6 @@ fn upload_r8_texture(
         },
     );
     texture
-}
-
-fn blit_bind(
-    gpu: &GpuContext,
-    layout: &wgpu::BindGroupLayout,
-    view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> wgpu::BindGroup {
-    gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("blit_bind"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
 }
 
 fn map_read_buffer<F>(gpu: &GpuContext, buffer: &wgpu::Buffer, f: F) -> Result<(), CompositorError>

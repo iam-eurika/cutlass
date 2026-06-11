@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use cutlass_compositor::{Compositor, GpuContext, Yuv420pImage};
 use cutlass_cache::FrameCache;
-use cutlass_models::{ModelError, Project, RationalTime};
+use cutlass_models::{ClipId, ClipTransform, ModelError, Project, RationalTime};
 use tracing::debug;
 
 use crate::ColorConvertPath;
@@ -12,15 +12,19 @@ use crate::composite::{composite_canvas_size, resolve_layers};
 use crate::decoder_pool::DecoderPool;
 use crate::error::EngineError;
 use crate::frame::RgbaFrame;
+use crate::generator_raster::GeneratorRaster;
 
+#[allow(clippy::too_many_arguments)]
 pub fn get_frame(
     project: &Project,
     cache: &FrameCache,
     pool: &mut DecoderPool,
+    raster: &mut GeneratorRaster,
     gpu: &GpuContext,
     compositor: &mut Compositor,
     time: RationalTime,
     color_convert: ColorConvertPath,
+    override_transform: Option<(ClipId, ClipTransform)>,
 ) -> Result<RgbaFrame, EngineError> {
     let tl_rate = project.timeline().frame_rate;
     if time.rate != tl_rate {
@@ -37,7 +41,16 @@ pub fn get_frame(
     // Stage timings (playback roadmap Phase 2): resolve covers decode or
     // cache read; composite covers GPU submit + RGBA readback.
     let start = Instant::now();
-    let layers = resolve_layers(project, Some(cache), pool, time, &config, color_convert)?;
+    let layers = resolve_layers(
+        project,
+        Some(cache),
+        pool,
+        raster,
+        time,
+        &config,
+        color_convert,
+        override_transform,
+    )?;
     let resolve_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     // A timeline gap isn't an error: the canvas composites bottom-up from
@@ -70,19 +83,22 @@ pub fn prefetch_frame(
     project: &Project,
     cache: &FrameCache,
     pool: &mut DecoderPool,
+    raster: &mut GeneratorRaster,
     time: RationalTime,
     color_convert: ColorConvertPath,
 ) -> Result<(), EngineError> {
     let (width, height) = composite_canvas_size(project);
     let config = cutlass_compositor::CompositorConfig::new(width, height);
-    resolve_layers(project, Some(cache), pool, time, &config, color_convert)?;
+    resolve_layers(project, Some(cache), pool, raster, time, &config, color_convert, None)?;
     Ok(())
 }
 
 /// Export frame path: no disk cache; returns GPU-composited YUV420P for encode.
+#[allow(clippy::too_many_arguments)]
 pub fn get_export_yuv_frame(
     project: &Project,
     pool: &mut DecoderPool,
+    raster: &mut GeneratorRaster,
     gpu: &GpuContext,
     compositor: &mut Compositor,
     time: RationalTime,
@@ -99,7 +115,8 @@ pub fn get_export_yuv_frame(
 
     let (width, height) = composite_canvas_size(project);
     let config = cutlass_compositor::CompositorConfig::new(width, height);
-    let layers = resolve_layers(project, None, pool, time, &config, color_convert)?;
+    // Export never sees a gesture override: committed project state only.
+    let layers = resolve_layers(project, None, pool, raster, time, &config, color_convert, None)?;
 
     // Same gap policy as preview: a tick no clip covers exports as black.
     if layers.is_empty() {

@@ -73,6 +73,12 @@ export struct Clip {
     duration-label: string,
     // Text / title generator content. Empty on non-text clips.
     text-content: string,
+    // Generator kind for synthetic clips: "" (media), "text", "solid",
+    // "rect", or "ellipse". Drives the timeline card's preview rendering.
+    generator-kind: string,
+    // Fill color for solid / shape generators (transparent otherwise), so the
+    // timeline card shows the clip's actual color instead of the lane color.
+    fill-color: color,
     // How far (sequence ticks) each edge can EXTEND beyond the current
     // placement before running out of source media: head = lowering
     // `timeline-start`, tail = raising the end. Shrinking is always allowed
@@ -85,6 +91,21 @@ export struct Clip {
     // selected / moved / trimmed together while the Link toggle is on —
     // e.g. the video+audio pair from one media drop. "" ⇔ unlinked.
     link-id: string,
+    // Native content dimensions for preview placement geometry: the source
+    // media's pixel size, or 0×0 for generated clips (which raster at canvas
+    // size). Keys the aspect-fit math in src/preview_select.rs.
+    media-width: int,
+    media-height: int,
+    // Spatial transform (preview roadmap Phase 1), mirroring the engine's
+    // `ClipTransform`: content-center offset from canvas center normalized
+    // to canvas dimensions (+y down), uniform scale (1.0 = aspect-fit),
+    // rotation in degrees clockwise, opacity 0..=1. Projected read-only —
+    // edits go through `EditCommand::SetClipTransform` on the worker.
+    transform-position-x: float,
+    transform-position-y: float,
+    transform-scale: float,
+    transform-rotation: float,
+    transform-opacity: float,
 }
 
 // Drives lane ordering, drag targeting (same-kind blocks), and which

@@ -19,6 +19,7 @@ use crate::composite::composite_canvas_size;
 use crate::decoder_pool::DecoderPool;
 use crate::error::EngineError;
 use crate::export_audio::{EXPORT_AUDIO_RATE, ExportAudioMixer, sample_boundary};
+use crate::generator_raster::GeneratorRaster;
 use crate::preview;
 
 fn gpu_err(err: CompositorError) -> EngineError {
@@ -188,6 +189,9 @@ pub fn export_timeline_with(
     // frames repeat a tick; keep the last composite so a repeat costs a
     // plane copy instead of a decode + GPU round-trip.
     let mut last: Option<(i64, cutlass_compositor::Yuv420pImage)> = None;
+    // Generator rasters (text, shapes) are cached per export; a static title
+    // composites once, not once per frame.
+    let mut raster = GeneratorRaster::new();
     // Audio streams in lockstep: after video frame `n`, the samples covering
     // `[boundary(n), boundary(n+1))` — so the muxer interleaves cleanly and
     // both tracks end at the same wall-clock instant.
@@ -199,6 +203,7 @@ pub fn export_timeline_with(
             let yuv = preview::get_export_yuv_frame(
                 project,
                 pool,
+                &mut raster,
                 gpu,
                 compositor,
                 RationalTime::new(tick, tl_rate),

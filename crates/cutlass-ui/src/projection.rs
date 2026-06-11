@@ -137,12 +137,22 @@ fn clip_to_slint(project: &EngineProject, clip: &EngineClip) -> Clip {
     // (1:1 playback; the true media in/out isn't needed until time-remap or a
     // live inspector requires it).
     let (name, text_content) = clip_labels(project, clip);
+    let (generator_kind, fill_color) = clip_generator_visual(clip);
     let (head_room, tail_room) = trim_rooms(project, clip);
     let (media_id, source_in_s) = match &clip.content {
         ClipSource::Media { media, source } => {
             (media.raw().to_string(), time_to_seconds(source.start) as f32)
         }
         ClipSource::Generated(_) => (String::new(), 0.0),
+    };
+    // Native content size for preview placement (0×0 ⇔ rasters at canvas
+    // size). Media that vanished from the pool degrades the same way.
+    let (media_w, media_h) = match &clip.content {
+        ClipSource::Media { media, .. } => project
+            .media(*media)
+            .map(|m| (m.width as i32, m.height as i32))
+            .unwrap_or((0, 0)),
+        ClipSource::Generated(_) => (0, 0),
     };
 
     Clip {
@@ -154,6 +164,8 @@ fn clip_to_slint(project: &EngineProject, clip: &EngineClip) -> Clip {
         source_in_s,
         duration_label: clip_duration_label(clip.timeline.duration).into(),
         text_content: text_content.into(),
+        generator_kind: generator_kind.into(),
+        fill_color,
         head_room_ticks: head_room,
         tail_room_ticks: tail_room,
         link_id: clip
@@ -161,6 +173,13 @@ fn clip_to_slint(project: &EngineProject, clip: &EngineClip) -> Clip {
             .map(|link| link.raw().to_string())
             .unwrap_or_default()
             .into(),
+        media_width: media_w,
+        media_height: media_h,
+        transform_position_x: clip.transform.position[0],
+        transform_position_y: clip.transform.position[1],
+        transform_scale: clip.transform.scale,
+        transform_rotation: clip.transform.rotation,
+        transform_opacity: clip.transform.opacity,
     }
 }
 
@@ -262,6 +281,29 @@ fn clip_labels(project: &EngineProject, clip: &EngineClip) -> (String, String) {
     }
 }
 
+/// `(generator-kind tag, fill color)` for the timeline card. The tag selects
+/// the card's preview rendering (see `panels/timeline/clip.slint`); the color
+/// is the solid/shape fill (transparent for everything else).
+fn clip_generator_visual(clip: &EngineClip) -> (&'static str, Color) {
+    let transparent = Color::from_argb_u8(0, 0, 0, 0);
+    match &clip.content {
+        ClipSource::Generated(Generator::Text { .. }) => ("text", transparent),
+        ClipSource::Generated(Generator::SolidColor { rgba }) => ("solid", rgba_color(*rgba)),
+        ClipSource::Generated(Generator::Shape { shape, rgba }) => {
+            let tag = match shape {
+                cutlass_models::Shape::Rectangle => "rect",
+                cutlass_models::Shape::Ellipse => "ellipse",
+            };
+            (tag, rgba_color(*rgba))
+        }
+        _ => ("", transparent),
+    }
+}
+
+fn rgba_color(rgba: [u8; 4]) -> Color {
+    Color::from_argb_u8(rgba[3], rgba[0], rgba[1], rgba[2])
+}
+
 /// Largest video-media resolution in the project, or the default canvas.
 /// Mirrors `cutlass_engine`'s `composite_canvas_size`.
 fn canvas_size(project: &EngineProject) -> (f32, f32) {
@@ -285,8 +327,14 @@ fn canvas_size(project: &EngineProject) -> (f32, f32) {
     if max_w == 0 || max_h == 0 {
         (DEFAULT_CANVAS_W, DEFAULT_CANVAS_H)
     } else {
-        (max_w as f32, max_h as f32)
+        // Mirror the engine's even-rounding (H.264 requirement) so preview
+        // hit-test geometry matches the composited frame exactly.
+        (to_even(max_w) as f32, to_even(max_h) as f32)
     }
+}
+
+fn to_even(v: u32) -> u32 {
+    if v.is_multiple_of(2) { v } else { v + 1 }
 }
 
 fn track_kind(kind: EngineKind) -> TrackKind {

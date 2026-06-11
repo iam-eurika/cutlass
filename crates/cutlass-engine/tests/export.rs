@@ -132,6 +132,36 @@ fn export_longer_solid_timeline_scales_frame_count() {
     assert_export_duration_near(&out, 48, 24);
 }
 
+#[test]
+fn export_text_clip_renders_visible_pixels() {
+    // The project-overview "gap to close": a text generator must reach the
+    // exported frames, not be silently dropped. White title text on the black
+    // canvas yields bright luma pixels; a dropped generator would stay black.
+    let (dir, mut engine) = temp_engine();
+    let track = add_track(&mut engine, TrackKind::Text, "T1");
+    add_generated(
+        &mut engine,
+        track,
+        Generator::Text {
+            content: "HELLO".into(),
+        },
+        tr(0, 24),
+    );
+
+    let out = dir.path().join("text_export.mp4");
+    let stats = export_to(&mut engine, &out);
+    assert_eq!(stats.frames, 24);
+
+    let mut dec = open_export(&out);
+    let frame = dec
+        .seek_to_frame(Duration::from_millis(200))
+        .expect("seek")
+        .expect("decoded frame");
+    // Limited-range black is Y≈16; rasterized white text pushes luma high.
+    let bright = frame.planes[0].data.iter().filter(|&&y| y > 120).count();
+    assert!(bright > 0, "exported text frame had no bright pixels (text dropped?)");
+}
+
 // --- media ----------------------------------------------------------------
 
 #[test]

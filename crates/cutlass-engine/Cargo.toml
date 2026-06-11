@@ -16,6 +16,8 @@ cutlass-probe = { path = "../cutlass-probe" }
 pollster.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+cosmic-text.workspace = true
+tiny-skia.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

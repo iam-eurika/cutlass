@@ -1,36 +1,62 @@
-// blit.wgsl — full-canvas textured layer (RGBA upload)
+// blit.wgsl — placed textured quad (RGBA upload)
 //
-// Used by CompositeLayer::Rgba: a CPU-decoded/resized RGBA8 canvas uploaded as a
-// GPU texture each frame. Samples with linear filtering (mostly irrelevant at
-// 1:1 canvas size; kept for future scaled layers).
+// Used by LayerContent::Rgba: a CPU-decoded RGBA8 buffer or generator raster
+// uploaded as a GPU texture each frame and drawn as a positioned, rotated,
+// scaled quad (LayerPlacement). Linear filtering covers scaled layers; at 1:1
+// full-canvas placement sampling lands exactly on texel centers (bit-exact).
 //
 // Pipeline: compositor.rs `blit_pipeline`
 //   - Same render target and src-over blend as solid.wgsl
 //   - Layer textures are Rgba8Unorm, COPY_DST + TEXTURE_BINDING
 //
-// UV mapping: clip-space Y is flipped so texture row 0 is the top of the image
-// (matches engine RGBA row-major layout).
+// Geometry: a unit quad ([-0.5, 0.5]², +y down in content space) mapped to
+// clip space by the per-layer affine in `placement` (computed in Rust:
+// canvas placement composed with canvas→clip). Corner (-0.5, -0.5) is the
+// content's top-left ⇒ UV (0, 0), matching row-major top-first RGBA.
+
+struct Placement {
+    // Columns of the 2x2 linear part mapping unit-quad corners to clip
+    // space: (m00, m10, m01, m11).
+    linear: vec4<f32>,
+    // Clip-space translation (x, y), layer opacity, pad.
+    trans_opacity: vec4<f32>,
+}
 
 @group(0) @binding(0) var layer_tex: texture_2d<f32>;
 @group(0) @binding(1) var layer_sampler: sampler;
+@group(0) @binding(2) var<uniform> placement: Placement;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
 }
 
+fn quad_corner(vertex_index: u32) -> vec2<f32> {
+    var corners = array<vec2<f32>, 6>(
+        vec2(-0.5, -0.5), vec2(0.5, -0.5), vec2(-0.5, 0.5),
+        vec2(-0.5, 0.5), vec2(0.5, -0.5), vec2(0.5, 0.5),
+    );
+    return corners[vertex_index];
+}
+
 @vertex
 fn vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    let c = quad_corner(vertex_index);
+    let m = placement.linear;
+    let t = placement.trans_opacity;
     var out: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 4 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 4 - 1);
-    out.position = vec4(x, y, 0.0, 1.0);
-    // Map clip [-1,1] to UV [0,1]; flip Y for top-left image origin.
-    out.uv = vec2((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    out.position = vec4(
+        m.x * c.x + m.z * c.y + t.x,
+        m.y * c.x + m.w * c.y + t.y,
+        0.0,
+        1.0,
+    );
+    out.uv = c + vec2(0.5, 0.5);
     return out;
 }
 
 @fragment
 fn fs(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(layer_tex, layer_sampler, in.uv);
+    let px = textureSample(layer_tex, layer_sampler, in.uv);
+    return vec4(px.rgb, px.a * placement.trans_opacity.z);
 }

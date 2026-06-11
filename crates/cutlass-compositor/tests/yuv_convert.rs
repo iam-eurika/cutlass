@@ -1,7 +1,7 @@
 //! GPU YUV ↔ RGBA conversion vs legacy CPU reference.
 
 use cutlass_compositor::{
-    CompositeLayer, Compositor, CompositorConfig, GpuContext, Yuv420pLayer,
+    CompositeLayer, Compositor, CompositorConfig, GpuContext, LayerPlacement, Yuv420pLayer,
     legacy_rgba_to_yuv420p,
 };
 fn try_gpu() -> Option<GpuContext> {
@@ -58,11 +58,15 @@ fn gpu_yuv_gray_matches_legacy_cpu_at_same_size() {
     let layer = solid_yuv420p(64, 64, 128, 128, 128);
     let legacy = legacy_yuv_to_rgba(&layer);
 
+    let config = CompositorConfig::new(64, 64);
     let image = compositor
         .composite(
             &gpu,
-            &CompositorConfig::new(64, 64),
-            &[CompositeLayer::Yuv420p(layer)],
+            &config,
+            &[CompositeLayer::yuv420p(
+                layer,
+                LayerPlacement::full_canvas(&config),
+            )],
         )
         .expect("gpu composite");
 
@@ -113,11 +117,15 @@ fn gpu_yuv_blit_at_native_size_preserves_sharp_edges() {
     }
     let legacy = legacy_yuv_to_rgba(&layer);
 
+    let config = CompositorConfig::new(w, h);
     let image = compositor
         .composite(
             &gpu,
-            &CompositorConfig::new(w, h),
-            &[CompositeLayer::Yuv420p(layer)],
+            &config,
+            &[CompositeLayer::yuv420p(
+                layer,
+                LayerPlacement::full_canvas(&config),
+            )],
         )
         .expect("gpu composite");
 
@@ -173,11 +181,10 @@ fn gpu_rgba_to_yuv_matches_legacy_cpu() {
         .composite_yuv420p(
             &gpu,
             &config,
-            &[
-                CompositeLayer::Solid {
-                    rgba: [180, 40, 200, 255],
-                },
-            ],
+            &[CompositeLayer::solid(
+                [180, 40, 200, 255],
+                LayerPlacement::full_canvas(&config),
+            )],
         )
         .expect("gpu yuv readback");
 

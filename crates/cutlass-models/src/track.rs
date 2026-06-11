@@ -185,7 +185,7 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clip::{Clip, ClipSource, Generator};
+    use crate::clip::{Clip, ClipSource, ClipTransform, Generator};
     use crate::time::Rational;
 
     const R24: Rational = Rational::FPS_24;
@@ -264,6 +264,7 @@ mod tests {
             content: ClipSource::Generated(Generator::Adjustment),
             timeline: tr(20, 30),
             link: None,
+            transform: ClipTransform::IDENTITY,
         };
         let displaced = track.insert_clip(replacement).unwrap();
         assert_eq!(displaced.timeline, tr(0, 10));
@@ -322,12 +323,14 @@ mod tests {
             content: ClipSource::Generated(Generator::Adjustment),
             timeline: tr(10, 5),
             link: None,
+            transform: ClipTransform::IDENTITY,
         };
         let b = Clip {
             id: ClipId::from_raw(1),
             content: ClipSource::Generated(Generator::Adjustment),
             timeline: tr(10, 5),
             link: None,
+            transform: ClipTransform::IDENTITY,
         };
         track.insert_clip(a);
         track.insert_clip(b);

@@ -141,6 +141,25 @@ export component ClipView inherits Rectangle {
         }
     }
 
+    // Solid generators paint their fill across the whole card so the timeline
+    // shows the real color, not the lane color.
+    if model.generator-kind == "solid": Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: root.dimmed ? model.fill-color.with-alpha(0.35) : model.fill-color;
+    }
+
+    // Shape generators show a centered swatch (ellipse rounds to a pill) in
+    // the fill color, over the lane-colored card.
+    if model.generator-kind == "rect" || model.generator-kind == "ellipse": Rectangle {
+        width: min(parent.width - 8px, parent.height * 0.7);
+        height: parent.height * 0.6;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: root.dimmed ? model.fill-color.with-alpha(0.35) : model.fill-color;
+        border-radius: model.generator-kind == "ellipse" ? self.height / 2 : 2px;
+    }
+
     ta := TouchArea {
         width: parent.width;
         height: parent.height;

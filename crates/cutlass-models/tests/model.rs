@@ -4,7 +4,7 @@ mod common;
 
 use common::{rt, sample_media, tr, tr_at, FPS_24, FPS_30};
 use cutlass_models::{
-    Generator, MediaSource, ModelError, Project, Shape, TrackKind,
+    ClipTransform, Generator, MediaSource, ModelError, Project, Shape, TrackKind,
 };
 
 #[test]
@@ -55,6 +55,7 @@ fn generated_clips_need_no_media() {
             gfx,
             Generator::Shape {
                 shape: Shape::Rectangle,
+                rgba: [255, 255, 255, 255],
             },
             tr(48, 48),
         )
@@ -65,6 +66,61 @@ fn generated_clips_need_no_media() {
     assert_eq!(project.clip(shape).unwrap().source_range(), None);
     assert_eq!(project.media_count(), 0);
     assert_eq!(project.timeline().duration().value, 96);
+}
+
+#[test]
+fn set_transform_updates_visual_and_rejects_audio() {
+    let mut project = Project::new("demo", FPS_24);
+    let media_id = project.add_media(sample_media(FPS_24, 1000));
+    let v1 = project.add_track(TrackKind::Video, "V1");
+    let a1 = project.add_track(TrackKind::Audio, "A1");
+
+    let video = project.add_clip(v1, media_id, tr(0, 48), rt(0)).unwrap();
+    let audio = project.add_clip(a1, media_id, tr(0, 48), rt(0)).unwrap();
+
+    // New clips start at identity (aspect-fit, centered).
+    assert!(project.clip(video).unwrap().transform.is_identity());
+
+    let t = ClipTransform {
+        position: [0.1, 0.2],
+        scale: 2.0,
+        rotation: -30.0,
+        opacity: 0.5,
+    };
+    project.set_transform(video, t).expect("set transform");
+    assert_eq!(project.clip(video).unwrap().transform, t);
+
+    // Audio clips have nothing to place on the canvas.
+    assert!(matches!(
+        project.set_transform(audio, t),
+        Err(ModelError::IncompatibleTrackKind { .. })
+    ));
+
+    // Invalid values are rejected and leave the stored transform unchanged.
+    for bad in [
+        ClipTransform {
+            scale: 0.0,
+            ..ClipTransform::IDENTITY
+        },
+        ClipTransform {
+            opacity: 1.5,
+            ..ClipTransform::IDENTITY
+        },
+        ClipTransform {
+            position: [f32::NAN, 0.0],
+            ..ClipTransform::IDENTITY
+        },
+        ClipTransform {
+            rotation: f32::INFINITY,
+            ..ClipTransform::IDENTITY
+        },
+    ] {
+        assert!(matches!(
+            project.set_transform(video, bad),
+            Err(ModelError::InvalidTransform(_))
+        ));
+    }
+    assert_eq!(project.clip(video).unwrap().transform, t);
 }
 
 #[test]

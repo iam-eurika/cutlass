@@ -6,8 +6,91 @@ import {
 } from "../../components/index.slint";
 import { AppStore, EditorStore } from "../../store/index.slint";
 import { AppState } from "../../state.slint";
-import { Media } from "../../models/index.slint";
+import { Media, TrackKind } from "../../models/index.slint";
 import { Button } from "std-widgets.slint";
+
+// One draggable tile in the "Titles & shapes" strip. Dragging reuses the
+// library-drag state machine (window ghost + timeline landing ghost); the
+// payload carries a generator catalog key instead of a media id, and the
+// commit fires EditorStore.on-generated-dropped.
+component GeneratedTile inherits Rectangle {
+    // Catalog key: "text" | "solid" | "rect" | "ellipse".
+    in property <string> generator;
+    in property <string> label;
+    // Lane kind this generator lives on (text titles → text, the rest → sticker).
+    in property <TrackKind> lane-kind;
+    // Default placement length in seconds (text 3s, solids/shapes 5s).
+    in property <int> seconds;
+    // Preview swatch fill.
+    in property <color> swatch;
+    // Draw the swatch as an ellipse rather than a rectangle.
+    in property <bool> round-swatch: false;
+
+    property <int> fps-num: EditorStore.project.sequence.fps.num;
+    property <int> fps-den: EditorStore.project.sequence.fps.den;
+
+    background: AppStore.theme.surface.content-background;
+    border-radius: 4px;
+    clip: true;
+
+    Rectangle {
+        width: 44px;
+        height: 44px;
+        y: 12px;
+        background: root.swatch;
+        border-radius: root.round-swatch ? self.width / 2 : 4px;
+    }
+
+    VerticalLayout {
+        alignment: end;
+        Rectangle {
+            height: 22px;
+            background: #000000a0;
+            CutlassText {
+                text: root.label;
+                style: AppStore.theme.typography.label;
+                overflow: elide;
+                x: 4px;
+                width: parent.width - 8px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                AppState.library-drag-media-id = "";
+                AppState.library-drag-generator = root.generator;
+                AppState.library-drag-lane-kind = root.lane-kind;
+                AppState.library-drag-duration-ticks =
+                    max(1, round(root.seconds * root.fps-num / root.fps-den));
+                AppState.library-drag-w = parent.width;
+                AppState.library-drag-h = parent.height;
+                AppState.library-drag-tile-anchor-x = self.mouse-x;
+                AppState.library-drag-tile-anchor-y = self.mouse-y;
+                AppState.library-drag-cursor-x = self.absolute-position.x + self.mouse-x;
+                AppState.library-drag-cursor-y = self.absolute-position.y + self.mouse-y;
+                AppState.library-drag-active = true;
+            }
+            if event.kind == PointerEventKind.up {
+                AppState.library-drag-active = false;
+            }
+        }
+
+        moved => {
+            if !self.pressed || !AppState.library-drag-active {
+                return;
+            }
+            AppState.library-drag-cursor-x = self.absolute-position.x + self.mouse-x;
+            AppState.library-drag-cursor-y = self.absolute-position.y + self.mouse-y;
+        }
+    }
+}
 
 export component LibraryPanel inherits PanelBase {
     // Read-only projection of the engine media pool (see src/projection.rs).
@@ -24,6 +107,54 @@ export component LibraryPanel inherits PanelBase {
                 x: 250px;
                 clicked => {
                     EditorStore.on-import-clicked();
+                }
+            }
+        }
+
+        // "Titles & shapes": draggable generators that don't come from the
+        // media pool. Drop one on the timeline to create a text / solid /
+        // shape clip (see EditorStore.on-generated-dropped).
+        VerticalLayout {
+            padding: AppStore.theme.metrics.spacing.md;
+            spacing: AppStore.theme.metrics.spacing.sm;
+
+            CutlassText {
+                text: "Titles & shapes";
+                style: AppStore.theme.typography.label;
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+                height: 72px;
+
+                GeneratedTile {
+                    generator: "text";
+                    label: "Text";
+                    lane-kind: TrackKind.text;
+                    seconds: 3;
+                    swatch: #3A6FC8;
+                }
+                GeneratedTile {
+                    generator: "solid";
+                    label: "Solid";
+                    lane-kind: TrackKind.sticker;
+                    seconds: 5;
+                    swatch: #1E1E1E;
+                }
+                GeneratedTile {
+                    generator: "rect";
+                    label: "Rectangle";
+                    lane-kind: TrackKind.sticker;
+                    seconds: 5;
+                    swatch: #E0E0E0;
+                }
+                GeneratedTile {
+                    generator: "ellipse";
+                    label: "Ellipse";
+                    lane-kind: TrackKind.sticker;
+                    seconds: 5;
+                    swatch: #E0E0E0;
+                    round-swatch: true;
                 }
             }
         }
@@ -69,6 +200,8 @@ export component LibraryPanel inherits PanelBase {
                     pointer-event(event) => {
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
                             AppState.library-drag-media-id = m.id;
+                            AppState.library-drag-generator = "";
+                            AppState.library-drag-lane-kind = TrackKind.video;
                             AppState.library-drag-duration-ticks = m.duration-ticks;
                             AppState.library-drag-w = parent.width;
                             AppState.library-drag-h = parent.height;

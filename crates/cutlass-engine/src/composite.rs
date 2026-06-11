@@ -3,15 +3,18 @@
 use std::time::Instant;
 
 use cutlass_cache::{FrameCache, SourceFingerprint};
-use cutlass_compositor::{CompositeLayer, CompositorConfig};
+use cutlass_compositor::{CompositeLayer, CompositorConfig, LayerPlacement};
 use cutlass_decoder::DecodedFrame;
-use cutlass_models::{Clip, Generator, ModelError, Project, RationalTime, TrackKind};
+use cutlass_models::{
+    Clip, ClipId, ClipTransform, Generator, ModelError, Project, RationalTime, TrackKind,
+};
 use tracing::debug;
 
 use crate::ColorConvertPath;
 use crate::decoder_pool::DecoderPool;
 use crate::error::EngineError;
 use crate::frame::{decoded_to_yuv_layer, legacy_decoded_to_rgba, RgbaFrame};
+use crate::generator_raster::GeneratorRaster;
 
 const DEFAULT_WIDTH: u32 = 1920;
 const DEFAULT_HEIGHT: u32 = 1080;
@@ -43,18 +46,57 @@ pub fn composite_canvas_size(project: &Project) -> (u32, u32) {
     }
 }
 
+/// Canvas placement for content of `content_w × content_h` under a clip
+/// transform (CapCut semantics: scale 1.0 aspect-fits the content inside the
+/// canvas, centered; position offsets are normalized to canvas dimensions;
+/// rotation is degrees clockwise about the content center).
+///
+/// This is *the* geometry: the compositor draws it, and preview hit-testing
+/// (preview roadmap Phase 2) inverts it — the two can never disagree.
+pub fn layer_placement(
+    transform: &ClipTransform,
+    content_w: u32,
+    content_h: u32,
+    canvas: &CompositorConfig,
+) -> LayerPlacement {
+    let (cw, ch) = (canvas.width as f32, canvas.height as f32);
+    let (w, h) = (content_w as f32, content_h as f32);
+    let fit = if w > 0.0 && h > 0.0 {
+        (cw / w).min(ch / h)
+    } else {
+        1.0
+    };
+    let scale = fit * transform.scale;
+    LayerPlacement {
+        center: [
+            cw * 0.5 + transform.position[0] * cw,
+            ch * 0.5 + transform.position[1] * ch,
+        ],
+        size: [w * scale, h * scale],
+        rotation: transform.rotation.to_radians(),
+        opacity: transform.opacity.clamp(0.0, 1.0),
+    }
+}
+
 /// Resolve enabled video layers at `time`, bottom to top.
 ///
 /// Pass `cache: Some(...)` for interactive preview (disk cache on hit). Pass
 /// `None` for export so every media frame is decoded from the original source
 /// file — never from cached YUV blobs (and never from future proxy paths).
+///
+/// `override_transform` substitutes one clip's transform for this resolve
+/// only — the live preview of an uncommitted drag gesture (preview roadmap
+/// Phase 3). Session state, never project state: export passes `None`.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_layers(
     project: &Project,
     cache: Option<&FrameCache>,
     pool: &mut DecoderPool,
+    raster: &mut GeneratorRaster,
     time: RationalTime,
     canvas: &CompositorConfig,
     color_convert: ColorConvertPath,
+    override_transform: Option<(ClipId, ClipTransform)>,
 ) -> Result<Vec<CompositeLayer>, EngineError> {
     let mut layers = Vec::new();
 
@@ -66,34 +108,66 @@ pub fn resolve_layers(
             continue;
         };
 
+        let transform = match &override_transform {
+            Some((id, t)) if *id == clip.id => t,
+            _ => &clip.transform,
+        };
         match &clip.content {
             cutlass_models::ClipSource::Media { .. } => {
                 let layer = match color_convert {
                     ColorConvertPath::Gpu => {
                         let decoded = decode_media_frame(project, cache, pool, clip, time)?;
-                        CompositeLayer::Yuv420p(decoded_to_yuv_layer(&decoded)?)
+                        let yuv = decoded_to_yuv_layer(&decoded)?;
+                        let placement =
+                            layer_placement(transform, yuv.width, yuv.height, canvas);
+                        CompositeLayer::yuv420p(yuv, placement)
                     }
                     ColorConvertPath::LegacyCpu => {
+                        // Native-size upload; the GPU scales it into place
+                        // (the old CPU bilinear resize-to-canvas is gone).
                         let frame = decode_media_rgba_legacy(project, cache, pool, clip, time)?;
-                        let bytes = legacy_resize_rgba(&frame, canvas.width, canvas.height)?;
-                        CompositeLayer::Rgba { bytes }
+                        let placement =
+                            layer_placement(transform, frame.width, frame.height, canvas);
+                        CompositeLayer::rgba(
+                            std::sync::Arc::new(frame.bytes),
+                            frame.width,
+                            frame.height,
+                            placement,
+                        )
                     }
                 };
                 layers.push(layer);
             }
-            cutlass_models::ClipSource::Generated(generator) => match generator {
-                Generator::SolidColor { rgba } => {
-                    layers.push(CompositeLayer::Solid { rgba: *rgba });
+            cutlass_models::ClipSource::Generated(generator) => {
+                // Generators raster at canvas size, so their fit is 1:1 and
+                // the clip transform applies on top of the full canvas.
+                let placement =
+                    layer_placement(transform, canvas.width, canvas.height, canvas);
+                match generator {
+                    Generator::SolidColor { rgba } => {
+                        layers.push(CompositeLayer::solid(*rgba, placement));
+                    }
+                    Generator::Text { .. } | Generator::Shape { .. } => {
+                        match raster.raster(generator, canvas.width, canvas.height) {
+                            Some(bytes) => layers.push(CompositeLayer::rgba(
+                                bytes,
+                                canvas.width,
+                                canvas.height,
+                                placement,
+                            )),
+                            None => {
+                                debug!(?generator, "generator produced no raster");
+                            }
+                        }
+                    }
+                    Generator::Sticker
+                    | Generator::Effect
+                    | Generator::Filter
+                    | Generator::Adjustment => {
+                        debug!(?generator, "skipping unsupported generator for composite");
+                    }
                 }
-                Generator::Text { .. }
-                | Generator::Shape { .. }
-                | Generator::Sticker
-                | Generator::Effect
-                | Generator::Filter
-                | Generator::Adjustment => {
-                    debug!(?generator, "skipping unsupported generator for composite");
-                }
-            },
+            }
         }
     }
 
@@ -174,67 +248,6 @@ fn decode_media_rgba_legacy(
     legacy_decoded_to_rgba(&decoded)
 }
 
-fn legacy_resize_rgba(frame: &RgbaFrame, dst_w: u32, dst_h: u32) -> Result<Vec<u8>, EngineError> {
-    if frame.width == dst_w && frame.height == dst_h {
-        return Ok(frame.bytes.clone());
-    }
-    if frame.width == 0 || frame.height == 0 {
-        return Err(EngineError::Preview("cannot resize empty frame".into()));
-    }
-
-    let src_w = frame.width as f32;
-    let src_h = frame.height as f32;
-    let dst_w_f = dst_w as f32;
-    let dst_h_f = dst_h as f32;
-    let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
-
-    for y in 0..dst_h {
-        for x in 0..dst_w {
-            let src_x = (x as f32 + 0.5) * src_w / dst_w_f - 0.5;
-            let src_y = (y as f32 + 0.5) * src_h / dst_h_f - 0.5;
-            let px = sample_bilinear(&frame.bytes, frame.width, frame.height, src_x, src_y);
-            let i = ((y * dst_w + x) * 4) as usize;
-            out[i..i + 4].copy_from_slice(&px);
-        }
-    }
-    Ok(out)
-}
-
-fn sample_bilinear(bytes: &[u8], w: u32, h: u32, x: f32, y: f32) -> [u8; 4] {
-    let x = x.clamp(0.0, (w.saturating_sub(1)) as f32);
-    let y = y.clamp(0.0, (h.saturating_sub(1)) as f32);
-    let x0 = x.floor() as u32;
-    let y0 = y.floor() as u32;
-    let x1 = (x0 + 1).min(w.saturating_sub(1));
-    let y1 = (y0 + 1).min(h.saturating_sub(1));
-    let tx = x - x0 as f32;
-    let ty = y - y0 as f32;
-
-    let p = |px: u32, py: u32| -> [f32; 4] {
-        let i = ((py * w + px) * 4) as usize;
-        [
-            bytes[i] as f32,
-            bytes[i + 1] as f32,
-            bytes[i + 2] as f32,
-            bytes[i + 3] as f32,
-        ]
-    };
-
-    let c00 = p(x0, y0);
-    let c10 = p(x1, y0);
-    let c01 = p(x0, y1);
-    let c11 = p(x1, y1);
-
-    let mut out = [0u8; 4];
-    for ch in 0..4 {
-        let top = c00[ch] * (1.0 - tx) + c10[ch] * tx;
-        let bot = c01[ch] * (1.0 - tx) + c11[ch] * tx;
-        let v = top * (1.0 - ty) + bot * ty;
-        out[ch] = v.round().clamp(0.0, 255.0) as u8;
-    }
-    out
-}
-
 fn to_even(v: u32) -> u32 {
     if v.is_multiple_of(2) { v } else { v + 1 }
 }
@@ -242,6 +255,7 @@ fn to_even(v: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cutlass_compositor::LayerContent;
     use cutlass_models::Rational;
 
     #[test]
@@ -250,11 +264,126 @@ mod tests {
         assert_eq!(composite_canvas_size(&project), (1920, 1080));
     }
 
+    fn rgba_layer(layer: &CompositeLayer) -> &std::sync::Arc<Vec<u8>> {
+        match &layer.content {
+            LayerContent::Rgba { bytes, .. } => bytes,
+            other => panic!("expected Rgba layer, got {other:?}"),
+        }
+    }
+
+    // --- layer_placement ---------------------------------------------------
+
+    const CANVAS: CompositorConfig = CompositorConfig {
+        width: 1920,
+        height: 1080,
+    };
+
     #[test]
-    fn legacy_resize_identity_is_copy() {
-        let frame = RgbaFrame::new(2, 2, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+    fn identity_transform_on_canvas_sized_content_is_full_canvas() {
+        let p = layer_placement(&ClipTransform::IDENTITY, 1920, 1080, &CANVAS);
+        assert_eq!(p, LayerPlacement::full_canvas(&CANVAS));
+    }
+
+    #[test]
+    fn mismatched_aspect_fits_inside_canvas() {
+        // Portrait 1080×1920 into a 1920×1080 canvas: height-limited.
+        let p = layer_placement(&ClipTransform::IDENTITY, 1080, 1920, &CANVAS);
+        assert_eq!(p.center, [960.0, 540.0]);
+        let fit = 1080.0 / 1920.0; // canvas_h / content_h
+        assert_eq!(p.size, [1080.0 * fit, 1920.0 * fit]);
+        assert!(p.size[1] <= 1080.0 + 1e-3);
+    }
+
+    #[test]
+    fn position_scale_rotation_opacity_apply() {
+        let t = ClipTransform {
+            position: [0.25, -0.5],
+            scale: 0.5,
+            rotation: 90.0,
+            opacity: 0.4,
+        };
+        let p = layer_placement(&t, 1920, 1080, &CANVAS);
+        assert_eq!(p.center, [960.0 + 0.25 * 1920.0, 540.0 - 0.5 * 1080.0]);
+        assert_eq!(p.size, [960.0, 540.0]);
+        assert!((p.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert_eq!(p.opacity, 0.4);
+    }
+
+    #[test]
+    fn resolve_text_generator_yields_rgba_layer() {
+        use cutlass_models::TimeRange;
+        let mut project = Project::new("t", cutlass_models::Rational::FPS_24);
+        let track = project.add_track(TrackKind::Text, "T1");
+        project
+            .add_generated(
+                track,
+                Generator::Text {
+                    content: "Hi".into(),
+                },
+                TimeRange::at_rate(0, 24, cutlass_models::Rational::FPS_24),
+            )
             .unwrap();
-        let out = legacy_resize_rgba(&frame, 2, 2).unwrap();
-        assert_eq!(out, frame.bytes);
+
+        let mut pool = DecoderPool::new();
+        let mut raster = GeneratorRaster::new();
+        let canvas = CompositorConfig::new(320, 240);
+        let layers = resolve_layers(
+            &project,
+            None,
+            &mut pool,
+            &mut raster,
+            RationalTime::new(0, cutlass_models::Rational::FPS_24),
+            &canvas,
+            ColorConvertPath::Gpu,
+            None,
+        )
+        .unwrap();
+        assert_eq!(layers.len(), 1);
+        let bytes = rgba_layer(&layers[0]);
+        assert_eq!(bytes.len(), (320 * 240 * 4) as usize);
+        // Text rasterizes some visible (non-transparent) pixels.
+        assert!(bytes.chunks_exact(4).any(|p| p[3] > 0));
+    }
+
+    #[test]
+    fn resolve_shape_generator_is_cached_across_frames() {
+        use cutlass_models::{Shape, TimeRange};
+        let mut project = Project::new("t", cutlass_models::Rational::FPS_24);
+        let track = project.add_track(TrackKind::Sticker, "ST1");
+        project
+            .add_generated(
+                track,
+                Generator::Shape {
+                    shape: Shape::Ellipse,
+                    rgba: [10, 200, 50, 255],
+                },
+                TimeRange::at_rate(0, 24, cutlass_models::Rational::FPS_24),
+            )
+            .unwrap();
+
+        let mut pool = DecoderPool::new();
+        let mut raster = GeneratorRaster::new();
+        let canvas = CompositorConfig::new(160, 160);
+        let resolve = |raster: &mut GeneratorRaster, pool: &mut DecoderPool, tick: i64| {
+            resolve_layers(
+                &project,
+                None,
+                pool,
+                raster,
+                RationalTime::new(tick, cutlass_models::Rational::FPS_24),
+                &canvas,
+                ColorConvertPath::Gpu,
+                None,
+            )
+            .unwrap()
+        };
+
+        let first = resolve(&mut raster, &mut pool, 0);
+        let second = resolve(&mut raster, &mut pool, 5);
+        // Same generator + canvas on a later frame reuses the cached raster.
+        assert!(std::sync::Arc::ptr_eq(
+            rgba_layer(&first[0]),
+            rgba_layer(&second[0])
+        ));
     }
 }

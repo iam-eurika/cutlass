@@ -208,12 +208,16 @@ pub fn resolve_clip_drag(
 
 /// Resolve where a library tile dropped at (`cursor_tick`, `drop_row`) lands.
 ///
-/// Freeform: a video lane under the cursor (or empty ⇒ the worker creates
-/// one at `drop_row`), position magneted to clip edges / playhead / tick 0.
-/// With `main_magnet` on, dropping on the main lane resolves to an insertion
-/// between clips (the worker ripple-inserts, shifting later clips right).
+/// Freeform: a `lane_kind` lane under the cursor (or empty ⇒ the worker
+/// creates one at `drop_row`), position magneted to clip edges / playhead /
+/// tick 0. Media tiles target video lanes; generated tiles (text titles,
+/// solids, shapes) target their own kind. With `main_magnet` on, dropping a
+/// *video* tile on the main lane resolves to an insertion between clips (the
+/// worker ripple-inserts, shifting later clips right); generated lanes are
+/// never the main track, so they always land freeform.
 pub fn resolve_library_drop(
     sequence: &Sequence,
+    lane_kind: TrackKind,
     duration_ticks: i32,
     cursor_tick: i32,
     drop_row: i32,
@@ -226,9 +230,10 @@ pub fn resolve_library_drop(
         .contains(&drop_row)
         .then(|| sequence.tracks.row_data(drop_row as usize))
         .flatten()
-        .filter(|t| t.kind == TrackKind::Video && !t.locked);
+        .filter(|t| t.kind == lane_kind && !t.locked);
 
-    if main_magnet
+    if lane_kind == TrackKind::Video
+        && main_magnet
         && main_video_row(sequence) == Some(drop_row)
         && let Some(track) = &row_track
     {
@@ -850,7 +855,7 @@ mod tests {
         let seq = sequence(vec![locked]);
         // No unlocked video lane under the cursor → empty target (worker makes
         // a new lane), and no insertion even with the magnet on.
-        let r = resolve_library_drop(&seq, 48, 10, 0, 0, 5, true);
+        let r = resolve_library_drop(&seq, TrackKind::Video, 48, 10, 0, 0, 5, true);
         assert_eq!(r.target_track_id, "");
         assert!(!r.is_insert);
     }
@@ -924,13 +929,13 @@ mod tests {
     #[test]
     fn magnet_library_drop_on_main_lane_inserts_at_boundary() {
         let seq = sample_sequence();
-        let before = resolve_library_drop(&seq, 48, 30, 1, 0, 5, true);
+        let before = resolve_library_drop(&seq, TrackKind::Video, 48, 30, 1, 0, 5, true);
         assert!(before.is_insert);
         assert_eq!(before.target_track_id, "1");
         assert_eq!(before.resolved_start, 10);
         assert_eq!(before.caret_tick, 10);
 
-        let after = resolve_library_drop(&seq, 48, 90, 1, 0, 5, true);
+        let after = resolve_library_drop(&seq, TrackKind::Video, 48, 90, 1, 0, 5, true);
         assert!(after.is_insert);
         assert_eq!(after.resolved_start, 110);
     }
@@ -939,28 +944,52 @@ mod tests {
     fn library_drop_freeform_snaps_and_targets_video_lane() {
         let seq = sample_sequence();
         // Overlay video lane (row 0): cursor 78 magnets to clip "2"'s end.
-        let r = resolve_library_drop(&seq, 48, 78, 0, 0, 5, false);
+        let r = resolve_library_drop(&seq, TrackKind::Video, 48, 78, 0, 0, 5, false);
         assert!(!r.is_insert);
         assert_eq!(r.target_track_id, "2");
         assert_eq!(r.resolved_start, 80);
 
         // Audio row: no video target — the worker creates a lane at the row.
-        let foreign = resolve_library_drop(&seq, 48, 100, 2, 0, 0, true);
+        let foreign = resolve_library_drop(&seq, TrackKind::Video, 48, 100, 2, 0, 0, true);
         assert_eq!(foreign.target_track_id, "");
         assert_eq!(foreign.target_row, 2);
         assert!(!foreign.is_insert);
     }
 
     #[test]
+    fn generated_drop_targets_matching_kind_lane() {
+        // Rows: 0 = text lane "T", 1 = video lane "1".
+        let seq = sequence(vec![
+            track("T", TrackKind::Text, vec![clip("t1", 0, 72)]),
+            track("1", TrackKind::Video, vec![clip("1", 0, 100)]),
+        ]);
+        // A text tile dropped on the text lane lands there (first-fit handled
+        // by the worker; resolver just targets the lane).
+        let on_text = resolve_library_drop(&seq, TrackKind::Text, 72, 100, 0, 0, 5, false);
+        assert_eq!(on_text.target_track_id, "T");
+        assert!(!on_text.is_insert);
+
+        // A text tile dropped on the *video* row finds no text lane there →
+        // empty target, worker creates a text lane at the row.
+        let on_video = resolve_library_drop(&seq, TrackKind::Text, 72, 100, 1, 0, 5, false);
+        assert_eq!(on_video.target_track_id, "");
+        assert_eq!(on_video.target_row, 1);
+
+        // Main magnet never turns a generated drop into an insertion.
+        let magnet = resolve_library_drop(&seq, TrackKind::Sticker, 120, 50, 1, 0, 5, true);
+        assert!(!magnet.is_insert);
+    }
+
+    #[test]
     fn library_drop_exposes_snap_guide() {
         let seq = sample_sequence();
         // Overlay video lane (row 0): cursor 78 magnets to clip "2"'s end (80).
-        let r = resolve_library_drop(&seq, 48, 78, 0, 0, 5, false);
+        let r = resolve_library_drop(&seq, TrackKind::Video, 48, 78, 0, 0, 5, false);
         assert!(r.has_snap);
         assert_eq!(r.snap_line_tick, 80);
 
         // Out of threshold: no snap, no guide.
-        let no = resolve_library_drop(&seq, 48, 130, 0, 0, 5, false);
+        let no = resolve_library_drop(&seq, TrackKind::Video, 48, 130, 0, 0, 5, false);
         assert!(!no.has_snap);
         assert_eq!(no.snap_line_tick, 0);
     }

@@ -29,7 +29,7 @@ mod track;
 /// for an in-process editing model, but much faster than SipHash for `u64`).
 pub type Map<K, V> = rustc_hash::FxHashMap<K, V>;
 
-pub use clip::{Clip, ClipSource, Generator, Shape};
+pub use clip::{Clip, ClipSource, ClipTransform, Generator, Shape};
 pub use error::ModelError;
 pub use ids::{ClipId, LinkId, MediaId, ProjectId, TrackId};
 pub use media::MediaSource;

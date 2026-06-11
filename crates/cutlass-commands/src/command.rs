@@ -5,7 +5,9 @@
 
 use std::path::PathBuf;
 
-use cutlass_models::{ClipId, Generator, MediaId, RationalTime, TimeRange, TrackId, TrackKind};
+use cutlass_models::{
+    ClipId, ClipTransform, Generator, MediaId, RationalTime, TimeRange, TrackId, TrackKind,
+};
 
 /// A project-level action (media pool, not timeline placement).
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +47,17 @@ pub enum EditCommand {
         track: TrackId,
         generator: Generator,
         timeline: TimeRange,
+    },
+    /// Replace a generated clip's content (e.g. edit a title's text, recolor
+    /// a shape). Rejected for media-backed clips. The inverse restores the
+    /// previous generator.
+    SetGenerator { clip: ClipId, generator: Generator },
+    /// Set a clip's spatial transform (position/scale/rotation/opacity on
+    /// the canvas). Rejected for audio-track clips. The inverse restores the
+    /// previous transform.
+    SetClipTransform {
+        clip: ClipId,
+        transform: ClipTransform,
     },
     /// Split a clip at a timeline position into two abutting clips.
     SplitClip { clip: ClipId, at: RationalTime },

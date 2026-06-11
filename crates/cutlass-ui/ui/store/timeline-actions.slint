@@ -305,7 +305,9 @@ export global TimelineActions {
             }
             TimelineStore.playhead-tick = self.play-end-bound();
             self.last-step-tick = TimelineStore.playhead-tick;
-            self.pause();
+            // Deferred stop: we're inside the playback Timer's own callback,
+            // so flipping `playing` here would re-enter Slint's timer code.
+            TransportBackend.request-stop();
             return;
         }
         if (TimelineStore.play-speed-num < 0
@@ -319,7 +321,8 @@ export global TimelineActions {
             }
             TimelineStore.playhead-tick = self.play-start-bound();
             self.last-step-tick = TimelineStore.playhead-tick;
-            self.pause();
+            // Deferred stop (see the forward-bound case above).
+            TransportBackend.request-stop();
             return;
         }
         TimelineStore.playhead-tick = self.pending-tick;

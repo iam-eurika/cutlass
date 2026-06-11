@@ -11,15 +11,87 @@ impl CompositorConfig {
     }
 }
 
+use std::sync::Arc;
+
 use crate::yuv::Yuv420pLayer;
 
-/// One layer in bottom-to-top stacking order.
+/// Where a layer's content lands on the canvas, in canvas pixels.
+///
+/// The compositor draws a quad of `size` centered on `center`, rotated by
+/// `rotation`, with content alpha multiplied by `opacity`. The same values
+/// drive preview hit-testing, so picking can never disagree with rendering.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerPlacement {
+    /// Content center in canvas pixels (+x right, +y down).
+    pub center: [f32; 2],
+    /// Pre-rotation content extent (width, height) in canvas pixels.
+    pub size: [f32; 2],
+    /// Clockwise rotation about the center, in radians.
+    pub rotation: f32,
+    /// Layer opacity, 0.0..=1.0; multiplies the content's alpha.
+    pub opacity: f32,
+}
+
+impl LayerPlacement {
+    /// The pre-transform behavior: content stretched over the whole canvas.
+    pub fn full_canvas(config: &CompositorConfig) -> Self {
+        Self {
+            center: [config.width as f32 / 2.0, config.height as f32 / 2.0],
+            size: [config.width as f32, config.height as f32],
+            rotation: 0.0,
+            opacity: 1.0,
+        }
+    }
+}
+
+/// One layer in bottom-to-top stacking order: pixel content plus where it
+/// lands on the canvas.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositeLayer {
+    pub content: LayerContent,
+    pub placement: LayerPlacement,
+}
+
+impl CompositeLayer {
+    pub fn yuv420p(layer: Yuv420pLayer, placement: LayerPlacement) -> Self {
+        Self {
+            content: LayerContent::Yuv420p(layer),
+            placement,
+        }
+    }
+
+    pub fn rgba(bytes: Arc<Vec<u8>>, width: u32, height: u32, placement: LayerPlacement) -> Self {
+        Self {
+            content: LayerContent::Rgba {
+                bytes,
+                width,
+                height,
+            },
+            placement,
+        }
+    }
+
+    pub fn solid(rgba: [u8; 4], placement: LayerPlacement) -> Self {
+        Self {
+            content: LayerContent::Solid { rgba },
+            placement,
+        }
+    }
+}
+
+/// Pixel source for a [`CompositeLayer`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CompositeLayer {
+pub enum LayerContent {
     /// Decoder-native YUV420P; converted and scaled on GPU.
     Yuv420p(Yuv420pLayer),
-    /// Legacy: full-canvas RGBA8 (width×height×4) from CPU conversion/resize.
-    Rgba { bytes: Vec<u8> },
-    /// Full-canvas solid fill (RGBA 0–255).
+    /// RGBA8 (width×height×4) from CPU conversion or generator
+    /// rasterization. Shared via `Arc` so cached rasters (text, shapes) ride
+    /// the per-frame composite path without a copy.
+    Rgba {
+        bytes: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+    },
+    /// Solid fill (RGBA 0–255) across the placed quad.
     Solid { rgba: [u8; 4] },
 }

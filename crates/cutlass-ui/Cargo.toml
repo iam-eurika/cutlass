@@ -10,6 +10,7 @@ name = "cutlass-ui"
 path = "src/main.rs"
 
 [dependencies]
+cutlass-compositor = { path = "../cutlass-compositor" }
 cutlass-decoder = { path = "../cutlass-decoder" }
 cutlass-engine = { path = "../cutlass-engine" }
 cutlass-models = { path = "../cutlass-models" }

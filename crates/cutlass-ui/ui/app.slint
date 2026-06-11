@@ -15,6 +15,7 @@ import { FullscreenPreview } from "fullscreen-preview.slint";
 import { TitleBar } from "shell/title-bar.slint";
 import { ExportDialog } from "shell/export-dialog.slint";
 import { ExportBackend } from "lib/export-backend.slint";
+import { PreviewBackend, PreviewDragResolution } from "lib/preview-backend.slint";
 
 // Re-export globals so Slint's codegen generates accessors on `AppWindow`.
 // Slint only exposes globals from the entry file's exports to the host
@@ -35,6 +36,7 @@ export {
     ClipMove,
 }from "lib/drag-backend.slint";
 export { SelectionBackend, SelectionUpdate }from "lib/selection-backend.slint";
+export { PreviewBackend, PreviewHit, PreviewSelectionBox, PreviewDragResolution }from "lib/preview-backend.slint";
 export { InspectorBackend, SelectedClipInfo }from "lib/inspector-backend.slint";
 export { StripBackend, StripTile }from "lib/strip-backend.slint";
 export { TransportBackend }from "lib/transport-backend.slint";
@@ -89,6 +91,37 @@ export component AppWindow inherits Window {
 
     changed playhead => {
         EditorStore.on-playhead-changed(self.playhead);
+    }
+
+    // Arrow keys nudge the selected visual clip by whole canvas pixels
+    // (preview roadmap Phase 3; CapCut: 1 px, Shift = 10) through the same
+    // commit path as a preview drag — one undoable entry per keypress.
+    // Returns false (so ←/→ fall back to transport frame-stepping) when
+    // nothing is selected or the selection isn't nudgeable (audio clip,
+    // locked or hidden lane).
+    private property <PreviewDragResolution> nudge-res;
+
+    function nudge-selected(dx: float, dy: float) -> bool {
+        if (TimelineStore.selected-clip-id == "") {
+            return false;
+        }
+        self.nudge-res = PreviewBackend.nudge(
+            EditorStore.project.sequence,
+            TimelineStore.selected-clip-id,
+            dx,
+            dy);
+        if (!self.nudge-res.valid) {
+            return false;
+        }
+        EditorStore.on-clip-transform-committed(
+            TimelineStore.selected-clip-id,
+            self.nudge-res.position-x,
+            self.nudge-res.position-y,
+            self.nudge-res.scale,
+            self.nudge-res.rotation,
+            self.nudge-res.opacity,
+            TimelineStore.playhead-tick);
+        return true;
     }
 
     // Playback clock (playback roadmap Phase 1). Sub-frame interval so
@@ -190,14 +223,34 @@ export component AppWindow inherits Window {
                 TimelineActions.set-range-out();
                 return accept;
             }
-            // Phase 4 transport keys: frame-step and jump to start/end.
+            // Arrows: nudge the selected clip in the canvas (Shift = 10 px);
+            // with nothing nudgeable selected, ←/→ frame-step the playhead
+            // (Phase 4 transport keys) and ↑/↓ do nothing.
             if (event.text == Key.LeftArrow) {
+                if (root.nudge-selected(event.modifiers.shift ? -10 : -1, 0)) {
+                    return accept;
+                }
                 TimelineActions.step-playhead(-1);
                 return accept;
             }
             if (event.text == Key.RightArrow) {
+                if (root.nudge-selected(event.modifiers.shift ? 10 : 1, 0)) {
+                    return accept;
+                }
                 TimelineActions.step-playhead(1);
                 return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                if (root.nudge-selected(0, event.modifiers.shift ? -10 : -1)) {
+                    return accept;
+                }
+                return reject;
+            }
+            if (event.text == Key.DownArrow) {
+                if (root.nudge-selected(0, event.modifiers.shift ? 10 : 1)) {
+                    return accept;
+                }
+                return reject;
             }
             if (event.text == Key.Home) {
                 TimelineActions.seek-start();

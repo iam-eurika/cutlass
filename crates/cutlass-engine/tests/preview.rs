@@ -3,8 +3,9 @@
 mod common;
 
 use common::{import_asset, rt, small_video_asset, temp_engine, tr};
-use cutlass_commands::{Command, EditCommand};
-use cutlass_models::{Generator, TrackKind};
+use cutlass_commands::{Command, EditCommand, EditOutcome};
+use cutlass_engine::ApplyOutcome;
+use cutlass_models::{ClipTransform, Generator, TrackKind};
 
 #[test]
 fn get_frame_returns_rgba_for_placed_clip() {
@@ -103,6 +104,107 @@ fn get_frame_renders_solid_generated_clip() {
         .bytes
         .chunks_exact(4)
         .all(|p| p == [10, 20, 30, 255]));
+}
+
+#[test]
+fn get_frame_places_transformed_solid() {
+    let (_dir, mut engine) = temp_engine();
+    let track = common::add_track(&mut engine, TrackKind::Sticker, "T1");
+
+    let clip_id = match engine
+        .apply(Command::Edit(EditCommand::AddGenerated {
+            track,
+            generator: Generator::SolidColor {
+                rgba: [200, 40, 10, 255],
+            },
+            timeline: tr(0, 48),
+        }))
+        .expect("add solid")
+    {
+        ApplyOutcome::Edited(EditOutcome::Created(id)) => id,
+        other => panic!("unexpected {other:?}"),
+    };
+
+    // Half size, content center moved to the canvas's top-left quadrant
+    // center: the solid covers exactly [0, 960) × [0, 540).
+    engine
+        .apply(Command::Edit(EditCommand::SetClipTransform {
+            clip: clip_id,
+            transform: ClipTransform {
+                position: [-0.25, -0.25],
+                scale: 0.5,
+                rotation: 0.0,
+                opacity: 1.0,
+            },
+        }))
+        .expect("set transform");
+
+    let frame = engine.get_frame(rt(0)).expect("transformed frame");
+    assert_eq!((frame.width, frame.height), (1920, 1080));
+
+    let pixel = |x: u32, y: u32| {
+        let i = ((y * frame.width + x) * 4) as usize;
+        [
+            frame.bytes[i],
+            frame.bytes[i + 1],
+            frame.bytes[i + 2],
+            frame.bytes[i + 3],
+        ]
+    };
+    assert_eq!(pixel(480, 270), [200, 40, 10, 255], "inside placed quad");
+    assert_eq!(pixel(10, 10), [200, 40, 10, 255], "top-left corner covered");
+    assert_eq!(pixel(1440, 810), [0, 0, 0, 255], "rest of canvas stays black");
+    assert_eq!(pixel(1000, 270), [0, 0, 0, 255], "right of the quad is black");
+}
+
+#[test]
+fn transform_override_previews_without_touching_state() {
+    let (_dir, mut engine) = temp_engine();
+    let track = common::add_track(&mut engine, TrackKind::Sticker, "T1");
+
+    let clip_id = match engine
+        .apply(Command::Edit(EditCommand::AddGenerated {
+            track,
+            generator: Generator::SolidColor {
+                rgba: [200, 40, 10, 255],
+            },
+            timeline: tr(0, 48),
+        }))
+        .expect("add solid")
+    {
+        ApplyOutcome::Edited(EditOutcome::Created(id)) => id,
+        other => panic!("unexpected {other:?}"),
+    };
+    let history_depth_before = engine.can_undo();
+
+    // Live-drag override: half size in the top-left quadrant. Rendering
+    // honors it...
+    engine.set_transform_override(Some((
+        clip_id,
+        ClipTransform {
+            position: [-0.25, -0.25],
+            scale: 0.5,
+            rotation: 0.0,
+            opacity: 1.0,
+        },
+    )));
+    let frame = engine.get_frame(rt(0)).expect("override frame");
+    let pixel = |frame: &cutlass_engine::RgbaFrame, x: u32, y: u32| {
+        let i = ((y * frame.width + x) * 4) as usize;
+        [frame.bytes[i], frame.bytes[i + 1], frame.bytes[i + 2], frame.bytes[i + 3]]
+    };
+    assert_eq!(pixel(&frame, 480, 270), [200, 40, 10, 255], "override placed quad");
+    assert_eq!(pixel(&frame, 1440, 810), [0, 0, 0, 255], "rest stays black");
+
+    // ...but the project and history never saw it: session state only.
+    let committed = engine.project().clip(clip_id).expect("clip").transform;
+    assert!(committed.is_identity(), "project transform untouched");
+    assert_eq!(engine.can_undo(), history_depth_before, "no history entry");
+
+    // Clearing restores the committed (full-canvas) render.
+    engine.set_transform_override(None);
+    let frame = engine.get_frame(rt(0)).expect("committed frame");
+    assert_eq!(pixel(&frame, 1440, 810), [200, 40, 10, 255], "solid covers canvas again");
 }
 
 #[test]

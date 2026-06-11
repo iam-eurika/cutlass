@@ -10,8 +10,8 @@ use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use cutlass_commands::{Command, EditCommand, EditOutcome, ProjectCommand};
 use cutlass_engine::{ApplyOutcome, Engine, EngineConfig, EngineError, ExportSettings};
 use cutlass_models::{
-    ClipId, ClipSource, MediaId, Rational, RationalTime, TimeRange, Track, TrackId, TrackKind,
-    resample,
+    ClipId, ClipSource, ClipTransform, Generator, MediaId, Rational, RationalTime, TimeRange,
+    Track, TrackId, TrackKind, resample,
 };
 use tracing::{error, info, warn};
 
@@ -53,6 +53,17 @@ enum WorkerMsg {
         drop_row: i64,
         insert: bool,
     },
+    /// Place a generated clip (text title, solid, shape) at `start_tick` on
+    /// `track` (raw id of a matching-kind lane), or create a lane of the
+    /// generator's kind at `drop_row` when `track` is empty. Generated lanes
+    /// are never the main track, so there's no ripple-insert path.
+    AddGenerated {
+        generator: Generator,
+        track: String,
+        start_tick: i64,
+        duration_ticks: i64,
+        drop_row: i64,
+    },
     /// Move `clip` (raw id) to `track` at `start_tick`, or — when `track` is
     /// empty — to a new lane of the clip's kind inserted at `insert_row`.
     /// `insert` (main-track magnet) ripple-inserts on the main lane; for
@@ -80,6 +91,29 @@ enum WorkerMsg {
     /// Remove every clip in `clips` (raw ids) as one history entry; lanes
     /// the removals empty are removed too (same policy as drag-moves).
     RemoveClips { clips: Vec<String> },
+    /// Replace a generated clip's content (raw id) — e.g. an inspector title
+    /// edit. One undoable history entry per committed edit.
+    SetGenerator { clip: String, generator: Generator },
+    /// Live drag override (preview roadmap Phase 3): render `tick` with
+    /// `clip`'s transform replaced — session state on the engine, no history
+    /// entry, no projection republish. Bursts coalesce to the newest value
+    /// like `Frame` requests do.
+    TransformOverride {
+        clip: String,
+        transform: ClipTransform,
+        tick: i64,
+    },
+    /// Drop the gesture override (no-op release / cancelled drag) and
+    /// re-render `tick` from committed state.
+    ClearTransformOverride { tick: i64 },
+    /// Commit a transform gesture: clear any override and apply one undoable
+    /// `SetClipTransform`, then re-render `tick` (a nudge has no preceding
+    /// override, so the frame must refresh here).
+    SetTransform {
+        clip: String,
+        transform: ClipTransform,
+        tick: i64,
+    },
     /// Split `clip` (raw id) at `at_tick` (sequence ticks). The UI gates on
     /// the playhead being strictly inside the clip; the engine re-validates.
     SplitClip { clip: String, at_tick: i64 },
@@ -193,6 +227,23 @@ impl WorkerHandle {
         });
     }
 
+    pub fn add_generated(
+        &self,
+        generator: Generator,
+        track: String,
+        start_tick: i64,
+        duration_ticks: i64,
+        drop_row: i64,
+    ) {
+        let _ = self.tx.send(WorkerMsg::AddGenerated {
+            generator,
+            track,
+            start_tick,
+            duration_ticks,
+            drop_row,
+        });
+    }
+
     pub fn move_clip(
         &self,
         clip: String,
@@ -228,6 +279,30 @@ impl WorkerHandle {
 
     pub fn split_clip(&self, clip: String, at_tick: i64) {
         let _ = self.tx.send(WorkerMsg::SplitClip { clip, at_tick });
+    }
+
+    pub fn set_generator(&self, clip: String, generator: Generator) {
+        let _ = self.tx.send(WorkerMsg::SetGenerator { clip, generator });
+    }
+
+    pub fn transform_override(&self, clip: String, transform: ClipTransform, tick: i64) {
+        let _ = self.tx.send(WorkerMsg::TransformOverride {
+            clip,
+            transform,
+            tick,
+        });
+    }
+
+    pub fn clear_transform_override(&self, tick: i64) {
+        let _ = self.tx.send(WorkerMsg::ClearTransformOverride { tick });
+    }
+
+    pub fn set_transform(&self, clip: String, transform: ClipTransform, tick: i64) {
+        let _ = self.tx.send(WorkerMsg::SetTransform {
+            clip,
+            transform,
+            tick,
+        });
     }
 
     pub fn undo(&self) {
@@ -424,6 +499,21 @@ fn worker_loop(
                 *linkage,
                 &ui,
             ),
+            WorkerMsg::AddGenerated {
+                generator,
+                track,
+                start_tick,
+                duration_ticks,
+                drop_row,
+            } => add_generated_and_publish(
+                engine,
+                generator,
+                &track,
+                start_tick,
+                duration_ticks,
+                drop_row,
+                &ui,
+            ),
             WorkerMsg::MoveClip {
                 clip,
                 track,
@@ -457,6 +547,25 @@ fn worker_loop(
             ),
             WorkerMsg::RemoveClips { clips } => {
                 remove_clips_and_publish(engine, &clips, *main_magnet, &ui)
+            }
+            WorkerMsg::SetGenerator { clip, generator } => {
+                set_generator_and_publish(engine, &clip, generator, &ui)
+            }
+            WorkerMsg::ClearTransformOverride { tick } => {
+                engine.set_transform_override(None);
+                render_frame(engine, tl_rate, &preview_weak, tick);
+            }
+            WorkerMsg::SetTransform {
+                clip,
+                transform,
+                tick,
+            } => {
+                // The override previewed this exact transform; clearing it as
+                // the command lands means the next render is identical — no
+                // flicker between gesture end and commit.
+                engine.set_transform_override(None);
+                set_transform_and_publish(engine, &clip, transform, &ui);
+                render_frame(engine, tl_rate, &preview_weak, tick);
             }
             WorkerMsg::SplitClip { clip, at_tick } => {
                 split_clip_and_publish(engine, &clip, at_tick, *linkage, &ui)
@@ -496,6 +605,9 @@ fn worker_loop(
                 export_state.cancel.store(true, Ordering::Relaxed);
             }
             WorkerMsg::Frame(_) => unreachable!("frames are handled by the drain below"),
+            WorkerMsg::TransformOverride { .. } => {
+                unreachable!("overrides are handled by the drain below")
+            }
         }
     };
 
@@ -505,6 +617,14 @@ fn worker_loop(
                 while let Ok(next) = req_rx.try_recv() {
                     match next {
                         WorkerMsg::Frame(latest) => tick = latest,
+                        WorkerMsg::TransformOverride {
+                            clip,
+                            transform,
+                            tick: at,
+                        } => {
+                            apply_transform_override(engine, &clip, transform);
+                            tick = at;
+                        }
                         other => {
                             mutate(engine, &mut clipboard, &mut main_magnet, &mut linkage, other)
                         }
@@ -513,8 +633,69 @@ fn worker_loop(
                 render_frame(engine, tl_rate, &preview_weak, tick);
                 prefetch_ahead(engine, tl_rate, tick, &req_rx);
             }
+            // Drag-gesture overrides arrive at pointer-move rate; render only
+            // the newest one (same coalescing as scrub frames) so a fast drag
+            // can't back the queue up behind stale composites.
+            WorkerMsg::TransformOverride {
+                mut clip,
+                mut transform,
+                mut tick,
+            } => {
+                while let Ok(next) = req_rx.try_recv() {
+                    match next {
+                        WorkerMsg::Frame(latest) => tick = latest,
+                        WorkerMsg::TransformOverride {
+                            clip: c,
+                            transform: t,
+                            tick: at,
+                        } => {
+                            clip = c;
+                            transform = t;
+                            tick = at;
+                        }
+                        other => {
+                            mutate(engine, &mut clipboard, &mut main_magnet, &mut linkage, other)
+                        }
+                    }
+                }
+                apply_transform_override(engine, &clip, transform);
+                render_frame(engine, tl_rate, &preview_weak, tick);
+            }
             other => mutate(engine, &mut clipboard, &mut main_magnet, &mut linkage, other),
         }
+    }
+}
+
+/// Point the engine's session override at `clip` (raw id) for the next
+/// renders. Unparsable ids are dropped — the gesture came from a projected
+/// clip, so this only fires on a stale projection race.
+fn apply_transform_override(engine: &mut Engine, clip: &str, transform: ClipTransform) {
+    match parse_raw_id(clip).map(ClipId::from_raw) {
+        Some(id) => engine.set_transform_override(Some((id, transform))),
+        None => error!(clip, "transform override ignored: unparsable clip id"),
+    }
+}
+
+/// Commit a transform gesture as one undoable `SetClipTransform`.
+fn set_transform_and_publish(
+    engine: &mut Engine,
+    clip: &str,
+    transform: ClipTransform,
+    ui: &UiSink,
+) {
+    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+        error!(clip, "set-transform ignored: unparsable clip id");
+        return;
+    };
+    match engine.apply(Command::Edit(EditCommand::SetClipTransform {
+        clip: clip_id,
+        transform,
+    })) {
+        Ok(_) => {
+            info!(%clip_id, ?transform, "set clip transform");
+            publish_projection(engine, ui);
+        }
+        Err(e) => error!(%clip_id, "set transform failed: {e}"),
     }
 }
 
@@ -728,6 +909,81 @@ fn add_clip_and_publish(
             engine.rollback_group();
             publish_projection(engine, ui);
         }
+    }
+}
+
+/// Place a generated clip (text/solid/shape) from a library-tile drop. One
+/// history entry, even when it creates the landing lane; rolled back on a
+/// rejected placement so a lane made for the drop doesn't linger.
+fn add_generated_and_publish(
+    engine: &mut Engine,
+    generator: Generator,
+    track: &str,
+    start_tick: i64,
+    duration_ticks: i64,
+    drop_row: i64,
+    ui: &UiSink,
+) {
+    let Some(lane_kind) = TrackKind::for_generator(&generator) else {
+        error!(?generator, "generated drop ignored: no lane kind for generator");
+        return;
+    };
+    let desired = start_tick.max(0);
+    let duration = duration_ticks.max(1);
+
+    engine.begin_group();
+    let track_id = match lane_of_kind(engine, track, lane_kind) {
+        Some(lane) => {
+            let lane_track = engine
+                .project()
+                .timeline()
+                .track(lane)
+                .expect("lane_of_kind returned an existing track");
+            let start = first_fit_start(lane_track, desired, duration);
+            (lane, start)
+        }
+        None => match create_track(engine, lane_kind, drop_row) {
+            Ok(id) => (id, desired),
+            Err(e) => {
+                error!(?generator, "generated drop failed creating {lane_kind:?} track: {e}");
+                engine.rollback_group();
+                return;
+            }
+        },
+    };
+    let (track_id, start_value) = track_id;
+
+    let content = ClipSource::Generated(generator);
+    match add_clip_content(engine, track_id, &content, duration, start_value) {
+        Ok(clip) => {
+            engine.commit_group();
+            info!(%clip, %track_id, start_tick = start_value, "added generated clip from drop");
+            publish_projection(engine, ui);
+        }
+        Err(e) => {
+            error!(%track_id, start_tick = start_value, "add generated clip failed: {e}");
+            engine.rollback_group();
+            publish_projection(engine, ui);
+        }
+    }
+}
+
+/// Replace a generated clip's content (inspector title edit). One history
+/// entry per committed edit; the engine rejects non-generated clips.
+fn set_generator_and_publish(engine: &mut Engine, clip: &str, generator: Generator, ui: &UiSink) {
+    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+        error!(clip, "set-generator ignored: unparsable clip id");
+        return;
+    };
+    match engine.apply(Command::Edit(EditCommand::SetGenerator {
+        clip: clip_id,
+        generator,
+    })) {
+        Ok(_) => {
+            info!(%clip_id, "updated generated clip content");
+            publish_projection(engine, ui);
+        }
+        Err(e) => error!(%clip_id, "set generator failed: {e}"),
     }
 }
 

@@ -3,7 +3,7 @@
 //! Run: `cargo bench -p cutlass-compositor --bench composite`
 
 use cutlass_compositor::{
-    CompositeLayer, Compositor, CompositorConfig, GpuContext,
+    CompositeLayer, Compositor, CompositorConfig, GpuContext, LayerPlacement,
 };
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
@@ -38,9 +38,10 @@ fn bench_solid(c: &mut Criterion) {
         return;
     };
     let config = CompositorConfig::new(W, H);
-    let layers = [CompositeLayer::Solid {
-        rgba: [200, 40, 10, 255],
-    }];
+    let layers = [CompositeLayer::solid(
+        [200, 40, 10, 255],
+        LayerPlacement::full_canvas(&config),
+    )];
 
     let mut group = c.benchmark_group("compositor/solid");
     group.throughput(Throughput::Bytes((W * H * 4) as u64));
@@ -59,8 +60,13 @@ fn bench_rgba_layer(c: &mut Criterion) {
         return;
     };
     let config = CompositorConfig::new(W, H);
-    let bytes = solid_bytes([10, 120, 200, 255]);
-    let layers = [CompositeLayer::Rgba { bytes }];
+    let bytes = std::sync::Arc::new(solid_bytes([10, 120, 200, 255]));
+    let layers = [CompositeLayer::rgba(
+        bytes,
+        W,
+        H,
+        LayerPlacement::full_canvas(&config),
+    )];
 
     let mut group = c.benchmark_group("compositor/rgba");
     group.throughput(Throughput::Bytes((W * H * 4) as u64));
@@ -79,12 +85,10 @@ fn bench_two_layers(c: &mut Criterion) {
         return;
     };
     let config = CompositorConfig::new(W, H);
-    let top = solid_bytes([0, 255, 0, 128]);
+    let top = std::sync::Arc::new(solid_bytes([0, 255, 0, 128]));
     let layers = [
-        CompositeLayer::Solid {
-            rgba: [255, 0, 0, 255],
-        },
-        CompositeLayer::Rgba { bytes: top },
+        CompositeLayer::solid([255, 0, 0, 255], LayerPlacement::full_canvas(&config)),
+        CompositeLayer::rgba(top, W, H, LayerPlacement::full_canvas(&config)),
     ];
 
     let mut group = c.benchmark_group("compositor/stack");

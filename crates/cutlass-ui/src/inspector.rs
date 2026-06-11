@@ -1,6 +1,6 @@
-//! Inspector helpers: resolve the selected clip and patch UI model fields.
+//! Inspector helpers: resolve the selected clip for the property sheet.
 
-use crate::{Clip, Project, SelectedClipInfo, Sequence, TrackKind};
+use crate::{Clip, SelectedClipInfo, Sequence, TrackKind};
 use slint::Model;
 
 pub fn resolve_selection(
@@ -42,38 +42,5 @@ pub fn resolve_selection(
         found: false,
         track_kind: TrackKind::Video,
         clip: Clip::default(),
-    }
-}
-
-pub fn set_text_content(project: &mut Project, track_id: &str, clip_id: &str, content: &str) {
-    let sequence = project.sequence.clone();
-    let tracks = sequence.tracks;
-
-    for track_idx in 0..tracks.row_count() {
-        let Some(track) = tracks.row_data(track_idx) else {
-            continue;
-        };
-        if track.id != track_id {
-            continue;
-        }
-
-        let clip_model = track.clips.clone();
-        for clip_idx in 0..clip_model.row_count() {
-            let Some(mut clip) = clip_model.row_data(clip_idx) else {
-                continue;
-            };
-            if clip.id != clip_id {
-                continue;
-            }
-
-            clip.text_content = content.into();
-            clip_model.set_row_data(clip_idx, clip);
-            tracks.set_row_data(track_idx, track);
-            project.sequence = Sequence {
-                tracks,
-                ..sequence
-            };
-            return;
-        }
     }
 }

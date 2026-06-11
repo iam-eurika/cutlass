@@ -42,6 +42,9 @@ pub enum ModelError {
     #[error("invalid time range (negative or zero duration where positive required)")]
     InvalidRange,
 
+    #[error("invalid transform: {0}")]
+    InvalidTransform(String),
+
     #[error("rate mismatch: expected {expected:?}, got {got:?}")]
     RateMismatch { expected: Rational, got: Rational },
 

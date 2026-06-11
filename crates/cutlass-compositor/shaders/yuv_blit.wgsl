@@ -1,30 +1,58 @@
-// yuv_blit.wgsl — YUV420P → RGBA layer with optional upscale/downscale
+// yuv_blit.wgsl — YUV420P → RGBA placed quad with scale/rotation
 //
-// Upload Y/U/V as R8Unorm textures (U/V at half resolution). The layer is
-// stretched over the whole canvas, so the interpolated fragment UV *is* the
+// Upload Y/U/V as R8Unorm textures (U/V at half resolution) and draw them as
+// a positioned quad (LayerPlacement). The interpolated fragment UV is the
 // correct normalized sample position for every plane: `textureSample` already
 // handles texel-center alignment internally (sample point uv·size − 0.5 in
-// texel space). At 1:1 this lands exactly on texel centers — bit-exact reads,
-// no filtering blur. (A previous version recomputed pixel coordinates with an
-// extra half-texel offset, which bilinear-blurred every frame even at 1:1.)
+// texel space). At 1:1 full-canvas placement this lands exactly on texel
+// centers — bit-exact reads, no filtering blur. (A previous version
+// recomputed pixel coordinates with an extra half-texel offset, which
+// bilinear-blurred every frame even at 1:1.)
+//
+// Geometry matches blit.wgsl: unit quad ([-0.5, 0.5]², +y down) mapped to
+// clip space by the per-layer affine; corner (-0.5, -0.5) = content top-left
+// = UV (0, 0). Layer opacity rides the output alpha (src-over blend).
+
+struct Placement {
+    // Columns of the 2x2 linear part mapping unit-quad corners to clip
+    // space: (m00, m10, m01, m11).
+    linear: vec4<f32>,
+    // Clip-space translation (x, y), layer opacity, pad.
+    trans_opacity: vec4<f32>,
+}
 
 @group(0) @binding(0) var y_tex: texture_2d<f32>;
 @group(0) @binding(1) var u_tex: texture_2d<f32>;
 @group(0) @binding(2) var v_tex: texture_2d<f32>;
 @group(0) @binding(3) var yuv_sampler: sampler;
+@group(0) @binding(4) var<uniform> placement: Placement;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
 }
 
+fn quad_corner(vertex_index: u32) -> vec2<f32> {
+    var corners = array<vec2<f32>, 6>(
+        vec2(-0.5, -0.5), vec2(0.5, -0.5), vec2(-0.5, 0.5),
+        vec2(-0.5, 0.5), vec2(0.5, -0.5), vec2(0.5, 0.5),
+    );
+    return corners[vertex_index];
+}
+
 @vertex
 fn vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    let c = quad_corner(vertex_index);
+    let m = placement.linear;
+    let t = placement.trans_opacity;
     var out: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 4 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 4 - 1);
-    out.position = vec4(x, y, 0.0, 1.0);
-    out.uv = vec2((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    out.position = vec4(
+        m.x * c.x + m.z * c.y + t.x,
+        m.y * c.x + m.w * c.y + t.y,
+        0.0,
+        1.0,
+    );
+    out.uv = c + vec2(0.5, 0.5);
     return out;
 }
 
@@ -44,5 +72,5 @@ fn fs(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = textureSample(u_tex, yuv_sampler, in.uv).r * 255.0;
     let vv = textureSample(v_tex, yuv_sampler, in.uv).r * 255.0;
     let rgb = yuv_to_rgb(yv, uv, vv);
-    return vec4(rgb, 1.0);
+    return vec4(rgb, placement.trans_opacity.z);
 }
