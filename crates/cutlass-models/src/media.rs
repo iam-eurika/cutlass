@@ -49,6 +49,12 @@ impl MediaSource {
         TimeRange::at_rate(0, self.duration.value, self.frame_rate)
     }
 
+    /// Whether this source has no video stream (music/voiceover files).
+    /// Probing reports such sources with zero dimensions.
+    pub fn is_audio_only(&self) -> bool {
+        self.width == 0 && self.has_audio
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }

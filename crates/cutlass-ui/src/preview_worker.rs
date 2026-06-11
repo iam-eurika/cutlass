@@ -12,6 +12,7 @@ use cutlass_models::{
 };
 use tracing::{error, info};
 
+use crate::thumbnails::{ThumbKind, ThumbnailHandle};
 use crate::{EditorStore, PreviewStore};
 
 pub struct PreviewSession {
@@ -195,6 +196,7 @@ impl PreviewWorker {
         config: EngineConfig,
         preview_weak: slint::Weak<PreviewStore<'static>>,
         editor_weak: slint::Weak<EditorStore<'static>>,
+        thumbs: ThumbnailHandle,
     ) -> Result<(Self, PreviewSession), String> {
         let (ready_tx, ready_rx) = bounded(1);
         let (req_tx, req_rx) = unbounded();
@@ -202,7 +204,9 @@ impl PreviewWorker {
         let join = std::thread::Builder::new()
             .name("cutlass-preview".into())
             .spawn(move || {
-                if let Err(e) = worker_main(config, preview_weak, editor_weak, req_rx, ready_tx) {
+                if let Err(e) =
+                    worker_main(config, preview_weak, editor_weak, thumbs, req_rx, ready_tx)
+                {
                     error!("preview worker exited: {e}");
                 }
             })
@@ -232,6 +236,7 @@ fn worker_main(
     config: EngineConfig,
     preview_weak: slint::Weak<PreviewStore<'static>>,
     editor_weak: slint::Weak<EditorStore<'static>>,
+    thumbs: ThumbnailHandle,
     req_rx: Receiver<WorkerMsg>,
     ready_tx: Sender<Result<PreviewSession, String>>,
 ) -> Result<(), String> {
@@ -257,7 +262,7 @@ fn worker_main(
     // from the first frame (rather than any Slint-side placeholder).
     publish_projection(&engine, &editor_weak);
 
-    worker_loop(&mut engine, tl_rate, preview_weak, editor_weak, req_rx);
+    worker_loop(&mut engine, tl_rate, preview_weak, editor_weak, thumbs, req_rx);
     Ok(())
 }
 
@@ -269,6 +274,7 @@ fn worker_loop(
     tl_rate: Rational,
     preview_weak: slint::Weak<PreviewStore<'static>>,
     editor_weak: slint::Weak<EditorStore<'static>>,
+    thumbs: ThumbnailHandle,
     req_rx: Receiver<WorkerMsg>,
 ) {
     // Clipboard lives with the loop: it's edit-session state, not project
@@ -284,7 +290,7 @@ fn worker_loop(
                   main_magnet: &mut bool,
                   msg: WorkerMsg| {
         match msg {
-            WorkerMsg::Import(path) => import_and_publish(engine, &path, &editor_weak),
+            WorkerMsg::Import(path) => import_and_publish(engine, &path, &editor_weak, &thumbs),
             WorkerMsg::AddClip {
                 media,
                 track,
@@ -373,6 +379,7 @@ fn import_and_publish(
     engine: &mut Engine,
     path: &Path,
     editor_weak: &slint::Weak<EditorStore<'static>>,
+    thumbs: &ThumbnailHandle,
 ) {
     match engine.apply(Command::Project(ProjectCommand::Import {
         path: path.to_path_buf(),
@@ -384,6 +391,16 @@ fn import_and_publish(
                 pool = engine.project().media_count(),
                 "imported media into pool"
             );
+            // Kick off tile thumbnail generation off-thread; the tile shows
+            // its placeholder until the image lands (see src/thumbnails.rs).
+            if let Some(source) = engine.project().media(media) {
+                let kind = if source.is_audio_only() {
+                    ThumbKind::Audio
+                } else {
+                    ThumbKind::Video
+                };
+                thumbs.request(media.raw(), source.path().to_path_buf(), kind);
+            }
             publish_projection(engine, editor_weak);
         }
         Ok(other) => error!(path = %path.display(), "unexpected import outcome: {other:?}"),
@@ -391,15 +408,16 @@ fn import_and_publish(
     }
 }
 
-/// Place the full source range of `media` on a video track, then republish the
-/// projection so the clip appears.
+/// Place the full source range of `media` on a video track (audio-only media
+/// lands on an audio track), then republish the projection so the clip appears.
 ///
 /// Placement policy (CapCut-ish):
-/// - dropped on a video lane → that lane, sliding right into the first gap
-///   that fits when the drop tick overlaps existing clips;
-/// - dropped on empty timeline space (`track` empty) → a fresh video track
-///   inserted at `drop_row`, so the new lane appears where the user dropped
-///   (above the lanes ⇒ top of the stack, below ⇒ bottom);
+/// - dropped on a lane of the media's kind → that lane, sliding right into the
+///   first gap that fits when the drop tick overlaps existing clips;
+/// - dropped on empty timeline space (`track` empty) or a lane of another
+///   kind → a fresh track of the media's kind inserted at `drop_row`, so the
+///   new lane appears where the user dropped (above the lanes ⇒ top of the
+///   stack, below ⇒ bottom);
 /// - dropped on the main lane with the magnet on (`insert`) → ripple-insert
 ///   at `start_tick`, shifting later clips right (atomic engine command).
 fn add_clip_and_publish(
@@ -415,13 +433,26 @@ fn add_clip_and_publish(
         error!(media, "drop ignored: unparsable media id");
         return;
     };
-    let Some(source) = engine.project().media(media_id).map(|m| m.full_range()) else {
+    let Some((source, audio_only)) = engine
+        .project()
+        .media(media_id)
+        .map(|m| (m.full_range(), m.is_audio_only()))
+    else {
         error!(%media_id, "drop ignored: media not in pool");
         return;
     };
+    let lane_kind = if audio_only {
+        TrackKind::Audio
+    } else {
+        TrackKind::Video
+    };
     let tl_rate = engine.project().timeline().frame_rate;
 
-    if insert && let Some(lane) = video_lane(engine, track) {
+    // The main-track magnet only applies to the main *video* lane.
+    if insert
+        && !audio_only
+        && let Some(lane) = lane_of_kind(engine, track, TrackKind::Video)
+    {
         match engine.apply(Command::Edit(EditCommand::RippleInsert {
             track: lane,
             media: media_id,
@@ -444,19 +475,19 @@ fn add_clip_and_publish(
 
     // One history entry per drop, even when it creates the landing lane.
     engine.begin_group();
-    let (track_id, start_value) = match video_lane(engine, track) {
+    let (track_id, start_value) = match lane_of_kind(engine, track, lane_kind) {
         Some(lane) => {
             let lane_track = engine
                 .project()
                 .timeline()
                 .track(lane)
-                .expect("video_lane returned an existing track");
+                .expect("lane_of_kind returned an existing track");
             (lane, first_fit_start(lane_track, desired, duration_ticks))
         }
-        None => match create_track(engine, TrackKind::Video, drop_row) {
+        None => match create_track(engine, lane_kind, drop_row) {
             Ok(id) => (id, desired),
             Err(e) => {
-                error!(%media_id, "drop failed creating video track: {e}");
+                error!(%media_id, "drop failed creating {lane_kind:?} track: {e}");
                 engine.rollback_group();
                 return;
             }
@@ -495,14 +526,15 @@ fn add_clip_and_publish(
     }
 }
 
-/// `track` (raw id from the Slint projection) when it names an existing video lane.
-fn video_lane(engine: &Engine, track: &str) -> Option<TrackId> {
+/// `track` (raw id from the Slint projection) when it names an existing lane
+/// of `kind`.
+fn lane_of_kind(engine: &Engine, track: &str, kind: TrackKind) -> Option<TrackId> {
     let id = TrackId::from_raw(parse_raw_id(track)?);
     engine
         .project()
         .timeline()
         .track(id)
-        .is_some_and(|t| t.kind == TrackKind::Video)
+        .is_some_and(|t| t.kind == kind)
         .then_some(id)
 }
 

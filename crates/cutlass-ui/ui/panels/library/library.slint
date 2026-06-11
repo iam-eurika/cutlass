@@ -46,8 +46,21 @@ export component LibraryPanel inherits PanelBase {
                 y: grid.cell-y(i);
                 width: grid.cell-width;
                 height: grid.cell-height;
-                background: AppStore.theme.surface.content-background;
+                // Audio tiles show the waveform card color while the waveform
+                // image is still rendering; video tiles stay dark until the
+                // poster frame lands.
+                background: m.is-audio ? #2A46C8 : AppStore.theme.surface.content-background;
                 border-radius: 4px;
+                clip: true;
+
+                // Poster frame (video) or waveform card (audio), generated
+                // off-thread after import — empty until ready.
+                if m.thumbnail.width > 0: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: m.thumbnail;
+                    image-fit: cover;
+                }
 
                 ta := TouchArea {
                     width: parent.width;
@@ -78,6 +91,24 @@ export component LibraryPanel inherits PanelBase {
                         AppState.library-drag-cursor-y = self.absolute-position.y + self.mouse-y;
                     }
                 }
+                // Duration badge, top-right like CapCut.
+                Rectangle {
+                    x: parent.width - self.width - 4px;
+                    y: 4px;
+                    width: duration-text.preferred-width + 8px;
+                    height: duration-text.preferred-height + 4px;
+                    background: #000000a0;
+                    border-radius: 3px;
+                    visible: m.duration-label != "";
+
+                    duration-text := CutlassText {
+                        x: 4px;
+                        y: 2px;
+                        text: m.duration-label;
+                        style: AppStore.theme.typography.label;
+                    }
+                }
+
                 // Name label strip along the bottom of the tile.
                 VerticalLayout {
                     alignment: end;

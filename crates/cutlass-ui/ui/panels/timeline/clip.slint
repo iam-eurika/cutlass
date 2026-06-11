@@ -34,18 +34,27 @@ export component ClipView inherits Rectangle {
     // grabbable middle for the move gesture.
     private property <length> handle-width: min(6px, self.width / 3);
 
+    // CapCut dims the source position while the floating copy (move) or the
+    // stretch preview (trim) shows the live result.
+    //
+    // Dim via per-element colors, NOT the group `opacity` property: opacity on
+    // an element with children makes Slint composite the subtree into an
+    // intermediate GPU texture sized to the element's full geometry. A long
+    // clip at high zoom exceeds the GPU max texture dimension (16384 px) and
+    // aborts the app inside wgpu.
+    private property <bool> dimmed: is-active-drag || is-active-trim;
+
     x: TimelineLib.rational-to-length(model.timeline-start, zoom);
 
     width: TimelineLib.clip-timeline-width(model, zoom);
     height: AppStore.theme.track-lane.clip.height;
-    background: track-color;
+    background: dimmed ? track-color.with-alpha(0.35) : track-color;
     border-radius: AppStore.theme.track-lane.clip.radius;
 
     border-width: is-selected ? 1px : 0px;
-    border-color: AppStore.theme.text.primary;
-    // CapCut dims the source position while the floating copy (move) or the
-    // stretch preview (trim) shows the live result.
-    opacity: is-active-drag || is-active-trim ? 0.35 : 1.0;
+    border-color: dimmed
+        ? AppStore.theme.text.primary.with-alpha(0.35)
+        : AppStore.theme.text.primary;
 
     ta := TouchArea {
         width: parent.width;
@@ -89,6 +98,8 @@ export component ClipView inherits Rectangle {
 
     Text {
         text: model.name;
+        // Leaf element: opacity here is folded into the glyph color (no layer).
+        opacity: dimmed ? 0.35 : 1.0;
     }
 
     // --- trim handles (declared last ⇒ on top of the move TouchArea) -----

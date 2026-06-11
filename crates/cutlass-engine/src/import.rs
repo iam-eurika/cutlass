@@ -9,19 +9,24 @@ use tracing::debug;
 
 use crate::error::EngineError;
 
-/// Probe a video file and register it with the frame cache.
+/// Probe a media file and register it with the frame cache.
+///
+/// Audio-only sources (probe reports zero dimensions) skip cache
+/// registration: the frame cache stores video YUV for scrubbing.
 pub fn import_media(path: &Path, cache: &FrameCache) -> Result<MediaSource, EngineError> {
     let probed = probe(path)?;
 
-    let fingerprint = SourceFingerprint::from_path(path)?;
-    let spec = CacheSpec {
-        width: probed.width,
-        height: probed.height,
-        pixfmt: "yuv420p".into(),
-    };
-    cache
-        .register_source(fingerprint, spec)
-        .map_err(cutlass_cache::DiskCacheError::from)?;
+    if probed.width > 0 {
+        let fingerprint = SourceFingerprint::from_path(path)?;
+        let spec = CacheSpec {
+            width: probed.width,
+            height: probed.height,
+            pixfmt: "yuv420p".into(),
+        };
+        cache
+            .register_source(fingerprint, spec)
+            .map_err(cutlass_cache::DiskCacheError::from)?;
+    }
 
     let media = probed.to_media_source(path);
 

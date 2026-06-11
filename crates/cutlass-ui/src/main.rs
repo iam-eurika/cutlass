@@ -4,6 +4,7 @@ mod preview_worker;
 mod projection;
 mod ruler;
 mod snap;
+mod thumbnails;
 mod timecode;
 mod timeline;
 
@@ -43,10 +44,17 @@ fn main() -> Result<(), slint::PlatformError> {
     let preview_store_weak = app.global::<PreviewStore>().as_weak();
     let editor_store_weak = app.global::<EditorStore>().as_weak();
 
+    // Library tile thumbnails decode on their own thread so imports never
+    // stall preview scrubbing. Keep the worker alive for the app's lifetime.
+    let thumbnail_worker =
+        thumbnails::ThumbnailWorker::spawn(app.global::<EditorStore>().as_weak())
+            .map_err(slint::PlatformError::from)?;
+
     let (preview_worker, session) = preview_worker::PreviewWorker::spawn(
         EngineConfig::default(),
         preview_store_weak,
         editor_store_weak,
+        thumbnail_worker.handle(),
     )
     .map_err(slint::PlatformError::from)?;
 
@@ -87,7 +95,12 @@ fn main() -> Result<(), slint::PlatformError> {
         // exactly where this Slint callback fires. The engine work happens off
         // this thread once we hand the path to the worker.
         if let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                "Media",
+                &["mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac", "flac", "ogg"],
+            )
             .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
+            .add_filter("Audio", &["mp3", "wav", "m4a", "aac", "flac", "ogg"])
             .pick_file()
         {
             import_handle.import(path);

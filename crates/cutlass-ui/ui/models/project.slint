@@ -120,7 +120,8 @@ export struct Sequence {
 
 // An imported source in the project's media pool (the Library bin). This is the
 // asset, not a placement — projected from the engine's `MediaSource`.
-@rust-attr(derive(serde::Serialize, serde::Deserialize))
+//
+// No serde derive: `thumbnail` is a live texture, not serializable state.
 export struct Media {
     id: string,
     name: string,
@@ -130,9 +131,17 @@ export struct Media {
     // Full length of the source, resampled to sequence-rate ticks. Drives the
     // drag ghost width and the default placement length when dropped.
     duration-ticks: int,
+    // Audio-only source (no video stream): the tile shows a waveform card
+    // instead of a poster frame.
+    is-audio: bool,
+    // Source length as "MM:SS" (or "H:MM:SS"), for the tile badge.
+    duration-label: string,
+    // Poster frame (video) or rendered waveform (audio). Generated off-thread
+    // after import; empty until ready (see src/thumbnails.rs).
+    thumbnail: image,
 }
 
-@rust-attr(derive(serde::Serialize, serde::Deserialize))
+// No serde derive: contains `Media` (see above).
 export struct Project {
     id: string,
     title: string,

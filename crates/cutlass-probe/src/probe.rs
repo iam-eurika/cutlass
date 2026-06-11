@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 use ffmpeg_next::codec::context::Context;
 use ffmpeg_next::format;
+use ffmpeg_next::format::stream::Disposition;
 use ffmpeg_next::media::Type;
 use ffmpeg_next::{Error as FfmpegError, Rational as FfRational};
 
@@ -22,7 +23,14 @@ pub(crate) fn ensure_ffmpeg_init() -> Result<(), ProbeError> {
     }
 }
 
+/// Tick rate for audio-only sources, which have no frame rate of their own.
+/// Millisecond ticks keep durations sample-accurate enough for timeline math.
+const AUDIO_TICK_RATE: Rational = Rational::new(1000, 1);
+
 /// Inspect `path` for container and stream metadata (ffprobe-style).
+///
+/// Audio-only files (no real video stream — embedded cover art doesn't count)
+/// probe with `width == 0 && height == 0` and a millisecond tick rate.
 pub fn probe(path: &Path) -> Result<MediaProbe, ProbeError> {
     ensure_ffmpeg_init()?;
 
@@ -31,10 +39,27 @@ pub fn probe(path: &Path) -> Result<MediaProbe, ProbeError> {
 
     let has_audio = input.streams().any(|s| s.parameters().medium() == Type::Audio);
 
-    let stream = input
+    // mp3/m4a cover art is muxed as a video stream flagged ATTACHED_PIC;
+    // treat those files as audio, not as one-frame videos.
+    let video_stream = input
         .streams()
         .best(Type::Video)
-        .ok_or_else(|| ProbeError::unsupported("no video stream found"))?;
+        .filter(|s| !s.disposition().contains(Disposition::ATTACHED_PIC));
+
+    let Some(stream) = video_stream else {
+        if !has_audio {
+            return Err(ProbeError::unsupported("no video or audio stream found"));
+        }
+        let micros = input.duration();
+        return Ok(MediaProbe {
+            width: 0,
+            height: 0,
+            frame_rate: AUDIO_TICK_RATE,
+            duration_ticks: duration_ticks_from_micros(AUDIO_TICK_RATE, micros.max(0) as u64),
+            has_audio: true,
+            video_codec: "none".into(),
+        });
+    };
 
     let par = stream.parameters();
     if par.medium() != Type::Video {
@@ -113,5 +138,20 @@ mod tests {
             normalize_frame_rate(FfRational::new(0, 1)),
             Rational::FPS_24
         );
+    }
+
+    #[test]
+    fn audio_only_file_probes_with_zero_dimensions() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/baby.mp3");
+        if !path.exists() {
+            return;
+        }
+        let probed = probe(&path).expect("probe mp3");
+        assert_eq!(probed.width, 0);
+        assert_eq!(probed.height, 0);
+        assert!(probed.has_audio);
+        assert_eq!(probed.frame_rate, AUDIO_TICK_RATE);
+        assert!(probed.duration_ticks > 0);
+        assert_eq!(probed.video_codec, "none");
     }
 }

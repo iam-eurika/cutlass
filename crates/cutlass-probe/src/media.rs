@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use cutlass_models::{MediaSource, Rational, RationalTime};
 
 /// Metadata read from a media file without opening a decode pipeline.
+///
+/// Audio-only sources have `width == 0 && height == 0`, a millisecond
+/// `frame_rate` (1000/1), and `video_codec == "none"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaProbe {
     pub width: u32,

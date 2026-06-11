@@ -78,6 +78,26 @@ fn media_to_slint(media: &MediaSource, tl_rate: cutlass_models::Rational) -> Med
         height: media.height as i32,
         has_audio: media.has_audio,
         duration_ticks: clamp_i32(resample(media.duration, tl_rate).value),
+        is_audio: media.is_audio_only(),
+        duration_label: duration_label(media.duration).into(),
+        // Generated asynchronously after import; until then the tile shows
+        // its placeholder card (see src/thumbnails.rs).
+        thumbnail: crate::thumbnails::thumbnail_for(media.id.raw()).unwrap_or_default(),
+    }
+}
+
+/// Source length as `MM:SS` (or `H:MM:SS` from one hour up), CapCut-style.
+fn duration_label(duration: EngineTime) -> String {
+    let (num, den) = (i64::from(duration.rate.num), i64::from(duration.rate.den));
+    if num <= 0 || den <= 0 {
+        return String::new();
+    }
+    let secs = (duration.value.max(0) * den + num / 2) / num;
+    let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
     }
 }
 
