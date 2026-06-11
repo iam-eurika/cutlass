@@ -108,9 +108,10 @@ fn e2e_media_import_edit_save_open_export() {
     open_project(&mut engine, &project_file);
     assert_eq!(engine.project().timeline().clip_count(), 1);
     assert_eq!(engine.project().media_count(), 1);
+    // Import canonicalizes the source path (dedupe across spellings).
     assert_eq!(
         engine.project().media_iter().next().expect("media").path(),
-        asset.as_path()
+        asset.canonicalize().expect("asset exists")
     );
     assert!(!engine.can_undo());
 

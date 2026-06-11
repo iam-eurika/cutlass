@@ -23,6 +23,7 @@ export global TimelineActions {
     public function clear-selection() {
         TimelineStore.selected-track-id = "";
         TimelineStore.selected-clip-id = "";
+        TimelineStore.selected-ids = [];
     }
 
     // Resolve the selected clip in the projection (found == false when
@@ -40,7 +41,9 @@ export global TimelineActions {
         if (!self.has-selection()) {
             return;
         }
-        EditorStore.on-clip-deleted(TimelineStore.selected-clip-id);
+        // The whole multi-selection goes in one batch (one history entry);
+        // linked partners ride along because selection includes them.
+        EditorStore.on-clips-deleted(TimelineStore.selected-ids);
         self.clear-selection();
     }
 
@@ -92,6 +95,13 @@ export global TimelineActions {
     public function toggle-main-magnet() {
         TimelineStore.main-magnet-enabled = !TimelineStore.main-magnet-enabled;
         EditorStore.on-main-magnet-changed(TimelineStore.main-magnet-enabled);
+    }
+
+    // CapCut linkage toggle. The worker mirrors the flag (linked drops,
+    // trims, splits); selection expansion reads it UI-side.
+    public function toggle-linkage() {
+        TimelineStore.link-enabled = !TimelineStore.link-enabled;
+        EditorStore.on-linkage-changed(TimelineStore.link-enabled);
     }
 
     // --- playhead ----------------------------------------------------

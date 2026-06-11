@@ -31,7 +31,7 @@ pub type Map<K, V> = rustc_hash::FxHashMap<K, V>;
 
 pub use clip::{Clip, ClipSource, Generator, Shape};
 pub use error::ModelError;
-pub use ids::{ClipId, MediaId, ProjectId, TrackId};
+pub use ids::{ClipId, LinkId, MediaId, ProjectId, TrackId};
 pub use media::MediaSource;
 pub use metadata::ProjectMetadata;
 pub use persist::{PROJECT_FILE_EXTENSION, PROJECT_FILE_VERSION};

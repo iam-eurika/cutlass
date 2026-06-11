@@ -275,14 +275,51 @@ Deliberate gap: **mute is persisted + shown but silent-in-name only** — there
 is no audio playback path yet (`Track.muted` is honored by no one), so the
 speaker toggle is a stored flag awaiting the mixer.
 
-## Phase 10 — Multi-clip & linking
+## Phase 10 — Multi-clip & linking ✅
 
-- [ ] Multi-select: shift-click, marquee; group move with one resolution
-      (collision policy: reject or new-lane the whole set, CapCut-style).
-- [ ] Linked video+audio from the same media (CapCut "linkage" toggle):
-      import drops create linked pairs once audio tracks land; linked clips
-      move/trim together.
+Selection became a set of clip ids plus a primary anchor
+(`TimelineStore.selected-ids` + the existing `selected-track-id`/`-clip-id`,
+kept consistent through `apply-selection`); the set logic lives in pure Rust
+callbacks (`src/selection.rs`, exposed via `ui/lib/selection-backend.slint`),
+same resolver-pattern as drags.
+
+- [x] Multi-select: shift-click toggles a clip (and its link group) in the
+      set (`pointer-event` modifiers in `clip.slint`; deselecting the primary
+      re-anchors it on the first remaining clip in row/start order); marquee
+      on empty lane space (`TrackLane` lost its TouchArea, so presses fall
+      through to the panel's wheel-area: armed on press, live past a 3px dead
+      zone, re-resolved per move, locked lanes skipped; a plain click still
+      clears the selection). Delete removes the whole set as one history
+      entry (`RemoveClips` batch, right-to-left so magnet ripples stay
+      valid; emptied lanes removed after).
+- [x] Group move with one resolution (`resolve_group_drag`): one uniform dx
+      (clamped to tick 0, magneted on the grabbed clip's edges) + one row
+      delta (forced to 0 when the set spans video+audio, so pairs stay in
+      their zones), validated against everything outside the set — members
+      can't collide with each other under a uniform shift. **Reject policy**,
+      CapCut-style: weaker variants are tried (raw dx, horizontal-only) and
+      if nothing fits the release commits nothing — floating copies flag it
+      with a red outline, landing ghosts show the exact commit otherwise.
+      The worker lands the batch park-then-place as one history group.
+- [x] Linked video+audio (CapCut "linkage" toggle, on by default): engine
+      grew `LinkId` + `Clip.link` (`serde(default)`, old projects load) and
+      an undoable `LinkClips` command (fresh group, inverse restores prior
+      links). With the toggle on, a video drop whose media has audio also
+      lands an audio clip at the same tick (topmost unlocked audio lane with
+      the span free, else a new bottom lane) and links the pair — one history
+      entry. Linked clips select together (click/marquee pull partners in),
+      move together (selection expansion ⇒ group resolver), trim together
+      (`resolve_clip_trim` intersects every member's delta clamp and
+      previews partner stretch ghosts; the worker replays the edge delta on
+      the group), and split together (partners spanning the tick split too;
+      tails re-linked as a fresh group). Toggle off ⇒ links persist, dormant.
 - [ ] Compound clips (select N clips → one nested clip) — far future.
+
+Deliberate gaps: **group moves are freeform** (no main-track magnet
+ripple-insert for a multi-selection — singles keep it); **no group
+copy/duplicate** (those ops still act on the primary clip); **no unlink
+gesture** in the UI (the engine command exists; the toggle just makes links
+dormant); linked pairs don't render a link badge yet.
 
 ## Phase 11 — Transitions & effects on the timeline
 
@@ -298,8 +335,9 @@ speaker toggle is a stored flag awaiting the mixer.
   final-position state, but keep this in mind for new gesture wiring.
 - Slint tick model is `i32` (projection clamps engine `i64`); fine for
   realistic timelines, revisit if hour-scale 120fps projects appear.
-- Selection is keyed `(track-id, clip-id)`; engine clip ids are globally
-  unique, so this can simplify to clip id alone.
+- The multi-selection set is keyed by clip id alone (Phase 10), but the
+  primary anchor is still the `(track-id, clip-id)` pair; the track half is
+  redundant and could go.
 - Selection can go stale after undo/redo (the projection republish doesn't
   touch `TimelineStore`); stale ids resolve to "nothing selected"
   everywhere, but clearing selection on history steps would be cleaner.

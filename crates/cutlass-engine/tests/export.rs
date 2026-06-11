@@ -347,7 +347,8 @@ fn export_decodes_from_source_when_cache_corrupt() {
 
     engine.get_frame(rt(0)).expect("warm preview cache");
     engine.cache().sync();
-    let source_id = SourceFingerprint::from_path(&path)
+    // Import canonicalizes the source path; fingerprint the same spelling.
+    let source_id = SourceFingerprint::from_path(&path.canonicalize().expect("asset exists"))
         .expect("fingerprint")
         .id();
     assert!(

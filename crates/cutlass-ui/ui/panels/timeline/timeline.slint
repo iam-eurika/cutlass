@@ -14,7 +14,8 @@ import { ClipView } from "clip.slint";
 import { TimelineViewState } from "state.slint";
 import { Sequence } from "../../models/index.slint";
 import { TimelineLib } from "../../lib/timeline-lib.slint";
-import { DragBackend, SnapResult, ClipDragResolution, ClipTrimResolution, LibraryDropResolution } from "../../lib/drag-backend.slint";
+import { DragBackend, SnapResult, ClipDragResolution, ClipTrimResolution, LibraryDropResolution, GroupDragResolution } from "../../lib/drag-backend.slint";
+import { SelectionBackend } from "../../lib/selection-backend.slint";
 import { AppState } from "../../state.slint";
 
 
@@ -147,6 +148,25 @@ export component TimelinePanel inherits PanelBase {
         root.snap-threshold-ticks,
         TimelineStore.main-magnet-enabled);
 
+    // Multi-selection drag: one resolution for the whole set (uniform dx +
+    // row delta; conflicts with clips outside the set reject the drop —
+    // CapCut's policy). Active when the grabbed clip is part of a
+    // multi-selection (ClipView raises `drag-is-group`).
+    private property <bool> group-dragging:
+        clip-dragging && TimelineViewState.drag-is-group;
+    private property <bool> single-dragging:
+        clip-dragging && !TimelineViewState.drag-is-group;
+
+    private property <GroupDragResolution> group-drag-res: DragBackend.resolve-group-drag(
+        root.sequence,
+        TimelineStore.selected-ids,
+        TimelineViewState.dragging-source-track-id,
+        TimelineViewState.dragging-clip-id,
+        root.clip-drag-dx-ticks,
+        root.clip-drag-hover-row,
+        TimelineStore.playhead-tick,
+        root.snap-threshold-ticks);
+
     // ClipView raises `drag-released` on pointer-up; the commit needs the
     // dragging ids, so this panel owns the teardown.
     private property <bool> clip-drag-released: TimelineViewState.drag-released;
@@ -154,7 +174,11 @@ export component TimelinePanel inherits PanelBase {
         if (!self.clip-drag-released) {
             return;
         }
-        if (self.clip-drag-res.valid && !self.clip-drag-res.is-noop) {
+        if (TimelineViewState.drag-is-group) {
+            if (self.group-drag-res.valid && !self.group-drag-res.is-noop) {
+                EditorStore.on-group-moved(self.group-drag-res.moves);
+            }
+        } else if (self.clip-drag-res.valid && !self.clip-drag-res.is-noop) {
             EditorStore.on-clip-moved(
                 TimelineViewState.dragging-clip-id,
                 self.clip-drag-res.target-track-id,
@@ -164,6 +188,7 @@ export component TimelinePanel inherits PanelBase {
         }
         TimelineViewState.dragging-source-track-id = "";
         TimelineViewState.dragging-clip-id = "";
+        TimelineViewState.drag-is-group = false;
         TimelineViewState.drag-dx-px = 0;
         TimelineViewState.drag-dy-px = 0;
         TimelineViewState.drag-released = false;
@@ -186,7 +211,8 @@ export component TimelinePanel inherits PanelBase {
         TimelineViewState.trimming-head,
         root.clip-trim-dx-ticks,
         TimelineStore.playhead-tick,
-        root.snap-threshold-ticks);
+        root.snap-threshold-ticks,
+        TimelineStore.link-enabled);
 
     private property <bool> clip-trim-released: TimelineViewState.trim-released;
     changed clip-trim-released => {
@@ -204,6 +230,14 @@ export component TimelinePanel inherits PanelBase {
         TimelineViewState.trim-dx-px = 0;
         TimelineViewState.trim-released = false;
     }
+
+    // --- marquee selection (drag on empty lane space) ------------------------
+    // The wheel-area TouchArea is the press target for everything the clip
+    // TouchAreas don't grab, so a press there is by definition on empty
+    // space. Armed on press; a drag past the dead zone becomes a live
+    // marquee (selection re-resolves per move), a plain click clears the
+    // selection (the pre-Phase-10 empty-lane-click behavior).
+    private property <bool> marquee-armed: false;
 
     // --- edge auto-scroll (drags near the viewport edge) --------------------
     // CapCut scrolls the timeline under a drag held near an edge. A ~16ms
@@ -406,6 +440,52 @@ export component TimelinePanel inherits PanelBase {
             wheel-area := TouchArea {
                 horizontal-stretch: 1;
 
+                changed pressed => {
+                    if (self.pressed) {
+                        AppState.refocus-shortcuts();
+                        root.marquee-armed = true;
+                        TimelineViewState.marquee-anchor-x = self.mouse-x - TimelineViewState.scroll-x;
+                        TimelineViewState.marquee-anchor-y = self.mouse-y - TimelineViewState.scroll-y;
+                        TimelineViewState.marquee-x = TimelineViewState.marquee-anchor-x;
+                        TimelineViewState.marquee-y = TimelineViewState.marquee-anchor-y;
+                    } else {
+                        if (!TimelineViewState.marquee-active && root.marquee-armed) {
+                            // Click without drag: clear the selection.
+                            TimelineActions.clear-selection();
+                        }
+                        root.marquee-armed = false;
+                        TimelineViewState.marquee-active = false;
+                    }
+                }
+
+                moved => {
+                    if (!root.marquee-armed) {
+                        return;
+                    }
+                    TimelineViewState.marquee-x = self.mouse-x - TimelineViewState.scroll-x;
+                    TimelineViewState.marquee-y = self.mouse-y - TimelineViewState.scroll-y;
+                    if (!TimelineViewState.marquee-active
+                            && (abs((TimelineViewState.marquee-x - TimelineViewState.marquee-anchor-x) / 1px) > 3
+                                || abs((TimelineViewState.marquee-y - TimelineViewState.marquee-anchor-y) / 1px) > 3)) {
+                        TimelineViewState.marquee-active = true;
+                    }
+                    if (TimelineViewState.marquee-active) {
+                        // Live selection, CapCut-style: re-resolve the set on
+                        // every move. Rows are lane units (row r = lane r).
+                        TimelineStore.apply-selection(SelectionBackend.resolve-marquee(
+                            root.sequence,
+                            round(min(TimelineViewState.marquee-anchor-x, TimelineViewState.marquee-x)
+                                / TimelineStore.zoom / 1px),
+                            round(max(TimelineViewState.marquee-anchor-x, TimelineViewState.marquee-x)
+                                / TimelineStore.zoom / 1px),
+                            min(TimelineViewState.marquee-anchor-y, TimelineViewState.marquee-y)
+                                / root.row-pitch - 1,
+                            max(TimelineViewState.marquee-anchor-y, TimelineViewState.marquee-y)
+                                / root.row-pitch - 1,
+                            TimelineStore.link-enabled));
+                    }
+                }
+
                 scroll-event(e) => {
                     if (e.modifiers.control || e.modifiers.meta) {
                         // Cursor-anchored zoom in log/slider space.
@@ -470,7 +550,7 @@ export component TimelinePanel inherits PanelBase {
 
                 // Landing ghost on an existing lane: exactly where a release
                 // puts the clip. (Insert mode renders a caret instead.)
-                if clip-dragging && clip-drag-res.valid && !clip-drag-res.is-new-lane && !clip-drag-res.is-insert: Rectangle {
+                if single-dragging && clip-drag-res.valid && !clip-drag-res.is-new-lane && !clip-drag-res.is-insert: Rectangle {
                     x: clip-drag-res.resolved-start * TimelineStore.zoom * 1px;
                     y: (clip-drag-res.target-row + 1) * row-pitch;
                     width: clip-drag-res.duration-ticks * TimelineStore.zoom * 1px;
@@ -483,14 +563,14 @@ export component TimelinePanel inherits PanelBase {
 
                 // New-lane insertion: horizontal guide across the gap where
                 // the lane appears, with a slim ghost riding on it.
-                if clip-dragging && clip-drag-res.valid && clip-drag-res.is-new-lane: Rectangle {
+                if single-dragging && clip-drag-res.valid && clip-drag-res.is-new-lane: Rectangle {
                     x: 0;
                     y: (clip-drag-res.target-row + 1) * row-pitch - track-spacing / 2 - self.height / 2;
                     width: max(parent.width, content-width);
                     height: 2px;
                     background: #00E5C7;
                 }
-                if clip-dragging && clip-drag-res.valid && clip-drag-res.is-new-lane: Rectangle {
+                if single-dragging && clip-drag-res.valid && clip-drag-res.is-new-lane: Rectangle {
                     x: clip-drag-res.resolved-start * TimelineStore.zoom * 1px;
                     y: (clip-drag-res.target-row + 1) * row-pitch - track-spacing / 2 - self.height / 2;
                     width: clip-drag-res.duration-ticks * TimelineStore.zoom * 1px;
@@ -504,7 +584,7 @@ export component TimelinePanel inherits PanelBase {
                 // Main-track magnet: insertion caret between clips instead
                 // of a landing ghost — the commit shifts later clips right
                 // to open the hole exactly here.
-                if clip-dragging && clip-drag-res.valid && clip-drag-res.is-insert: Rectangle {
+                if single-dragging && clip-drag-res.valid && clip-drag-res.is-insert: Rectangle {
                     x: clip-drag-res.caret-tick * TimelineStore.zoom * 1px - self.width / 2;
                     y: (clip-drag-res.target-row + 1) * row-pitch - 2px;
                     width: 3px;
@@ -545,12 +625,69 @@ export component TimelinePanel inherits PanelBase {
                 }
 
                 // Vertical magnet guide at the snapped edge (CapCut-style).
-                if clip-dragging && clip-drag-res.valid && clip-drag-res.has-snap: Rectangle {
+                if single-dragging && clip-drag-res.valid && clip-drag-res.has-snap: Rectangle {
                     x: clip-drag-res.snap-line-tick * TimelineStore.zoom * 1px;
                     y: 0;
                     width: 1px;
                     height: max(parent.height, content-height);
                     background: #00E5C7;
+                }
+
+                // --- group drag visuals (multi-selection) ---------------------
+
+                // Landing ghosts: one per selected clip, exactly where a
+                // release puts the set. Hidden while the resolution is
+                // invalid (the floating copies flag the conflict instead).
+                if group-dragging && group-drag-res.valid: Rectangle {
+                    for g in group-drag-res.ghosts: Rectangle {
+                        x: g.start-tick * TimelineStore.zoom * 1px;
+                        y: (g.row + 1) * row-pitch;
+                        width: g.duration-ticks * TimelineStore.zoom * 1px;
+                        height: track-height - 5px;
+                        background: g.color.with-alpha(0.3);
+                        border-width: 1px;
+                        border-color: #ffffff;
+                        border-radius: AppStore.theme.track-lane.clip.radius;
+                    }
+                }
+
+                // Same magnet guide as single drags, driven by the group
+                // resolution (snapped on the grabbed clip's edges).
+                if group-dragging && group-drag-res.valid && group-drag-res.has-snap: Rectangle {
+                    x: group-drag-res.snap-line-tick * TimelineStore.zoom * 1px;
+                    y: 0;
+                    width: 1px;
+                    height: max(parent.height, content-height);
+                    background: #00E5C7;
+                }
+
+                // Floating copies of every selected clip, following the
+                // cursor on both axes. A red outline means the set has no
+                // valid landing here (release commits nothing).
+                if group-dragging: Rectangle {
+                    for f in DragBackend.group-floaters(root.sequence, TimelineStore.selected-ids): Rectangle {
+                        x: f.start-tick * TimelineStore.zoom * 1px + TimelineViewState.drag-dx-px;
+                        y: (f.row + 1) * row-pitch + TimelineViewState.drag-dy-px;
+                        width: f.duration-ticks * TimelineStore.zoom * 1px;
+                        height: track-height - 5px;
+                        background: f.color.with-alpha(0.85);
+                        border-width: 1px;
+                        border-color: group-drag-res.valid ? #ffffff : #FF5555;
+                        border-radius: AppStore.theme.track-lane.clip.radius;
+                    }
+                }
+
+                // Landing timecode of the grabbed clip, above its floater.
+                if group-dragging && group-drag-res.valid: DragTooltip {
+                    x: (TimelineViewState.dragging-start-value * TimelineStore.zoom * 1px
+                            + TimelineViewState.drag-dx-px) + self.width / 2;
+                    y: (TimelineViewState.dragging-source-row + 1) * row-pitch
+                        + TimelineViewState.drag-dy-px - self.height - 4px;
+                    text: TimelineLib.format-timecode(
+                        TimelineViewState.dragging-start-value + group-drag-res.resolved-dx-ticks,
+                        sequence.fps.num,
+                        sequence.fps.den,
+                        sequence.drop-frame);
                 }
 
                 // --- clip trim visuals ----------------------------------------
@@ -594,6 +731,21 @@ export component TimelinePanel inherits PanelBase {
                         + (clip-trim-res.new-duration - TimelineViewState.trimming-duration-ticks);
                 }
 
+                // Linked partners' stretch previews: the same edge delta the
+                // dragged clip previews, applied to each link-group member.
+                if clip-trimming && clip-trim-res.valid: Rectangle {
+                    for g in clip-trim-res.ghosts: Rectangle {
+                        x: g.start-tick * TimelineStore.zoom * 1px;
+                        y: (g.row + 1) * row-pitch;
+                        width: g.duration-ticks * TimelineStore.zoom * 1px;
+                        height: track-height - 5px;
+                        background: g.color.with-alpha(0.9);
+                        border-width: 1px;
+                        border-color: #ffffff;
+                        border-radius: AppStore.theme.track-lane.clip.radius;
+                    }
+                }
+
                 // Same magnet guide as the move, driven by the trim resolution.
                 if clip-trimming && clip-trim-res.valid && clip-trim-res.has-snap: Rectangle {
                     x: clip-trim-res.snap-line-tick * TimelineStore.zoom * 1px;
@@ -605,7 +757,7 @@ export component TimelinePanel inherits PanelBase {
 
                 // Floating copy of the grabbed clip, following the cursor on
                 // both axes (the original stays in place, dimmed).
-                if clip-dragging: Rectangle {
+                if single-dragging: Rectangle {
                     x: TimelineViewState.dragging-start-value * TimelineStore.zoom * 1px
                         + TimelineViewState.drag-dx-px;
                     y: (TimelineViewState.dragging-source-row + 1) * row-pitch
@@ -624,7 +776,7 @@ export component TimelinePanel inherits PanelBase {
 
                 // Landing timecode above the moved clip (insert mode reads the
                 // caret slot, otherwise the resolved start).
-                if clip-dragging && clip-drag-res.valid: DragTooltip {
+                if single-dragging && clip-drag-res.valid: DragTooltip {
                     x: (TimelineViewState.dragging-start-value * TimelineStore.zoom * 1px
                             + TimelineViewState.drag-dx-px) + self.width / 2;
                     y: (TimelineViewState.dragging-source-row + 1) * row-pitch
@@ -646,6 +798,17 @@ export component TimelinePanel inherits PanelBase {
                         sequence.fps.num,
                         sequence.fps.den,
                         sequence.drop-frame);
+                }
+
+                // Marquee rectangle (content space, above everything).
+                if TimelineViewState.marquee-active: Rectangle {
+                    x: min(TimelineViewState.marquee-anchor-x, TimelineViewState.marquee-x);
+                    y: min(TimelineViewState.marquee-anchor-y, TimelineViewState.marquee-y);
+                    width: max(TimelineViewState.marquee-anchor-x, TimelineViewState.marquee-x) - self.x;
+                    height: max(TimelineViewState.marquee-anchor-y, TimelineViewState.marquee-y) - self.y;
+                    background: #00E5C71A;
+                    border-width: 1px;
+                    border-color: #00E5C7;
                 }
 
                 // Playhead line — content-space x; scrolls with the lanes.

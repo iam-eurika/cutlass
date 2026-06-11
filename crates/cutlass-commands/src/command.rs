@@ -86,6 +86,10 @@ pub enum EditCommand {
         source: TimeRange,
         at: RationalTime,
     },
+    /// Put `clips` into one fresh link group (CapCut linkage): linked clips
+    /// select, move, and trim together. Any previous links on the clips are
+    /// replaced; the inverse restores them.
+    LinkClips { clips: Vec<ClipId> },
 }
 
 /// Top-level command surface: media registration or a timeline edit.

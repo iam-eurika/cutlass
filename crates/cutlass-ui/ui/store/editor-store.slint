@@ -1,4 +1,5 @@
 import { Project } from "../models/index.slint";
+import { ClipMove } from "../lib/drag-backend.slint";
 
 // Slint-side view model. This is a read-only projection of the engine's
 // project: the worker thread publishes a fresh `project` (built in
@@ -28,6 +29,10 @@ export global EditorStore {
     // main lane — for reorders the tick is in post-close space (the worker
     // closes the clip's own gap first).
     callback on-clip-moved(clip-id: string, track-id: string, insert-row: int, start-tick: int, insert: bool);
+    // A multi-selection drag was released: every clip lands on the lane /
+    // start the group resolver validated (uniform dx + row delta, no
+    // conflicts). The worker commits the batch as one history entry.
+    callback on-group-moved(moves: [ClipMove]);
     // The main-track magnet toggled; the worker mirrors the flag (deletes/
     // paste/duplicate policy) and packs the main lane when enabling.
     callback on-main-magnet-changed(enabled: bool);
@@ -42,9 +47,10 @@ export global EditorStore {
     // the result visible. Gating (selection exists, playhead inside the
     // clip, …) happens UI-side in `TimelineActions`.
 
-    // Delete the clip (Delete/Backspace, toolbar). The worker removes the
-    // lane too when this empties it — same policy as drag-moves.
-    callback on-clip-deleted(clip-id: string);
+    // Delete the selected clips (Delete/Backspace, toolbar) as one history
+    // entry. Lanes the removals empty are removed too — same policy as
+    // drag-moves.
+    callback on-clips-deleted(clip-ids: [string]);
     // Split the clip at `at-tick` (Ctrl/Cmd+B, toolbar). Caller guarantees
     // the tick is strictly inside the clip.
     callback on-clip-split(clip-id: string, at-tick: int);
@@ -61,6 +67,9 @@ export global EditorStore {
     // A track header toggle was clicked. `flag` is "enabled" | "muted" |
     // "locked"; `value` is the new state. The worker applies it undoably.
     callback on-track-flag-toggled(track-id: string, flag: string, value: bool);
+    // The linkage toggle flipped; the worker mirrors the flag (drops of
+    // media with audio create linked pairs, trims/splits follow links).
+    callback on-linkage-changed(enabled: bool);
 
     // Engine history state, republished by the worker after every
     // mutation — drives the toolbar's undo/redo enabled states.

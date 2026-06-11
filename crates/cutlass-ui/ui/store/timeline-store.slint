@@ -1,13 +1,30 @@
 // Cross-panel timeline state (zoom, playhead, selection). Ephemeral panel
 // view state lives in `TimelineViewState` (`ui/panels/timeline/state.slint`).
 //
-// Selection is keyed on (selected-track-id, selected-clip-id) because clip
-// ids are unique per track, not project-wide. Empty ids ⇔ nothing selected.
+// Selection is a set of clip ids (engine clip ids are globally unique) plus
+// a primary anchor (selected-track-id, selected-clip-id) that keys the
+// inspector and the single-clip ops (split, copy, duplicate). The set always
+// contains the primary; empty primary ⇔ nothing selected.
+
+import { SelectionUpdate } from "../lib/selection-backend.slint";
+
 export global TimelineStore {
     in-out property <float> zoom: 3;
     in-out property <int> playhead-tick: 0;
     in-out property <string> selected-track-id: "";
     in-out property <string> selected-clip-id: "";
+    // Full multi-selection (shift-click, marquee, link groups). Replaced
+    // wholesale on every change so dependent bindings re-evaluate.
+    in-out property <[string]> selected-ids: [];
+
+    // Apply a selection gesture result from SelectionBackend in one step,
+    // keeping the set and the primary anchor consistent.
+    public function apply-selection(upd: SelectionUpdate) {
+        self.selected-ids = upd.ids;
+        self.selected-track-id = upd.primary-track-id;
+        self.selected-clip-id = upd.primary-clip-id;
+    }
+
     // CapCut's "auto snapping" magnet: drags snap to clip edges on all lanes,
     // the playhead, and tick 0. Toggled from the timeline toolbar.
     in-out property <bool> snap-enabled: true;
@@ -18,4 +35,10 @@ export global TimelineStore {
     // Mirrored to the worker via EditorStore.on-main-magnet-changed (paste/
     // duplicate/delete have no drag resolution, so the worker needs the flag).
     in-out property <bool> main-magnet-enabled: true;
+    // CapCut's linkage toggle: while on, clips sharing a link group (the
+    // video+audio pair from one media drop) select/move/trim together, and
+    // drops of media with audio create linked pairs. Off = clips act
+    // independently (links persist, dormant). Mirrored to the worker via
+    // EditorStore.on-linkage-changed (drops/trims/splits need the flag).
+    in-out property <bool> link-enabled: true;
 }

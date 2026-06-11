@@ -3,6 +3,7 @@ mod preview;
 mod preview_worker;
 mod projection;
 mod ruler;
+mod selection;
 mod snap;
 mod strips;
 mod thumbnails;
@@ -10,6 +11,7 @@ mod timecode;
 mod timeline;
 
 use slint::BackendSelector;
+use slint::Model;
 use slint::Global;
 use slint::SharedString;
 use slint::wgpu_28::WGPUConfiguration;
@@ -218,7 +220,7 @@ fn main() -> Result<(), slint::PlatformError> {
     );
 
     app.global::<DragBackend>().on_resolve_clip_trim(
-        |sequence, track_id, clip_id, trim_head, dx_ticks, playhead_tick, snap_threshold_ticks| {
+        |sequence, track_id, clip_id, trim_head, dx_ticks, playhead_tick, snap_threshold_ticks, link_enabled| {
             snap::resolve_clip_trim(
                 &sequence,
                 track_id.as_str(),
@@ -227,9 +229,72 @@ fn main() -> Result<(), slint::PlatformError> {
                 dx_ticks,
                 playhead_tick,
                 snap_threshold_ticks,
+                link_enabled,
             )
         },
     );
+
+    // --- Phase 10: multi-selection, group drag, linkage -------------------
+
+    app.global::<SelectionBackend>()
+        .on_contains(|ids, clip_id| selection::selection_contains(&ids, clip_id.as_str()));
+
+    app.global::<SelectionBackend>()
+        .on_select_clip(|sequence, track_id, clip_id, link_enabled| {
+            selection::select_clip(&sequence, track_id.as_str(), clip_id.as_str(), link_enabled)
+        });
+
+    app.global::<SelectionBackend>()
+        .on_toggle_clip(|sequence, current, track_id, clip_id, link_enabled| {
+            selection::toggle_clip(
+                &sequence,
+                &current,
+                track_id.as_str(),
+                clip_id.as_str(),
+                link_enabled,
+            )
+        });
+
+    app.global::<SelectionBackend>()
+        .on_resolve_marquee(|sequence, tick0, tick1, row0, row1, link_enabled| {
+            selection::resolve_marquee(&sequence, tick0, tick1, row0, row1, link_enabled)
+        });
+
+    app.global::<DragBackend>()
+        .on_group_floaters(|sequence, ids| selection::group_floaters(&sequence, &ids));
+
+    app.global::<DragBackend>().on_resolve_group_drag(
+        |sequence, ids, anchor_track_id, anchor_clip_id, dx_ticks, hover_row, playhead_tick, snap_threshold_ticks| {
+            selection::resolve_group_drag(
+                &sequence,
+                &ids,
+                anchor_track_id.as_str(),
+                anchor_clip_id.as_str(),
+                dx_ticks,
+                hover_row,
+                playhead_tick,
+                snap_threshold_ticks,
+            )
+        },
+    );
+
+    let group_move_handle = preview_worker.handle();
+    editor.on_on_group_moved(move |moves| {
+        let moves: Vec<preview_worker::GroupMove> = moves
+            .iter()
+            .map(|m| preview_worker::GroupMove {
+                clip: m.clip_id.to_string(),
+                track: m.track_id.to_string(),
+                start_tick: i64::from(m.start_tick),
+            })
+            .collect();
+        group_move_handle.move_group(moves);
+    });
+
+    let linkage_handle = preview_worker.handle();
+    editor.on_on_linkage_changed(move |enabled| {
+        linkage_handle.set_linkage(enabled);
+    });
 
     let move_handle = preview_worker.handle();
     editor.on_on_clip_moved(move |clip_id, track_id, insert_row, start_tick, insert| {
@@ -254,8 +319,9 @@ fn main() -> Result<(), slint::PlatformError> {
     // --- Phase 5: selection ops & history (UI gates, engine validates) ---
 
     let delete_handle = preview_worker.handle();
-    editor.on_on_clip_deleted(move |clip_id| {
-        delete_handle.remove_clip(clip_id.to_string());
+    editor.on_on_clips_deleted(move |clip_ids| {
+        let clips: Vec<String> = clip_ids.iter().map(|id| id.to_string()).collect();
+        delete_handle.remove_clips(clips);
     });
 
     let split_handle = preview_worker.handle();

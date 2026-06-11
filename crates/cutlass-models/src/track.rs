@@ -263,6 +263,7 @@ mod tests {
             id,
             content: ClipSource::Generated(Generator::Adjustment),
             timeline: tr(20, 30),
+            link: None,
         };
         let displaced = track.insert_clip(replacement).unwrap();
         assert_eq!(displaced.timeline, tr(0, 10));
@@ -320,11 +321,13 @@ mod tests {
             id: ClipId::from_raw(2),
             content: ClipSource::Generated(Generator::Adjustment),
             timeline: tr(10, 5),
+            link: None,
         };
         let b = Clip {
             id: ClipId::from_raw(1),
             content: ClipSource::Generated(Generator::Adjustment),
             timeline: tr(10, 5),
+            link: None,
         };
         track.insert_clip(a);
         track.insert_clip(b);

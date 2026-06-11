@@ -52,6 +52,11 @@ enum WorkerMsg {
         start_tick: i64,
         insert: bool,
     },
+    /// Move a multi-selection in one history entry. Each entry is fully
+    /// resolved (existing target lane + start) by the group drag resolver;
+    /// the batch lands via park-then-place so members can never transiently
+    /// collide with each other regardless of order.
+    MoveGroup { moves: Vec<GroupMove> },
     /// Re-place `clip` (raw id) at `[start_tick, start_tick + duration_ticks)`
     /// on its own lane (edge trim; the engine re-derives the source in/out).
     TrimClip {
@@ -59,9 +64,9 @@ enum WorkerMsg {
         start_tick: i64,
         duration_ticks: i64,
     },
-    /// Remove `clip` (raw id); a lane this empties is removed too (same
-    /// policy as drag-moves).
-    RemoveClip { clip: String },
+    /// Remove every clip in `clips` (raw ids) as one history entry; lanes
+    /// the removals empty are removed too (same policy as drag-moves).
+    RemoveClips { clips: Vec<String> },
     /// Split `clip` (raw id) at `at_tick` (sequence ticks). The UI gates on
     /// the playhead being strictly inside the clip; the engine re-validates.
     SplitClip { clip: String, at_tick: i64 },
@@ -80,12 +85,23 @@ enum WorkerMsg {
     /// ops without a drag resolution (delete/paste/duplicate); enabling also
     /// packs the main lane gapless (one history entry).
     SetMainMagnet(bool),
+    /// Mirror of the UI's linkage toggle: drops of media with audio create
+    /// linked pairs, trims/splits follow link groups.
+    SetLinkage(bool),
     /// Set a track header flag (hide/mute/lock) on `track` (raw id). Undoable.
     SetTrackFlag {
         track: String,
         flag: TrackFlag,
         value: bool,
     },
+}
+
+/// One clip's resolved landing inside a [`WorkerMsg::MoveGroup`] batch.
+/// All raw ids from the Slint projection.
+pub struct GroupMove {
+    pub clip: String,
+    pub track: String,
+    pub start_tick: i64,
 }
 
 /// Which track header toggle a [`WorkerMsg::SetTrackFlag`] addresses.
@@ -162,6 +178,10 @@ impl WorkerHandle {
         });
     }
 
+    pub fn move_group(&self, moves: Vec<GroupMove>) {
+        let _ = self.tx.send(WorkerMsg::MoveGroup { moves });
+    }
+
     pub fn trim_clip(&self, clip: String, start_tick: i64, duration_ticks: i64) {
         let _ = self.tx.send(WorkerMsg::TrimClip {
             clip,
@@ -170,8 +190,8 @@ impl WorkerHandle {
         });
     }
 
-    pub fn remove_clip(&self, clip: String) {
-        let _ = self.tx.send(WorkerMsg::RemoveClip { clip });
+    pub fn remove_clips(&self, clips: Vec<String>) {
+        let _ = self.tx.send(WorkerMsg::RemoveClips { clips });
     }
 
     pub fn split_clip(&self, clip: String, at_tick: i64) {
@@ -200,6 +220,10 @@ impl WorkerHandle {
 
     pub fn set_main_magnet(&self, enabled: bool) {
         let _ = self.tx.send(WorkerMsg::SetMainMagnet(enabled));
+    }
+
+    pub fn set_linkage(&self, enabled: bool) {
+        let _ = self.tx.send(WorkerMsg::SetLinkage(enabled));
     }
 
     pub fn set_track_flag(&self, track: String, flag: TrackFlag, value: bool) {
@@ -315,10 +339,14 @@ fn worker_loop(
     // Drag gestures carry their resolved insert flag; this drives the ops
     // without a drag resolution (delete/paste/duplicate) and pack-on-enable.
     let mut main_magnet = true;
+    // Mirror of TimelineStore.link-enabled (must match its default): drops
+    // of media with audio create linked pairs, trims/splits follow links.
+    let mut linkage = true;
 
     let mutate = |engine: &mut Engine,
                   clipboard: &mut Option<ClipboardClip>,
                   main_magnet: &mut bool,
+                  linkage: &mut bool,
                   msg: WorkerMsg| {
         match msg {
             WorkerMsg::Import(path) => {
@@ -337,6 +365,7 @@ fn worker_loop(
                 start_tick,
                 drop_row,
                 insert,
+                *linkage,
                 &editor_weak,
             ),
             WorkerMsg::MoveClip {
@@ -355,16 +384,26 @@ fn worker_loop(
                 *main_magnet,
                 &editor_weak,
             ),
+            WorkerMsg::MoveGroup { moves } => {
+                move_group_and_publish(engine, &moves, &editor_weak)
+            }
             WorkerMsg::TrimClip {
                 clip,
                 start_tick,
                 duration_ticks,
-            } => trim_clip_and_publish(engine, &clip, start_tick, duration_ticks, &editor_weak),
-            WorkerMsg::RemoveClip { clip } => {
-                remove_clip_and_publish(engine, &clip, *main_magnet, &editor_weak)
+            } => trim_clip_and_publish(
+                engine,
+                &clip,
+                start_tick,
+                duration_ticks,
+                *linkage,
+                &editor_weak,
+            ),
+            WorkerMsg::RemoveClips { clips } => {
+                remove_clips_and_publish(engine, &clips, *main_magnet, &editor_weak)
             }
             WorkerMsg::SplitClip { clip, at_tick } => {
-                split_clip_and_publish(engine, &clip, at_tick, &editor_weak)
+                split_clip_and_publish(engine, &clip, at_tick, *linkage, &editor_weak)
             }
             WorkerMsg::Undo => history_step_and_publish(engine, false, &editor_weak),
             WorkerMsg::Redo => history_step_and_publish(engine, true, &editor_weak),
@@ -388,6 +427,10 @@ fn worker_loop(
                     pack_main_track_and_publish(engine, &editor_weak);
                 }
             }
+            WorkerMsg::SetLinkage(enabled) => {
+                *linkage = enabled;
+                info!(enabled, "linkage toggled");
+            }
             WorkerMsg::SetTrackFlag { track, flag, value } => {
                 set_track_flag_and_publish(engine, &track, flag, value, &editor_weak)
             }
@@ -401,12 +444,14 @@ fn worker_loop(
                 while let Ok(next) = req_rx.try_recv() {
                     match next {
                         WorkerMsg::Frame(latest) => tick = latest,
-                        other => mutate(engine, &mut clipboard, &mut main_magnet, other),
+                        other => {
+                            mutate(engine, &mut clipboard, &mut main_magnet, &mut linkage, other)
+                        }
                     }
                 }
                 render_frame(engine, tl_rate, &preview_weak, tick);
             }
-            other => mutate(engine, &mut clipboard, &mut main_magnet, other),
+            other => mutate(engine, &mut clipboard, &mut main_magnet, &mut linkage, other),
         }
     }
 }
@@ -459,7 +504,11 @@ fn import_and_publish(
 ///   new lane appears where the user dropped (above the lanes ⇒ top of the
 ///   stack, below ⇒ bottom);
 /// - dropped on the main lane with the magnet on (`insert`) → ripple-insert
-///   at `start_tick`, shifting later clips right (atomic engine command).
+///   at `start_tick`, shifting later clips right (atomic engine command);
+/// - with `linkage` on, a video drop whose media carries audio also lands a
+///   linked audio clip at the same tick (an existing unlocked audio lane
+///   with the span free, else a fresh bottom lane) — one history entry for
+///   the pair.
 fn add_clip_and_publish(
     engine: &mut Engine,
     media: &str,
@@ -467,16 +516,17 @@ fn add_clip_and_publish(
     start_tick: i64,
     drop_row: i64,
     insert: bool,
+    linkage: bool,
     editor_weak: &slint::Weak<EditorStore<'static>>,
 ) {
     let Some(media_id) = parse_raw_id(media).map(MediaId::from_raw) else {
         error!(media, "drop ignored: unparsable media id");
         return;
     };
-    let Some((source, audio_only)) = engine
+    let Some((source, audio_only, has_audio)) = engine
         .project()
         .media(media_id)
-        .map(|m| (m.full_range(), m.is_audio_only()))
+        .map(|m| (m.full_range(), m.is_audio_only(), m.has_audio))
     else {
         error!(%media_id, "drop ignored: media not in pool");
         return;
@@ -487,33 +537,52 @@ fn add_clip_and_publish(
         TrackKind::Video
     };
     let tl_rate = engine.project().timeline().frame_rate;
+    // Mirror Project::add_clip's source→timeline resampling so first-fit and
+    // the audio companion see the same extent the engine will validate.
+    let duration_ticks = resample(source.duration, tl_rate).value.max(1);
+    let wants_companion = linkage && !audio_only && has_audio;
 
     // The main-track magnet only applies to the main *video* lane.
     if insert
         && !audio_only
         && let Some(lane) = lane_of_kind(engine, track, TrackKind::Video)
     {
+        let at = start_tick.max(0);
+        engine.begin_group();
         match engine.apply(Command::Edit(EditCommand::RippleInsert {
             track: lane,
             media: media_id,
             source,
-            at: RationalTime::new(start_tick.max(0), tl_rate),
+            at: RationalTime::new(at, tl_rate),
         })) {
             Ok(ApplyOutcome::Edited(EditOutcome::Created(clip))) => {
-                info!(%clip, %lane, %media_id, start_tick, "ripple-inserted clip from library drop");
+                let linked = !wants_companion
+                    || add_linked_audio(engine, clip, media_id, source, at, duration_ticks)
+                        .map_err(|e| error!(%clip, "linked audio drop failed: {e}"))
+                        .is_ok();
+                if linked {
+                    engine.commit_group();
+                    info!(%clip, %lane, %media_id, at, "ripple-inserted clip from library drop");
+                } else {
+                    engine.rollback_group();
+                }
             }
-            Ok(other) => error!(%media_id, "unexpected ripple-insert outcome: {other:?}"),
-            Err(e) => error!(%media_id, %lane, start_tick, "ripple insert failed: {e}"),
+            Ok(other) => {
+                error!(%media_id, "unexpected ripple-insert outcome: {other:?}");
+                engine.rollback_group();
+            }
+            Err(e) => {
+                error!(%media_id, %lane, start_tick, "ripple insert failed: {e}");
+                engine.rollback_group();
+            }
         }
         publish_projection(engine, editor_weak);
         return;
     }
-    // Mirror Project::add_clip's source→timeline resampling so first-fit sees
-    // the same extent the engine will validate.
-    let duration_ticks = resample(source.duration, tl_rate).value.max(1);
     let desired = start_tick.max(0);
 
-    // One history entry per drop, even when it creates the landing lane.
+    // One history entry per drop, even when it creates the landing lane(s)
+    // and the linked audio companion.
     engine.begin_group();
     let (track_id, start_value) = match lane_of_kind(engine, track, lane_kind) {
         Some(lane) => {
@@ -541,13 +610,21 @@ fn add_clip_and_publish(
         start: RationalTime::new(start_value, tl_rate),
     })) {
         Ok(ApplyOutcome::Edited(EditOutcome::Created(clip))) => {
-            engine.commit_group();
-            info!(
-                %clip, %track_id, %media_id,
-                start_tick = start_value,
-                desired,
-                "added clip from library drop"
-            );
+            let linked = !wants_companion
+                || add_linked_audio(engine, clip, media_id, source, start_value, duration_ticks)
+                    .map_err(|e| error!(%clip, "linked audio drop failed: {e}"))
+                    .is_ok();
+            if linked {
+                engine.commit_group();
+                info!(
+                    %clip, %track_id, %media_id,
+                    start_tick = start_value,
+                    desired,
+                    "added clip from library drop"
+                );
+            } else {
+                engine.rollback_group();
+            }
             publish_projection(engine, editor_weak);
         }
         // First-fit should have made the placement valid; the engine still
@@ -564,6 +641,66 @@ fn add_clip_and_publish(
             publish_projection(engine, editor_weak);
         }
     }
+}
+
+/// Land the audio companion of a linked drop: the same source range at the
+/// same tick, on the topmost unlocked audio lane with the span free (a new
+/// bottom lane when none has room), then link the pair. Runs inside the
+/// drop's history group.
+fn add_linked_audio(
+    engine: &mut Engine,
+    video_clip: ClipId,
+    media_id: MediaId,
+    source: TimeRange,
+    start_tick: i64,
+    duration_ticks: i64,
+) -> Result<(), String> {
+    let tl_rate = engine.project().timeline().frame_rate;
+    // UI rows show the stack top-first, so scanning the order back-to-front
+    // prefers the audio lane closest to the video lanes.
+    let lane = {
+        let timeline = engine.project().timeline();
+        timeline.order().iter().rev().copied().find(|id| {
+            timeline.track(*id).is_some_and(|t| {
+                t.kind == TrackKind::Audio
+                    && !t.locked
+                    && span_free(t, start_tick, duration_ticks)
+            })
+        })
+    };
+    let lane = match lane {
+        Some(lane) => lane,
+        // drop_row == lane count ⇒ stack index 0 ⇒ bottom lane in the UI.
+        None => {
+            let bottom = engine.project().timeline().order().len() as i64;
+            create_track(engine, TrackKind::Audio, bottom)?
+        }
+    };
+
+    let audio_clip = match engine.apply(Command::Edit(EditCommand::AddClip {
+        track: lane,
+        media: media_id,
+        source,
+        start: RationalTime::new(start_tick, tl_rate),
+    })) {
+        Ok(ApplyOutcome::Edited(EditOutcome::Created(id))) => id,
+        Ok(other) => return Err(format!("unexpected audio add outcome: {other:?}")),
+        Err(e) => return Err(e.to_string()),
+    };
+    apply_edit(engine, EditCommand::LinkClips {
+        clips: vec![video_clip, audio_clip],
+    })?;
+    info!(%video_clip, %audio_clip, %lane, start_tick, "linked audio companion");
+    Ok(())
+}
+
+/// Whether `[start, start + duration)` overlaps no clip on `track`.
+fn span_free(track: &Track, start: i64, duration: i64) -> bool {
+    let end = start + duration;
+    track
+        .clips_ordered()
+        .iter()
+        .all(|c| c.timeline.end_tick() <= start || c.timeline.start.value >= end)
 }
 
 /// `track` (raw id from the Slint projection) when it names an existing lane
@@ -796,31 +933,81 @@ fn ripple_move_in(
 /// clamped to neighbors and source headroom, so this should always apply; the
 /// engine still validates atomically (overlap, source bounds) and we surface
 /// any rejection rather than mutating the projection optimistically.
+///
+/// With `linkage` on, the same edge delta applies to every clip in the
+/// trimmed clip's link group (the resolver intersected the clamps, so the
+/// partners' extents are valid too) — one history entry for the group.
 fn trim_clip_and_publish(
     engine: &mut Engine,
     clip: &str,
     start_tick: i64,
     duration_ticks: i64,
+    linkage: bool,
     editor_weak: &slint::Weak<EditorStore<'static>>,
 ) {
     let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
         error!(clip, "trim ignored: unparsable clip id");
         return;
     };
+    let Some(placed) = engine.project().clip(clip_id).map(|c| c.timeline) else {
+        error!(%clip_id, "trim ignored: clip not on the timeline");
+        return;
+    };
     let tl_rate = engine.project().timeline().frame_rate;
-    let timeline = TimeRange::at_rate(start_tick.max(0), duration_ticks.max(1), tl_rate);
+    let start = start_tick.max(0);
+    let duration = duration_ticks.max(1);
+    // The same edge motion, expressed as deltas the partners can replay.
+    let delta_start = start - placed.start.value;
+    let delta_duration = duration - placed.duration.value;
 
-    match engine.apply(Command::Edit(EditCommand::TrimClip {
-        clip: clip_id,
-        timeline,
-    })) {
-        Ok(ApplyOutcome::Edited(EditOutcome::Updated(_))) => {
-            info!(%clip_id, start_tick, duration_ticks, "trimmed clip");
-            publish_projection(engine, editor_weak);
+    let mut trims = vec![(clip_id, TimeRange::at_rate(start, duration, tl_rate))];
+    if linkage {
+        for partner in link_group_ids(engine, clip_id) {
+            if partner == clip_id {
+                continue;
+            }
+            let Some(extent) = engine.project().clip(partner).map(|c| c.timeline) else {
+                continue;
+            };
+            trims.push((
+                partner,
+                TimeRange::at_rate(
+                    extent.start.value + delta_start,
+                    (extent.duration.value + delta_duration).max(1),
+                    tl_rate,
+                ),
+            ));
         }
-        Ok(other) => error!(%clip_id, "unexpected trim-clip outcome: {other:?}"),
-        Err(e) => error!(%clip_id, start_tick, duration_ticks, "trim clip failed: {e}"),
     }
+
+    engine.begin_group();
+    for (id, timeline) in trims {
+        if let Err(e) = apply_edit(engine, EditCommand::TrimClip { clip: id, timeline }) {
+            error!(%id, "trim clip failed: {e}");
+            engine.rollback_group();
+            publish_projection(engine, editor_weak);
+            return;
+        }
+    }
+    engine.commit_group();
+    info!(%clip_id, start_tick, duration_ticks, linkage, "trimmed clip");
+    publish_projection(engine, editor_weak);
+}
+
+/// Every clip sharing `clip`'s link group (including itself); just the clip
+/// when it's unlinked. O(total clips) — cold per-gesture path.
+fn link_group_ids(engine: &Engine, clip: ClipId) -> Vec<ClipId> {
+    let Some(link) = engine.project().clip(clip).and_then(|c| c.link) else {
+        return vec![clip];
+    };
+    engine
+        .project()
+        .timeline()
+        .tracks_ordered()
+        .flat_map(|t| t.clips_ordered())
+        .filter(|c| c.link == Some(link))
+        .map(|c| c.id)
+        .collect()
 }
 
 /// Toggle a track header flag (hide/mute/lock). Undoable like any edit; the
@@ -862,58 +1049,85 @@ fn set_track_flag_and_publish(
     }
 }
 
-/// Remove a clip; a lane the removal empties is removed with it (CapCut
-/// deletes emptied overlay tracks — same policy the drag-moves use). With
-/// the main-track magnet on, deleting from the main lane ripples the gap
-/// closed. Everything forms one history group: one undo restores it all.
-fn remove_clip_and_publish(
+/// Remove every clip in `clips`; lanes the removals empty are removed with
+/// them (CapCut deletes emptied overlay tracks — same policy the drag-moves
+/// use). With the main-track magnet on, main-lane deletions ripple their
+/// gaps closed. Everything forms one history group: one undo restores the
+/// whole selection.
+fn remove_clips_and_publish(
     engine: &mut Engine,
-    clip: &str,
+    clips: &[String],
     main_magnet: bool,
     editor_weak: &slint::Weak<EditorStore<'static>>,
 ) {
-    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
-        error!(clip, "delete ignored: unparsable clip id");
+    let main = main_video_track(engine);
+    // Resolve every member up front: a single bad id voids the whole batch
+    // rather than half-deleting the selection.
+    let mut targets = Vec::with_capacity(clips.len());
+    for clip in clips {
+        let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+            error!(clip, "delete ignored: unparsable clip id");
+            return;
+        };
+        let Some(track) = engine.project().timeline().track_of(clip_id) else {
+            error!(%clip_id, "delete ignored: clip not on the timeline");
+            return;
+        };
+        targets.push((clip_id, track));
+    }
+    if targets.is_empty() {
         return;
-    };
-    let Some(track) = engine.project().timeline().track_of(clip_id) else {
-        error!(%clip_id, "delete ignored: clip not on the timeline");
-        return;
-    };
-    let ripple = main_magnet && Some(track) == main_video_track(engine);
+    }
+    // Ripple deletes shift later main-lane clips left; deleting right-to-left
+    // keeps each pending member's recorded position valid.
+    targets.sort_by_key(|(clip_id, _)| {
+        std::cmp::Reverse(
+            engine
+                .project()
+                .clip(*clip_id)
+                .map(|c| c.timeline.start.value)
+                .unwrap_or(0),
+        )
+    });
 
-    // One history entry per delete, including the removal of an emptied lane.
     engine.begin_group();
-    let command = if ripple {
-        EditCommand::RippleDelete { clip: clip_id }
-    } else {
-        EditCommand::RemoveClip { clip: clip_id }
-    };
-    match engine.apply(Command::Edit(command)) {
-        Ok(ApplyOutcome::Edited(EditOutcome::Removed(_))) => {
-            remove_track_if_empty(engine, track);
-            engine.commit_group();
-            info!(%clip_id, %track, ripple, "removed clip");
-            publish_projection(engine, editor_weak);
-        }
-        Ok(other) => {
-            error!(%clip_id, "unexpected remove-clip outcome: {other:?}");
-            engine.rollback_group();
-        }
-        Err(e) => {
+    for &(clip_id, track) in &targets {
+        let command = if main_magnet && Some(track) == main {
+            EditCommand::RippleDelete { clip: clip_id }
+        } else {
+            EditCommand::RemoveClip { clip: clip_id }
+        };
+        if let Err(e) = apply_edit(engine, command) {
             error!(%clip_id, "remove clip failed: {e}");
             engine.rollback_group();
+            publish_projection(engine, editor_weak);
+            return;
         }
     }
+    // Lane cleanup after all removals: dedupe so each lane is checked once.
+    let mut lanes: Vec<TrackId> = targets.iter().map(|&(_, track)| track).collect();
+    lanes.sort();
+    lanes.dedup();
+    for lane in lanes {
+        remove_track_if_empty(engine, lane);
+    }
+    engine.commit_group();
+    info!(count = targets.len(), "removed clips");
+    publish_projection(engine, editor_weak);
 }
 
 /// Split a clip into two abutting clips at `at_tick`. The UI only offers the
 /// split while the playhead is strictly inside the clip; the engine still
 /// validates the position atomically.
+///
+/// With `linkage` on, every linked partner that also spans `at_tick` splits
+/// at the same tick, and the resulting tails are linked into a fresh group
+/// (heads keep the original link) — one history entry for the lot.
 fn split_clip_and_publish(
     engine: &mut Engine,
     clip: &str,
     at_tick: i64,
+    linkage: bool,
     editor_weak: &slint::Weak<EditorStore<'static>>,
 ) {
     let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
@@ -921,18 +1135,143 @@ fn split_clip_and_publish(
         return;
     };
     let tl_rate = engine.project().timeline().frame_rate;
+    let at = RationalTime::new(at_tick, tl_rate);
 
-    match engine.apply(Command::Edit(EditCommand::SplitClip {
-        clip: clip_id,
-        at: RationalTime::new(at_tick, tl_rate),
-    })) {
-        Ok(ApplyOutcome::Edited(EditOutcome::Created(tail))) => {
-            info!(%clip_id, %tail, at_tick, "split clip");
-            publish_projection(engine, editor_weak);
-        }
-        Ok(other) => error!(%clip_id, "unexpected split-clip outcome: {other:?}"),
-        Err(e) => error!(%clip_id, at_tick, "split clip failed: {e}"),
+    // Partners split only where the tick is strictly inside their extent
+    // (linked clips can have different lengths after asymmetric edits).
+    let members: Vec<ClipId> = if linkage {
+        link_group_ids(engine, clip_id)
+            .into_iter()
+            .filter(|&id| {
+                engine.project().clip(id).is_some_and(|c| {
+                    at_tick > c.timeline.start.value && at_tick < c.timeline.end_tick()
+                })
+            })
+            .collect()
+    } else {
+        vec![clip_id]
+    };
+    if members.is_empty() {
+        error!(%clip_id, at_tick, "split ignored: tick outside the clip");
+        return;
     }
+
+    engine.begin_group();
+    let mut tails = Vec::with_capacity(members.len());
+    for member in &members {
+        match engine.apply(Command::Edit(EditCommand::SplitClip { clip: *member, at })) {
+            Ok(ApplyOutcome::Edited(EditOutcome::Created(tail))) => tails.push(tail),
+            Ok(other) => {
+                error!(%member, "unexpected split-clip outcome: {other:?}");
+                engine.rollback_group();
+                return;
+            }
+            Err(e) => {
+                error!(%member, at_tick, "split clip failed: {e}");
+                engine.rollback_group();
+                return;
+            }
+        }
+    }
+    // Tails are born unlinked (split copies content, not links); pair them
+    // back up so each half keeps moving as a unit.
+    if tails.len() > 1
+        && let Err(e) = apply_edit(engine, EditCommand::LinkClips { clips: tails.clone() })
+    {
+        error!(%clip_id, "split failed linking tails: {e}");
+        engine.rollback_group();
+        return;
+    }
+    engine.commit_group();
+    info!(%clip_id, ?tails, at_tick, "split clip");
+    publish_projection(engine, editor_weak);
+}
+
+/// Land a group-drag batch. The resolver already validated every member
+/// against everything outside the selection, but members can still collide
+/// with *each other's* old positions mid-batch, so the batch goes
+/// park-then-place: every member first parks past the global content end on
+/// its target lane, then lands on its resolved start. One history group —
+/// one undo reverts the whole gesture. Source lanes the moves empty are
+/// removed (same overlay policy as single moves). Group moves are freeform —
+/// the main-track magnet's ripple-insert applies to single-clip drags only.
+fn move_group_and_publish(
+    engine: &mut Engine,
+    moves: &[GroupMove],
+    editor_weak: &slint::Weak<EditorStore<'static>>,
+) {
+    // Resolve raw ids up front; any stale entry voids the batch.
+    let mut resolved = Vec::with_capacity(moves.len());
+    for entry in moves {
+        let Some(clip_id) = parse_raw_id(&entry.clip).map(ClipId::from_raw) else {
+            error!(clip = entry.clip, "group move ignored: unparsable clip id");
+            return;
+        };
+        let Some(to_track) = parse_raw_id(&entry.track).map(TrackId::from_raw) else {
+            error!(track = entry.track, "group move ignored: unparsable track id");
+            return;
+        };
+        let Some(source_track) = engine.project().timeline().track_of(clip_id) else {
+            error!(%clip_id, "group move ignored: clip not on the timeline");
+            return;
+        };
+        resolved.push((clip_id, to_track, source_track, entry.start_tick.max(0)));
+    }
+    if resolved.is_empty() {
+        return;
+    }
+    let tl_rate = engine.project().timeline().frame_rate;
+    // Parking starts past everything on any lane; spaced by each member's
+    // duration so parked members can't collide either.
+    let mut park = engine
+        .project()
+        .timeline()
+        .tracks_ordered()
+        .map(|t| t.content_end())
+        .max()
+        .unwrap_or(0);
+
+    engine.begin_group();
+    for &(clip_id, to_track, _, _) in &resolved {
+        let duration = engine
+            .project()
+            .clip(clip_id)
+            .map(|c| c.timeline.duration.value)
+            .unwrap_or(1);
+        if let Err(e) = apply_edit(engine, EditCommand::MoveClip {
+            clip: clip_id,
+            to_track,
+            start: RationalTime::new(park, tl_rate),
+        }) {
+            error!(%clip_id, %to_track, "group move failed parking: {e}");
+            engine.rollback_group();
+            publish_projection(engine, editor_weak);
+            return;
+        }
+        park += duration;
+    }
+    for &(clip_id, to_track, _, start_tick) in &resolved {
+        if let Err(e) = apply_edit(engine, EditCommand::MoveClip {
+            clip: clip_id,
+            to_track,
+            start: RationalTime::new(start_tick, tl_rate),
+        }) {
+            error!(%clip_id, %to_track, start_tick, "group move failed landing: {e}");
+            engine.rollback_group();
+            publish_projection(engine, editor_weak);
+            return;
+        }
+    }
+    // Lane cleanup after all landings (dedupe: one check per source lane).
+    let mut sources: Vec<TrackId> = resolved.iter().map(|&(_, _, source, _)| source).collect();
+    sources.sort();
+    sources.dedup();
+    for source in sources {
+        remove_track_if_empty(engine, source);
+    }
+    engine.commit_group();
+    info!(count = resolved.len(), "moved clip group");
+    publish_projection(engine, editor_weak);
 }
 
 /// Step the engine history (`redo == false` ⇒ undo). Publishes even on a

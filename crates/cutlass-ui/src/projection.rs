@@ -156,6 +156,11 @@ fn clip_to_slint(project: &EngineProject, clip: &EngineClip) -> Clip {
         text_content: text_content.into(),
         head_room_ticks: head_room,
         tail_room_ticks: tail_room,
+        link_id: clip
+            .link
+            .map(|link| link.raw().to_string())
+            .unwrap_or_default()
+            .into(),
     }
 }
 

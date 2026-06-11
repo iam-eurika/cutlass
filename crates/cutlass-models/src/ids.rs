@@ -58,6 +58,11 @@ define_id!(
     /// Identifies a [`Clip`](crate::Clip) placed on a track.
     ClipId
 );
+define_id!(
+    /// Identifies a link group: clips sharing a `LinkId` move/trim together
+    /// (CapCut linkage — e.g. the video+audio pair from one media drop).
+    LinkId
+);
 
 #[cfg(test)]
 mod tests {

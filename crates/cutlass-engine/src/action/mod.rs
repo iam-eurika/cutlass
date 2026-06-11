@@ -160,8 +160,8 @@ impl History {
 mod tests {
     use super::*;
     use crate::action::edit::{
-        add_clip, add_generated, add_track, move_clip, remove_media, ripple_delete,
-        ripple_insert, set_track_flags, shift_clips, split_clip, trim_clip,
+        add_clip, add_generated, add_track, link_clips, move_clip, remove_media,
+        ripple_delete, ripple_insert, set_track_flags, shift_clips, split_clip, trim_clip,
     };
     use cutlass_cache::FrameCache;
     use cutlass_models::{
@@ -696,6 +696,71 @@ mod tests {
         // Redo disables again.
         let _ = inv2.apply(&mut ctx).unwrap();
         assert!(!ctx.project.timeline().track(track).unwrap().enabled);
+    }
+
+    #[test]
+    fn link_clips_inverse_restores_prior_links_and_oscillates() {
+        let (_dir, mut project, cache) = setup();
+        let track = project.add_track(TrackKind::Adjustment, "FX");
+        let a = project
+            .timeline_mut()
+            .add_clip(track, Clip::generated(Generator::Adjustment, tr(0, 10)))
+            .unwrap();
+        let b = project
+            .timeline_mut()
+            .add_clip(track, Clip::generated(Generator::Adjustment, tr(20, 10)))
+            .unwrap();
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let inv1 = link_clips::execute(&mut ctx, &[a, b]).unwrap();
+        let group = ctx.project.clip(a).unwrap().link;
+        assert!(group.is_some());
+        assert_eq!(ctx.project.clip(b).unwrap().link, group);
+
+        // Re-linking `b` into a new pair must let undo restore the old group.
+        let c = ctx
+            .project
+            .timeline_mut()
+            .add_clip(track, Clip::generated(Generator::Adjustment, tr(40, 10)))
+            .unwrap();
+        let inv2 = link_clips::execute(&mut ctx, &[b, c]).unwrap();
+        let pair = ctx.project.clip(b).unwrap().link;
+        assert_ne!(pair, group);
+        assert_eq!(ctx.project.clip(c).unwrap().link, pair);
+
+        let redo2 = inv2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(b).unwrap().link, group, "old link restored");
+        assert_eq!(ctx.project.clip(c).unwrap().link, None);
+
+        let _ = redo2.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(b).unwrap().link, pair);
+
+        // First link's inverse restores `a` to unlinked.
+        let inv1b = inv1.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(a).unwrap().link, None);
+        let _ = inv1b.apply(&mut ctx).unwrap();
+        assert_eq!(ctx.project.clip(a).unwrap().link, group);
+    }
+
+    #[test]
+    fn link_clips_unknown_clip_mutates_nothing() {
+        let (_dir, mut project, cache) = setup();
+        let track = project.add_track(TrackKind::Adjustment, "FX");
+        let a = project
+            .timeline_mut()
+            .add_clip(track, Clip::generated(Generator::Adjustment, tr(0, 10)))
+            .unwrap();
+
+        let mut project_path = None;
+        let mut history = History::new(32);
+        let mut ctx = test_ctx(&mut project, &cache, &mut project_path, &mut history);
+
+        let missing = cutlass_models::ClipId::from_raw(999);
+        assert!(link_clips::execute(&mut ctx, &[a, missing]).is_err());
+        assert_eq!(ctx.project.clip(a).unwrap().link, None, "validated before mutating");
     }
 
     #[test]

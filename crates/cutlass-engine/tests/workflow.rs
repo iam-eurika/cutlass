@@ -16,7 +16,8 @@ fn import_registers_media_and_cache() {
     let media_id = import_asset(&mut engine, &path);
 
     let media = engine.project().media(media_id).expect("media");
-    assert_eq!(media.path(), path.as_path());
+    // Import canonicalizes the source path (dedupe across spellings).
+    assert_eq!(media.path(), path.canonicalize().expect("asset exists"));
     assert!(media.width > 0);
     assert!(media.height > 0);
     assert!(media.duration.value > 0);
@@ -125,7 +126,12 @@ fn import_via_command_from_missing_file_fails_cleanly() {
     };
     assert_eq!(engine.project().media_count(), 0);
     assert!(!engine.can_undo());
-    assert!(format!("{err}").contains("Open") || format!("{err}").contains("open"));
+    // Canonicalization rejects the missing path before the demuxer opens it.
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("Open") || msg.contains("open") || msg.contains("No such file"),
+        "unexpected import error: {msg}"
+    );
 }
 
 #[test]

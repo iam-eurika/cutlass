@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::ModelError;
-use crate::ids::{ClipId, MediaId};
+use crate::ids::{ClipId, LinkId, MediaId};
 use crate::time::{RationalTime, TimeRange, resample, time_add, time_sub};
 
 /// What a clip draws. Either a trimmed range of imported media, or synthetic
@@ -51,6 +51,11 @@ pub struct Clip {
     pub id: ClipId,
     pub content: ClipSource,
     pub timeline: TimeRange,
+    /// Link group (CapCut linkage): clips sharing a `LinkId` are selected,
+    /// moved, and trimmed together — e.g. the video+audio pair created by
+    /// dropping media with an audio stream. `None` ⇔ unlinked.
+    #[serde(default)]
+    pub link: Option<LinkId>,
 }
 
 impl Clip {
@@ -60,6 +65,7 @@ impl Clip {
             id: ClipId::next(),
             content: ClipSource::Media { media, source },
             timeline,
+            link: None,
         }
     }
 
@@ -69,6 +75,7 @@ impl Clip {
             id: ClipId::next(),
             content: ClipSource::Generated(generator),
             timeline,
+            link: None,
         }
     }
 

@@ -147,6 +147,18 @@ export component Toolbar inherits Rectangle {
             }
         }
 
+        // CapCut's linkage toggle: linked video+audio pairs select, move,
+        // and trim together while on; drops of media with audio create
+        // linked pairs. Routed through TimelineActions so the worker
+        // mirrors the flag.
+        ToolButton {
+            label: "Link";
+            active: TimelineStore.link-enabled;
+            clicked => {
+                TimelineActions.toggle-linkage();
+            }
+        }
+
         Rectangle {
             width: AppStore.theme.metrics.spacing.sm;
         }

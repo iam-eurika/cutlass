@@ -37,6 +37,21 @@ export global TimelineViewState {
     // clears the whole drag state (it owns the resolution, ClipView doesn't).
     in-out property <bool> drag-released: false;
 
+    // True when the grabbed clip is part of a multi-selection: the panel
+    // resolves the whole set with one group resolution (uniform dx + row
+    // delta) instead of the single-clip resolver.
+    in-out property <bool> drag-is-group: false;
+
+    // --- marquee selection (drag on empty lane space) ---------------------
+    // Anchor + live corner in lane-content space (scroll-independent).
+    // TimelinePanel's wheel-area records the gesture; the live selection is
+    // applied per move via SelectionBackend.resolve-marquee.
+    in-out property <bool> marquee-active: false;
+    in-out property <length> marquee-anchor-x: 0px;
+    in-out property <length> marquee-anchor-y: 0px;
+    in-out property <length> marquee-x: 0px;
+    in-out property <length> marquee-y: 0px;
+
     // --- clip trim gesture (edge drag) -----------------------------------
     // Same shape as the move gesture: the edge handle records the press +
     // cursor delta; TimelinePanel resolves the new extent each frame (live

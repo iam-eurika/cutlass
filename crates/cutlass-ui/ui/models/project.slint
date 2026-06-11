@@ -81,6 +81,10 @@ export struct Clip {
     // reject an extension the UI offered.
     head-room-ticks: int,
     tail-room-ticks: int,
+    // Link group (CapCut linkage). Clips sharing a non-empty link-id are
+    // selected / moved / trimmed together while the Link toggle is on —
+    // e.g. the video+audio pair from one media drop. "" ⇔ unlinked.
+    link-id: string,
 }
 
 // Drives lane ordering, drag targeting (same-kind blocks), and which

@@ -133,5 +133,12 @@ fn dispatch_edit(
             let (id, inverse) = edit::ripple_insert::execute(ctx, track, media, source, at)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Created(id)), Some(inverse)))
         }
+        EditCommand::LinkClips { clips } => {
+            let first = clips.first().copied().ok_or_else(|| {
+                EngineError::from(cutlass_models::ModelError::InvalidRange)
+            })?;
+            let inverse = edit::link_clips::execute(ctx, &clips)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(first)), Some(inverse)))
+        }
     }
 }
