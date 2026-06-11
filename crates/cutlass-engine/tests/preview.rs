@@ -73,10 +73,12 @@ fn get_frame_after_split_still_decodes() {
 }
 
 #[test]
-fn get_frame_errors_when_timeline_empty() {
+fn get_frame_returns_black_when_timeline_empty() {
     let (_dir, mut engine) = temp_engine();
-    let err = engine.get_frame(rt(0)).unwrap_err();
-    assert!(format!("{err}").contains("no video"));
+    let frame = engine.get_frame(rt(0)).expect("gap frame");
+    assert_eq!(frame.width, 1920);
+    assert_eq!(frame.height, 1080);
+    assert!(frame.bytes.chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
 }
 
 #[test]

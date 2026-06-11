@@ -275,10 +275,10 @@ fn export_duration_follows_latest_ending_track() {
     assert_eq!(stats.frames, 36);
 }
 
-// --- known limitations (gaps) ---------------------------------------------
+// --- gaps render as black ---------------------------------------------------
 
 #[test]
-fn export_timeline_gap_errors() {
+fn export_timeline_gap_renders_black() {
     let (dir, mut engine) = temp_engine();
     let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
@@ -298,20 +298,14 @@ fn export_timeline_gap_errors() {
         tr(48, 24),
     );
 
-    let err = engine
-        .apply(Command::Project(ProjectCommand::Export {
-            path: dir.path().join("gap_export.mp4"),
-        }))
-        .unwrap_err();
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("no video") || msg.contains("Preview"),
-        "expected gap failure, got: {msg}"
-    );
+    let out = dir.path().join("gap_export.mp4");
+    let stats = export_to(&mut engine, &out);
+    assert_eq!(stats.frames, 72);
+    assert_export_duration_near(&out, 72, 24);
 }
 
 #[test]
-fn export_delayed_clip_start_errors_on_leading_gap() {
+fn export_delayed_clip_start_renders_leading_gap_black() {
     let (dir, mut engine) = temp_engine();
     let track = add_track(&mut engine, TrackKind::Sticker, "T1");
     add_generated(
@@ -323,16 +317,10 @@ fn export_delayed_clip_start_errors_on_leading_gap() {
         tr(12, 12),
     );
 
-    let err = engine
-        .apply(Command::Project(ProjectCommand::Export {
-            path: dir.path().join("delayed_start_export.mp4"),
-        }))
-        .unwrap_err();
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("no video") || msg.contains("Preview"),
-        "expected leading-gap failure, got: {msg}"
-    );
+    let out = dir.path().join("delayed_start_export.mp4");
+    let stats = export_to(&mut engine, &out);
+    assert_eq!(stats.frames, 24);
+    assert_export_duration_near(&out, 24, 24);
 }
 
 #[test]

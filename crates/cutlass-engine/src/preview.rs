@@ -122,3 +122,26 @@ pub fn get_export_yuv_frame(
         }
     }
 }
+
+/// Opaque black canvas — what compositing zero layers produces, without the
+/// GPU submit + readback.
+fn black_rgba_frame(width: u32, height: u32) -> Result<RgbaFrame, EngineError> {
+    let mut bytes = vec![0u8; width as usize * height as usize * 4];
+    for px in bytes.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    RgbaFrame::new(width, height, bytes)
+}
+
+/// Limited-range black (Y=16, U=V=128), matching what the GPU and legacy CPU
+/// RGBA→YUV converters emit for RGB black.
+fn black_yuv420p(width: u32, height: u32) -> Yuv420pImage {
+    let (w, h) = (width as usize, height as usize);
+    Yuv420pImage {
+        width,
+        height,
+        y: vec![16; w * h],
+        u: vec![128; (w / 2) * (h / 2)],
+        v: vec![128; (w / 2) * (h / 2)],
+    }
+}
