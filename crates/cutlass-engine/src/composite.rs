@@ -302,10 +302,17 @@ pub fn resolve_layers(
                             }
                         }
                     }
-                    Generator::Sticker
-                    | Generator::Effect
-                    | Generator::Filter
-                    | Generator::Adjustment => {
+                    Generator::Adjustment => {
+                        // Adjustment layers (M4) carry no content of their
+                        // own; the compositor applies their effect chain to
+                        // the accumulated canvas below. An empty chain is a
+                        // harmless no-op there, so emit unconditionally.
+                        layers.push(CompositeLayer::adjustment(
+                            effects,
+                            transform.opacity.clamp(0.0, 1.0),
+                        ));
+                    }
+                    Generator::Sticker | Generator::Effect | Generator::Filter => {
                         debug!(?generator, "skipping unsupported generator for composite");
                     }
                 }
@@ -605,6 +612,42 @@ mod tests {
         assert_eq!(layers[0].effects[0].effect_id, "vignette");
         let slot = cutlass_compositor::effect_param_index("vignette", "amount").unwrap();
         assert_eq!(layers[0].effects[0].params[slot], 0.5);
+    }
+
+    #[test]
+    fn resolve_emits_adjustment_layer_with_its_chain() {
+        use cutlass_compositor::LayerContent;
+        use cutlass_models::TimeRange;
+        let rate = cutlass_models::Rational::FPS_24;
+        let mut project = Project::new("t", rate);
+        let track = project.add_track(TrackKind::Adjustment, "FX");
+        let clip = project
+            .add_generated(track, Generator::Adjustment, TimeRange::at_rate(0, 24, rate))
+            .unwrap();
+        project.add_effect(clip, "vignette").unwrap();
+
+        let mut pool = DecoderPool::new();
+        let mut raster = GeneratorRaster::new();
+        let canvas = CompositorConfig::new(64, 64);
+        let layers = resolve_layers(
+            &project,
+            None,
+            &mut pool,
+            &mut raster,
+            RationalTime::new(0, rate),
+            0.0,
+            &canvas,
+            ColorConvertPath::Gpu,
+            None,
+            None,
+        )
+        .unwrap();
+        // The adjustment clip resolves to an Adjustment layer carrying its
+        // effect chain (not a textured layer).
+        assert_eq!(layers.len(), 1);
+        assert!(matches!(layers[0].content, LayerContent::Adjustment));
+        assert_eq!(layers[0].effects.len(), 1);
+        assert_eq!(layers[0].effects[0].effect_id, "vignette");
     }
 
     #[test]
