@@ -389,6 +389,9 @@ fn resolve_insertion(track: &crate::Track, exclude: Option<&str>, desired: i32) 
 /// of every member's allowed delta range (each member's own neighbors,
 /// headroom, and 1-tick minimum). The partners' post-trim extents come back
 /// as `ghosts` for their stretch previews.
+///
+/// With `main_magnet` on, a trim on the main lane (bottom video track) skips
+/// neighbor clamping — downstream clips ripple on commit instead.
 pub fn resolve_clip_trim(
     sequence: &Sequence,
     track_id: &str,
@@ -398,6 +401,7 @@ pub fn resolve_clip_trim(
     playhead_tick: i32,
     snap_threshold_ticks: i32,
     link_enabled: bool,
+    main_magnet: bool,
 ) -> ClipTrimResolution {
     let Some(ctx) = trim_context(sequence, track_id, clip_id) else {
         return ClipTrimResolution::invalid();
@@ -406,13 +410,19 @@ pub fn resolve_clip_trim(
     let old_edge = if trim_head { ctx.start } else { old_end };
 
     let partners = linked_partners(sequence, clip_id, link_enabled);
+    let ripple = main_magnet && is_main_track(sequence, track_id);
 
     // Allowed edge-delta range: the dragged clip's bounds intersected with
     // every linked partner's. Delta 0 is inside each member's range, so the
     // intersection is never empty.
-    let (mut delta_lo, mut delta_hi) = edge_delta_bounds(&ctx, trim_head);
-    for (_, _, partner) in &partners {
-        let (lo, hi) = edge_delta_bounds(partner, trim_head);
+    let (mut delta_lo, mut delta_hi) = edge_delta_bounds(&ctx, trim_head, ripple);
+    for (row, _, partner) in &partners {
+        let partner_ripple = main_magnet
+            && sequence
+                .tracks
+                .row_data(*row as usize)
+                .is_some_and(|t| is_main_track(sequence, t.id.as_str()));
+        let (lo, hi) = edge_delta_bounds(partner, trim_head, partner_ripple);
         delta_lo = delta_lo.max(lo);
         delta_hi = delta_hi.min(hi);
     }
@@ -467,16 +477,33 @@ pub fn resolve_clip_trim(
 
 /// Allowed range for the dragged edge's delta on one clip: its lane
 /// neighbors, source headroom, tick 0, and the 1-tick minimum, expressed
-/// relative to the edge's current position. Always contains 0.
-fn edge_delta_bounds(ctx: &TrimContext, trim_head: bool) -> (i32, i32) {
+/// relative to the edge's current position. Always contains 0. On the main
+/// lane with the magnet on, neighbor clamps are skipped (ripple on commit).
+fn edge_delta_bounds(ctx: &TrimContext, trim_head: bool, ripple: bool) -> (i32, i32) {
     let end = ctx.start.saturating_add(ctx.duration);
     if trim_head {
-        let lo = ctx.prev_end.max(ctx.start.saturating_sub(ctx.head_room)).max(0);
+        let lo = if ripple {
+            ctx.start.saturating_sub(ctx.head_room).max(0)
+        } else {
+            ctx.prev_end
+                .max(ctx.start.saturating_sub(ctx.head_room))
+                .max(0)
+        };
         (lo - ctx.start, (end - 1) - ctx.start)
     } else {
-        let hi = ctx.next_start.min(end.saturating_add(ctx.tail_room));
+        let hi = if ripple {
+            end.saturating_add(ctx.tail_room)
+        } else {
+            ctx.next_start.min(end.saturating_add(ctx.tail_room))
+        };
         ((ctx.start + 1) - end, hi - end)
     }
+}
+
+fn is_main_track(sequence: &Sequence, track_id: &str) -> bool {
+    main_video_row(sequence)
+        .and_then(|row| sequence.tracks.row_data(row as usize))
+        .is_some_and(|t| t.id == track_id)
 }
 
 /// `(lane row, lane color, trim context)` of every other clip in the dragged
@@ -722,6 +749,7 @@ mod tests {
             fps: Rational { num: 24, den: 1 },
             drop_frame: false,
             tracks: ModelRc::from(Rc::new(VecModel::from(tracks))),
+            markers: Default::default(),
             width: 1920.0,
             height: 1080.0,
         }
@@ -1000,7 +1028,7 @@ mod tests {
     fn tail_trim_extends_until_next_clip() {
         let seq = sample_sequence();
         // Clip "2" [0,80) on track "2"; clip "3" starts at 200 on the same lane.
-        let r = resolve_clip_trim(&seq, "2", "2", false, 300, 0, 0, false);
+        let r = resolve_clip_trim(&seq, "2", "2", false, 300, 0, 0, false, false);
         assert!(r.valid);
         assert_eq!(r.new_start, 0);
         assert_eq!(r.new_duration, 200);
@@ -1011,7 +1039,7 @@ mod tests {
     fn head_trim_extends_until_previous_clip() {
         let seq = sample_sequence();
         // Clip "3" [200,260) on track "2"; clip "2" ends at 80 on the same lane.
-        let r = resolve_clip_trim(&seq, "2", "3", true, -500, 0, 0, false);
+        let r = resolve_clip_trim(&seq, "2", "3", true, -500, 0, 0, false, false);
         assert!(r.valid);
         assert_eq!(r.new_start, 80);
         assert_eq!(r.new_duration, 180);
@@ -1024,7 +1052,7 @@ mod tests {
             TrackKind::Video,
             vec![clip_with_rooms("1", 10, 100, 5, 1_000_000)],
         )]);
-        let r = resolve_clip_trim(&seq, "1", "1", true, -50, 0, 0, false);
+        let r = resolve_clip_trim(&seq, "1", "1", true, -50, 0, 0, false, false);
         assert!(r.valid);
         assert_eq!(r.new_start, 5);
         assert_eq!(r.new_duration, 105);
@@ -1037,7 +1065,7 @@ mod tests {
             TrackKind::Video,
             vec![clip_with_rooms("1", 10, 100, 0, 7)],
         )]);
-        let r = resolve_clip_trim(&seq, "1", "1", false, 50, 0, 0, false);
+        let r = resolve_clip_trim(&seq, "1", "1", false, 50, 0, 0, false, false);
         assert!(r.valid);
         assert_eq!(r.new_start, 10);
         assert_eq!(r.new_duration, 107);
@@ -1046,11 +1074,11 @@ mod tests {
     #[test]
     fn trim_never_collapses_below_one_tick() {
         let seq = sample_sequence();
-        let head = resolve_clip_trim(&seq, "2", "2", true, 1_000, 0, 0, false);
+        let head = resolve_clip_trim(&seq, "2", "2", true, 1_000, 0, 0, false, false);
         assert_eq!(head.new_start, 79);
         assert_eq!(head.new_duration, 1);
 
-        let tail = resolve_clip_trim(&seq, "2", "2", false, -1_000, 0, 0, false);
+        let tail = resolve_clip_trim(&seq, "2", "2", false, -1_000, 0, 0, false, false);
         assert_eq!(tail.new_start, 0);
         assert_eq!(tail.new_duration, 1);
     }
@@ -1059,7 +1087,7 @@ mod tests {
     fn trimmed_edge_snaps_to_playhead() {
         let seq = sample_sequence();
         // Clip "1" [10,110) on track "1": tail dragged to 148, playhead at 150.
-        let r = resolve_clip_trim(&seq, "1", "1", false, 38, 150, 5, false);
+        let r = resolve_clip_trim(&seq, "1", "1", false, 38, 150, 5, false, false);
         assert!(r.valid && r.has_snap);
         assert_eq!(r.new_duration, 140);
         assert_eq!(r.snap_line_tick, 150);
@@ -1073,7 +1101,7 @@ mod tests {
             track("1", TrackKind::Video, vec![clip_with_rooms("A", 0, 100, 0, 2)]),
             track("2", TrackKind::Video, vec![clip("B", 105, 50)]),
         ]);
-        let r = resolve_clip_trim(&seq, "1", "A", false, 4, 0, 5, false);
+        let r = resolve_clip_trim(&seq, "1", "A", false, 4, 0, 5, false, false);
         assert!(r.valid && !r.has_snap);
         assert_eq!(r.new_duration, 102);
     }
@@ -1099,7 +1127,7 @@ mod tests {
                 vec![linked(clip_with_rooms("A", 0, 100, 0, 5), "L")],
             ),
         ]);
-        let r = resolve_clip_trim(&seq, "1", "V", false, 50, 0, 0, true);
+        let r = resolve_clip_trim(&seq, "1", "V", false, 50, 0, 0, true, false);
         assert!(r.valid);
         assert_eq!(r.new_duration, 105);
         assert_eq!(r.ghosts.row_count(), 1);
@@ -1108,7 +1136,7 @@ mod tests {
 
         // Linkage off: the dragged edge only honors its own headroom, and
         // no partner ghosts are offered.
-        let off = resolve_clip_trim(&seq, "1", "V", false, 50, 0, 0, false);
+        let off = resolve_clip_trim(&seq, "1", "V", false, 50, 0, 0, false, false);
         assert_eq!(off.new_duration, 150);
         assert_eq!(off.ghosts.row_count(), 0);
     }
@@ -1125,7 +1153,7 @@ mod tests {
                 vec![clip("X", 0, 20), linked(clip("A", 30, 50), "L")],
             ),
         ]);
-        let r = resolve_clip_trim(&seq, "1", "V", true, -30, 0, 0, true);
+        let r = resolve_clip_trim(&seq, "1", "V", true, -30, 0, 0, true, false);
         assert!(r.valid);
         assert_eq!(r.new_start, 20);
         assert_eq!(r.new_duration, 60);
@@ -1136,14 +1164,51 @@ mod tests {
     #[test]
     fn unmoved_trim_is_noop() {
         let seq = sample_sequence();
-        let r = resolve_clip_trim(&seq, "1", "1", true, 0, 0, 0, false);
+        let r = resolve_clip_trim(&seq, "1", "1", true, 0, 0, 0, false, false);
         assert!(r.valid && r.is_noop);
     }
 
     #[test]
     fn unknown_trim_ids_resolve_invalid() {
         let seq = sample_sequence();
-        let r = resolve_clip_trim(&seq, "1", "404", true, 0, 0, 0, false);
+        let r = resolve_clip_trim(&seq, "1", "404", true, 0, 0, 0, false, false);
         assert!(!r.valid);
+    }
+
+    // --- main-track magnet (ripple trim resolver) ---------------------------
+
+    #[test]
+    fn magnet_tail_trim_extends_past_next_clip() {
+        let seq = sequence(vec![track(
+            "1",
+            TrackKind::Video,
+            vec![
+                clip_with_rooms("A", 0, 50, 0, 1_000_000),
+                clip("B", 50, 30),
+            ],
+        )]);
+        let free = resolve_clip_trim(&seq, "1", "A", false, 80, 0, 0, false, false);
+        assert_eq!(free.new_duration, 50);
+        // Ripple mode: the next clip no longer clamps the dragged edge —
+        // the full 80-tick drag lands (B shifts right on commit).
+        let magnet = resolve_clip_trim(&seq, "1", "A", false, 80, 0, 0, false, true);
+        assert_eq!(magnet.new_duration, 130);
+    }
+
+    #[test]
+    fn magnet_head_trim_extends_into_headroom_not_neighbor() {
+        let seq = sequence(vec![track(
+            "1",
+            TrackKind::Video,
+            vec![
+                clip("A", 0, 50),
+                clip_with_rooms("B", 50, 30, 100, 1_000_000),
+            ],
+        )]);
+        let free = resolve_clip_trim(&seq, "1", "B", true, -100, 0, 0, false, false);
+        assert_eq!(free.new_start, 50);
+        let magnet = resolve_clip_trim(&seq, "1", "B", true, -100, 0, 0, false, true);
+        assert_eq!(magnet.new_start, 0);
+        assert_eq!(magnet.new_duration, 80);
     }
 }

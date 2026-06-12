@@ -115,7 +115,7 @@ export global DragBackend {
 
     pure callback resolve-library-drop(Sequence /* sequence */, TrackKind /* lane-kind */, int    /* duration-ticks */, int    /* cursor-tick */, int    /* drop-row */, int    /* playhead-tick */, int    /* snap-threshold-ticks */, bool   /* main-magnet */, ) -> LibraryDropResolution;
 
-    pure callback resolve-clip-trim(Sequence /* sequence */, string /* track-id */, string /* clip-id */, bool   /* trim-head (left edge) */, int    /* dx-ticks */, int    /* playhead-tick */, int    /* snap-threshold-ticks */, bool   /* link-enabled */, ) -> ClipTrimResolution;
+    pure callback resolve-clip-trim(Sequence /* sequence */, string /* track-id */, string /* clip-id */, bool   /* trim-head (left edge) */, int    /* dx-ticks */, int    /* playhead-tick */, int    /* snap-threshold-ticks */, bool   /* link-enabled */, bool   /* main-magnet */, ) -> ClipTrimResolution;
 
     pure callback resolve-group-drag(Sequence /* sequence */, [string] /* selected clip ids */, string /* anchor track-id */, string /* anchor clip-id */, int    /* dx-ticks */, int    /* hover-row (under the anchor) */, int    /* playhead-tick */, int    /* snap-threshold-ticks */, ) -> GroupDragResolution;
 

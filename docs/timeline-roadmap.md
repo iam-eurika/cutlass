@@ -187,11 +187,15 @@ the magnet policy lives UI/worker-side.
       in post-close space; releasing on the clip's own slot is a no-op.
 - [x] Off state = freeform behavior, unchanged everywhere else.
 
-Deliberate gap: **trims don't ripple yet.** CapCut ripple-trims the main
-track (later clips follow the dragged edge); here a magnet-on trim can still
-leave/eat a gap. Needs a resolver mode (no neighbor clamp) plus a
-`TrimClip`+`ShiftClips` composition with order depending on grow vs shrink —
-tracked as the first item of future ripple work.
+Deliberate gap — closed by v1 M0: **trims ripple now.** With the magnet
+on, a trim touching the main lane composes `TrimClip` + `ShiftClips` per
+lane in one history group (order depends on grow vs shrink: open room
+before growing, trim before closing). The resolver gains the ripple mode
+(no neighbor clamp; source headroom still binds), leading-edge trims
+re-anchor at the old start, and linked members ripple on their own lanes
+so A/V pairs stay in sync. Remaining polish: the drag stretch preview
+shows the un-anchored extent (downstream doesn't shift live), and a
+leading-edge grow on the lane's first clip is still clamped at tick 0.
 
 ## Phase 8 — Clip content rendering ✅
 
@@ -220,12 +224,13 @@ them automatically (same reactivity pattern as the ruler).
       falls back to the lane label while empty).
 - [x] Clip badges: name + duration (`3.4s` / `M:SS`, computed rate-exactly
       in the projection) on a thin top scrim, hidden on sliver-thin clips;
-      the selection outline moved above the content tiles. Speed/volume
-      markers join when those land in the model.
+      the selection outline moved above the content tiles. The reserved
+      slot filled when the M1 fields landed: a retime chip (`2x` / `0.5x
+      R`) and an audio chip (struck-out speaker when muted, volume %, or
+      a fade ramp) join the duration in a right-aligned badge cluster.
 
-Deliberate gap: **no speed/volume badges yet** (no model fields). The drag
-floating copy and trim stretch preview stay flat color — content in those
-gestures is a polish item for later.
+Deliberate gap: the drag floating copy and trim stretch preview stay flat
+color — content in those gestures is a polish item for later.
 
 ## Phase 9 — Drag & viewport polish ✅
 

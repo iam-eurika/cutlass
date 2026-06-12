@@ -222,7 +222,8 @@ export component TimelinePanel inherits PanelBase {
         root.clip-trim-dx-ticks,
         TimelineStore.playhead-tick,
         root.snap-threshold-ticks,
-        TimelineStore.link-enabled);
+        TimelineStore.link-enabled,
+        TimelineStore.main-magnet-enabled);
 
     private property <bool> clip-trim-released: TimelineViewState.trim-released;
     changed clip-trim-released => {

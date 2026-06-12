@@ -984,7 +984,15 @@ fn main() -> Result<(), slint::PlatformError> {
     );
 
     app.global::<DragBackend>().on_resolve_clip_trim(
-        |sequence, track_id, clip_id, trim_head, dx_ticks, playhead_tick, snap_threshold_ticks, link_enabled| {
+        |sequence,
+         track_id,
+         clip_id,
+         trim_head,
+         dx_ticks,
+         playhead_tick,
+         snap_threshold_ticks,
+         link_enabled,
+         main_magnet| {
             snap::resolve_clip_trim(
                 &sequence,
                 track_id.as_str(),
@@ -994,6 +1002,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 playhead_tick,
                 snap_threshold_ticks,
                 link_enabled,
+                main_magnet,
             )
         },
     );

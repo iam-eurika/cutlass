@@ -823,6 +823,7 @@ fn worker_loop(
                 start_tick,
                 duration_ticks,
                 *linkage,
+                *main_magnet,
                 &ui,
             ),
             WorkerMsg::RemoveClips { clips } => {
@@ -2415,12 +2416,19 @@ fn ripple_move_in(
 /// With `linkage` on, the same edge delta applies to every clip in the
 /// trimmed clip's link group (the resolver intersected the clamps, so the
 /// partners' extents are valid too) — one history entry for the group.
+///
+/// With the main-track magnet on and the trim touching the main lane, the
+/// trim *ripples* instead of leaving/eating a gap: downstream clips follow
+/// the dragged edge (timeline roadmap Phase 7's deliberate gap). See
+/// [`commit_trims`]; still one history entry — a single undo restores the
+/// trim and every shifted clip.
 fn trim_clip_and_publish(
     engine: &mut Engine,
     clip: &str,
     start_tick: i64,
     duration_ticks: i64,
     linkage: bool,
+    main_magnet: bool,
     ui: &UiSink,
 ) {
     let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
@@ -2458,18 +2466,129 @@ fn trim_clip_and_publish(
         }
     }
 
+    match commit_trims(engine, &trims, main_magnet) {
+        Ok(ripple) => info!(%clip_id, start_tick, duration_ticks, linkage, ripple, "trimmed clip"),
+        Err(e) => error!(%clip_id, "trim clip failed: {e}"),
+    }
+    publish_projection(engine, ui);
+}
+
+/// Apply a resolved set of member trims as one history group.
+///
+/// With the main-track magnet on and any member sitting on the main lane
+/// (dragging the audio half of a linked pair must still keep the main lane
+/// gapless), every member's trim ripples on its own lane — linked pairs and
+/// their downstream neighbors all shift by the same duration delta, so
+/// cross-lane alignment survives. Otherwise members get plain `TrimClip`s.
+///
+/// A rejected step rolls the whole group back — no half-applied ripple.
+/// Returns whether the group rippled.
+fn commit_trims(
+    engine: &mut Engine,
+    trims: &[(ClipId, TimeRange)],
+    main_magnet: bool,
+) -> Result<bool, String> {
+    let main = main_video_track(engine);
+    let ripple = main_magnet
+        && main.is_some_and(|m| {
+            trims
+                .iter()
+                .any(|&(id, _)| engine.project().timeline().track_of(id) == Some(m))
+        });
+
     engine.begin_group();
-    for (id, timeline) in trims {
-        if let Err(e) = apply_edit(engine, EditCommand::TrimClip { clip: id, timeline }) {
-            error!(%id, "trim clip failed: {e}");
+    for &(id, timeline) in trims {
+        let result = if ripple {
+            apply_ripple_trim(engine, id, timeline)
+        } else {
+            apply_edit(engine, EditCommand::TrimClip { clip: id, timeline })
+        };
+        if let Err(e) = result {
             engine.rollback_group();
-            publish_projection(engine, ui);
-            return;
+            return Err(format!("clip {id}: {e}"));
         }
     }
     engine.commit_group();
-    info!(%clip_id, start_tick, duration_ticks, linkage, "trimmed clip");
-    publish_projection(engine, ui);
+    Ok(ripple)
+}
+
+/// One member's ripple trim: `TrimClip` + `ShiftClips` composed on the
+/// member's own lane, ordered so the engine's atomic validation accepts the
+/// intermediate state (open room before growing into it, trim before
+/// closing the gap behind a shrink).
+///
+/// Semantics (CapCut): the trimmed clip stays anchored at its old start and
+/// every downstream clip shifts by the duration delta — the lane neither
+/// leaves nor eats a gap.
+/// - Trailing edge: only the duration changes; downstream (clips starting at
+///   or after the old end) shifts by the delta.
+/// - Leading edge: the resolved extent moves the start — that start delta is
+///   what the engine derives the new source in-point from — and the shift
+///   then re-anchors the clip at its old start, carrying downstream along.
+///   A leading grow shifts everything from the old start right first, then
+///   trims anchored there, which yields the same negative start delta.
+///
+/// The caller wraps members in one history group and rolls back on error,
+/// so a rejected step never leaves a half-applied ripple.
+fn apply_ripple_trim(
+    engine: &mut Engine,
+    clip: ClipId,
+    timeline: TimeRange,
+) -> Result<(), String> {
+    let Some(old) = engine.project().clip(clip).map(|c| c.timeline) else {
+        return Err("clip is not on the timeline".into());
+    };
+    let Some(track) = engine.project().timeline().track_of(clip) else {
+        return Err("clip has no track".into());
+    };
+    let tl_rate = engine.project().timeline().frame_rate;
+    let delta_dur = timeline.duration.value - old.duration.value;
+    let trim = EditCommand::TrimClip { clip, timeline };
+
+    if timeline.start.value != old.start.value {
+        // Leading edge (the resolver anchors the end, so the start moved).
+        if delta_dur > 0 {
+            // Grow: open room first (the clip and everything after it move
+            // right), then trim anchored at the old start.
+            apply_edit(engine, EditCommand::ShiftClips {
+                track,
+                from: old.start,
+                delta: RationalTime::new(delta_dur, tl_rate),
+            })?;
+            apply_edit(engine, EditCommand::TrimClip {
+                clip,
+                timeline: TimeRange::at_rate(old.start.value, timeline.duration.value, tl_rate),
+            })
+        } else {
+            // Shrink: trim to the resolved extent (a gap opens at the old
+            // start), then slide the clip and downstream left into it.
+            apply_edit(engine, trim)?;
+            apply_edit(engine, EditCommand::ShiftClips {
+                track,
+                from: timeline.start,
+                delta: RationalTime::new(old.start.value - timeline.start.value, tl_rate),
+            })
+        }
+    } else if delta_dur > 0 {
+        // Trailing grow: push downstream right, then extend into the hole.
+        apply_edit(engine, EditCommand::ShiftClips {
+            track,
+            from: RationalTime::new(old.end_tick(), tl_rate),
+            delta: RationalTime::new(delta_dur, tl_rate),
+        })?;
+        apply_edit(engine, trim)
+    } else if delta_dur < 0 {
+        // Trailing shrink: pull the edge in, then close the gap behind it.
+        apply_edit(engine, trim)?;
+        apply_edit(engine, EditCommand::ShiftClips {
+            track,
+            from: RationalTime::new(old.end_tick(), tl_rate),
+            delta: RationalTime::new(delta_dur, tl_rate),
+        })
+    } else {
+        // No edge moved (defensive — the UI skips noop trims).
+        apply_edit(engine, trim)
+    }
 }
 
 /// Every clip sharing `clip`'s link group (including itself); just the clip
@@ -3813,5 +3932,366 @@ mod tests {
 
         assert!(keyframes_at(&t, 15).is_empty());
         assert_eq!(keyframes_at(&t, 30).len(), 1);
+    }
+
+    // --- magnet ripple trim (commit path) -----------------------------------
+
+    /// Engine over an empty project that carries one 1000-tick media entry
+    /// (no real file needed — nothing here decodes).
+    fn trim_test_engine() -> (tempfile::TempDir, Engine, MediaId) {
+        let r = Rational::FPS_24;
+        let mut project = Project::new("trim-fixture", r);
+        let media = project.add_media(cutlass_models::MediaSource::new(
+            "/tmp/trim-fixture.mp4",
+            1920,
+            1080,
+            r,
+            1000,
+            false,
+        ));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = EngineConfig {
+            cache_dir: dir.path().join("cache"),
+            cache_budget_bytes: 16 * 1024 * 1024,
+            ..EngineConfig::default()
+        };
+        let engine = Engine::with_project(config, project).expect("engine");
+        (dir, engine, media)
+    }
+
+    fn add_video_track(engine: &mut Engine, name: &str) -> TrackId {
+        match engine
+            .apply(Command::Edit(EditCommand::AddTrack {
+                kind: TrackKind::Video,
+                name: name.into(),
+                index: None,
+            }))
+            .expect("add track")
+        {
+            ApplyOutcome::Edited(EditOutcome::CreatedTrack(id)) => id,
+            other => panic!("expected CreatedTrack, got {other:?}"),
+        }
+    }
+
+    /// Media-backed clip at `[start, start+duration)`; the source window is
+    /// offset 100 ticks into the fixture media so both edges keep headroom.
+    fn add_media_clip(
+        engine: &mut Engine,
+        track: TrackId,
+        media: MediaId,
+        start: i64,
+        duration: i64,
+    ) -> ClipId {
+        match engine
+            .apply(Command::Edit(EditCommand::AddClip {
+                track,
+                media,
+                source: TimeRange::at_rate(100 + start, duration, Rational::FPS_24),
+                start: RationalTime::new(start, Rational::FPS_24),
+            }))
+            .expect("add clip")
+        {
+            ApplyOutcome::Edited(EditOutcome::Created(id)) => id,
+            other => panic!("expected Created, got {other:?}"),
+        }
+    }
+
+    fn clip_starts(engine: &Engine, clips: &[ClipId]) -> Vec<i64> {
+        clips
+            .iter()
+            .map(|id| engine.project().clip(*id).expect("clip").start().value)
+            .collect()
+    }
+
+    #[test]
+    fn ripple_tail_shrink_shifts_downstream_on_main_lane() {
+        let (_dir, mut engine, media) = trim_test_engine();
+        let track = add_video_track(&mut engine, "V1");
+        let a = add_media_clip(&mut engine, track, media, 0, 50);
+        let b = add_media_clip(&mut engine, track, media, 50, 30);
+        let c = add_media_clip(&mut engine, track, media, 80, 40);
+
+        commit_trims(
+            &mut engine,
+            &[(
+                b,
+                TimeRange::at_rate(50, 20, Rational::FPS_24),
+            )],
+            true,
+        )
+        .expect("ripple tail shrink");
+
+        assert_eq!(clip_starts(&engine, &[a, b, c]), [0, 50, 70]);
+        assert!(engine.undo());
+        assert_eq!(clip_starts(&engine, &[a, b, c]), [0, 50, 80]);
+    }
+
+    #[test]
+    fn ripple_tail_grow_opens_room_before_extending() {
+        let (_dir, mut engine, media) = trim_test_engine();
+        let track = add_video_track(&mut engine, "V1");
+        let a = add_media_clip(&mut engine, track, media, 0, 50);
+        let b = add_media_clip(&mut engine, track, media, 50, 30);
+
+        commit_trims(
+            &mut engine,
+            &[(
+                a,
+                TimeRange::at_rate(0, 60, Rational::FPS_24),
+            )],
+            true,
+        )
+        .expect("ripple tail grow");
+
+        assert_eq!(clip_starts(&engine, &[a, b]), [0, 60]);
+    }
+
+    #[test]
+    fn ripple_head_shrink_reanchors_at_old_start() {
+        let (_dir, mut engine, media) = trim_test_engine();
+        let track = add_video_track(&mut engine, "V1");
+        let a = add_media_clip(&mut engine, track, media, 0, 50);
+        let b = add_media_clip(&mut engine, track, media, 50, 30);
+
+        commit_trims(
+            &mut engine,
+            &[(
+                a,
+                TimeRange::at_rate(10, 40, Rational::FPS_24),
+            )],
+            true,
+        )
+        .expect("ripple head shrink");
+
+        assert_eq!(clip_starts(&engine, &[a, b]), [0, 40]);
+    }
+
+    #[test]
+    fn plain_trim_off_magnet_leaves_gap() {
+        let (_dir, mut engine, media) = trim_test_engine();
+        let track = add_video_track(&mut engine, "V1");
+        let a = add_media_clip(&mut engine, track, media, 0, 50);
+        let b = add_media_clip(&mut engine, track, media, 50, 30);
+        let c = add_media_clip(&mut engine, track, media, 80, 40);
+
+        commit_trims(
+            &mut engine,
+            &[(
+                b,
+                TimeRange::at_rate(50, 20, Rational::FPS_24),
+            )],
+            false,
+        )
+        .expect("plain trim");
+
+        assert_eq!(clip_starts(&engine, &[a, b, c]), [0, 50, 80]);
+    }
+
+    // --- magnet ripple trim: media-backed clips (source derivation, links,
+    // --- rollback) -----------------------------------------------------------
+
+    /// Main lane `V1` packed gapless — A [0,100) B [100,200) C [200,300) —
+    /// each clip cut from the middle of a 1000-tick media, so both edges
+    /// have plenty of source headroom: A source [100,200), B [300,400),
+    /// C [500,600).
+    fn ripple_fixture() -> (tempfile::TempDir, Engine, [ClipId; 3], TrackId) {
+        let r = Rational::FPS_24;
+        let mut project = Project::new("ripple-fixture", r);
+        let media = project.add_media(cutlass_models::MediaSource::new(
+            "/tmp/ripple-fixture.mp4",
+            1920,
+            1080,
+            r,
+            1000,
+            false,
+        ));
+        let track = project.add_track(TrackKind::Video, "V1");
+        let a = project
+            .add_clip(track, media, TimeRange::at_rate(100, 100, r), RationalTime::new(0, r))
+            .expect("clip A");
+        let b = project
+            .add_clip(track, media, TimeRange::at_rate(300, 100, r), RationalTime::new(100, r))
+            .expect("clip B");
+        let c = project
+            .add_clip(track, media, TimeRange::at_rate(500, 100, r), RationalTime::new(200, r))
+            .expect("clip C");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = EngineConfig {
+            cache_dir: dir.path().join("cache"),
+            cache_budget_bytes: 16 * 1024 * 1024,
+            ..EngineConfig::default()
+        };
+        let engine = Engine::with_project(config, project).expect("engine");
+        (dir, engine, [a, b, c], track)
+    }
+
+    fn extent(engine: &Engine, clip: ClipId) -> (i64, i64) {
+        let placed = engine.project().clip(clip).expect("clip exists").timeline;
+        (placed.start.value, placed.duration.value)
+    }
+
+    fn source_start(engine: &Engine, clip: ClipId) -> i64 {
+        engine
+            .project()
+            .clip(clip)
+            .expect("clip exists")
+            .source_range()
+            .expect("media clip has a source range")
+            .start
+            .value
+    }
+
+    fn tr24(start: i64, duration: i64) -> TimeRange {
+        TimeRange::at_rate(start, duration, Rational::FPS_24)
+    }
+
+    /// Leading-edge shrink: the resolved extent moves the start right (that
+    /// delta advances the source in-point), the commit re-anchors at the old
+    /// start, and downstream follows — the lane stays gapless.
+    #[test]
+    fn ripple_head_shrink_advances_source_and_stays_anchored() {
+        let (_dir, mut engine, [a, b, c], _track) = ripple_fixture();
+
+        let rippled = commit_trims(&mut engine, &[(b, tr24(120, 80))], true)
+            .expect("ripple head shrink");
+        assert!(rippled);
+
+        assert_eq!(extent(&engine, b), (100, 80));
+        assert_eq!(source_start(&engine, b), 320);
+        assert_eq!(extent(&engine, c), (180, 100));
+        assert_eq!(extent(&engine, a), (0, 100));
+
+        // One undo restores the trim and the shift together.
+        assert!(engine.undo());
+        assert_eq!(extent(&engine, b), (100, 100));
+        assert_eq!(source_start(&engine, b), 300);
+        assert_eq!(extent(&engine, c), (200, 100));
+    }
+
+    /// Leading-edge grow: earlier source is revealed (in-point retreats),
+    /// the clip stays anchored, downstream moves right by the delta.
+    #[test]
+    fn ripple_head_grow_reveals_earlier_source() {
+        let (_dir, mut engine, [a, b, c], _track) = ripple_fixture();
+
+        let rippled = commit_trims(&mut engine, &[(b, tr24(50, 150))], true)
+            .expect("ripple head grow");
+        assert!(rippled);
+
+        assert_eq!(extent(&engine, b), (100, 150));
+        assert_eq!(source_start(&engine, b), 250);
+        assert_eq!(extent(&engine, c), (250, 100));
+        assert_eq!(extent(&engine, a), (0, 100));
+    }
+
+    /// Trailing-edge trims keep the source in-point and move the out-point;
+    /// the shift only touches clips after the old end.
+    #[test]
+    fn ripple_tail_trims_keep_source_in_point() {
+        let (_dir, mut engine, [a, b, c], _track) = ripple_fixture();
+
+        commit_trims(&mut engine, &[(b, tr24(100, 140))], true).expect("ripple tail grow");
+        assert_eq!(extent(&engine, b), (100, 140));
+        assert_eq!(source_start(&engine, b), 300);
+        assert_eq!(extent(&engine, c), (240, 100));
+        assert_eq!(extent(&engine, a), (0, 100));
+    }
+
+    /// The last clip on the lane has nothing downstream — the ripple is a
+    /// plain trim (the shift selects an empty set and stays a no-op).
+    #[test]
+    fn ripple_trim_of_last_clip_has_no_downstream() {
+        let (_dir, mut engine, [a, b, c], _track) = ripple_fixture();
+
+        commit_trims(&mut engine, &[(c, tr24(200, 40))], true).expect("ripple last clip");
+        assert_eq!(extent(&engine, c), (200, 40));
+        assert_eq!(extent(&engine, a), (0, 100));
+        assert_eq!(extent(&engine, b), (100, 100));
+    }
+
+    /// The magnet only governs the main lane (bottom video track): an
+    /// overlay-lane trim stays plain even with the magnet on.
+    #[test]
+    fn overlay_lane_trim_does_not_ripple() {
+        let (_dir, mut engine, [a, _, _], _track) = ripple_fixture();
+        let media = engine.project().clip(a).expect("clip").media().expect("media");
+        let overlay = add_video_track(&mut engine, "V2");
+        let d = add_media_clip(&mut engine, overlay, media, 0, 100);
+        let e = add_media_clip(&mut engine, overlay, media, 100, 100);
+
+        let rippled = commit_trims(&mut engine, &[(d, tr24(0, 60))], true)
+            .expect("overlay trim");
+        assert!(!rippled);
+        assert_eq!(extent(&engine, d), (0, 60));
+        assert_eq!(extent(&engine, e), (100, 100));
+    }
+
+    /// A trim the engine rejects (source bounds) rolls the whole group back:
+    /// the shift that already opened room is undone, history stays untouched.
+    #[test]
+    fn rejected_ripple_rolls_back_whole_group() {
+        let (_dir, mut engine, [a, b, c], _track) = ripple_fixture();
+
+        // B's source is [300,400) of a 1000-tick media: growing the tail by
+        // 700 ticks would need source up to 1100 — rejected after the shift.
+        let result = commit_trims(&mut engine, &[(b, tr24(100, 800))], true);
+        assert!(result.is_err());
+
+        assert_eq!(extent(&engine, a), (0, 100));
+        assert_eq!(extent(&engine, b), (100, 100));
+        assert_eq!(extent(&engine, c), (200, 100));
+        assert!(!engine.can_undo(), "rolled-back group must leave no history");
+    }
+
+    /// Linked-pair trim (video on the main lane, audio partner elsewhere):
+    /// both members ripple on their own lanes, so the pair stays in sync and
+    /// downstream clips on both lanes shift by the same delta.
+    #[test]
+    fn linked_pair_ripples_on_both_lanes() {
+        let (_dir, mut engine, [_, b, c], _track) = ripple_fixture();
+        let r = Rational::FPS_24;
+        let audio = match engine
+            .apply(Command::Edit(EditCommand::AddTrack {
+                kind: TrackKind::Audio,
+                name: "A1".into(),
+                index: None,
+            }))
+            .expect("add audio track")
+        {
+            ApplyOutcome::Edited(EditOutcome::CreatedTrack(id)) => id,
+            other => panic!("expected CreatedTrack, got {other:?}"),
+        };
+        let media = engine.project().clip(b).expect("clip B").media().expect("media");
+        let add_audio_clip = |engine: &mut Engine, source: TimeRange, start: i64| {
+            match engine
+                .apply(Command::Edit(EditCommand::AddClip {
+                    track: audio,
+                    media,
+                    source,
+                    start: RationalTime::new(start, r),
+                }))
+                .expect("add audio clip")
+            {
+                ApplyOutcome::Edited(EditOutcome::Created(id)) => id,
+                other => panic!("expected Created, got {other:?}"),
+            }
+        };
+        // P mirrors B; Q sits downstream on the audio lane, aligned with C.
+        let p = add_audio_clip(&mut engine, tr24(300, 100), 100);
+        let q = add_audio_clip(&mut engine, tr24(500, 100), 200);
+
+        // Head-shrink both members by 20 (the worker's trim path hands the
+        // same edge delta to every link-group member).
+        commit_trims(&mut engine, &[(b, tr24(120, 80)), (p, tr24(120, 80))], true)
+            .expect("linked ripple trim");
+
+        assert_eq!(extent(&engine, b), (100, 80));
+        assert_eq!(extent(&engine, p), (100, 80));
+        assert_eq!(source_start(&engine, b), 320);
+        assert_eq!(source_start(&engine, p), 320);
+        // Downstream on both lanes shifted left by 20, staying aligned.
+        assert_eq!(extent(&engine, c), (180, 100));
+        assert_eq!(extent(&engine, q), (180, 100));
     }
 }

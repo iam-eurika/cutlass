@@ -334,8 +334,14 @@ Goal: nothing in the shipped app lies to users or loses their work.
       tracked debt in `timeline-roadmap.md`). Every projection republish
       prunes the selection against the new clip set (vanished ids drop,
       the primary re-anchors), so agent edits are covered too.
-- [ ] **Ripple trim on the magnet track** (`TrimClip` + `ShiftClips`
-      composition; the deliberate gap from timeline Phase 7).
+- [x] **Ripple trim on the magnet track** (`TrimClip` + `ShiftClips`
+      composition; the deliberate gap from timeline Phase 7). Magnet-on
+      trims touching the main lane ripple: the trimmed clip re-anchors at
+      its old start and downstream clips shift by the duration delta, so
+      the lane stays gapless. The resolver drops the neighbor clamp in
+      ripple mode (grows push instead of clamping); linked members ripple
+      on their own lanes so A/V pairs and their downstream stay aligned.
+      One history group — a single undo restores the trim and every shift.
 - [x] **Group copy/duplicate + unlink gesture** (timeline Phase 10 gaps).
       Copy/duplicate act on the whole selection as one block (lanes +
       relative placement preserved, copied link groups re-link, one
