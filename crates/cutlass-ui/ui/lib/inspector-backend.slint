@@ -110,6 +110,13 @@ export global InspectorBackend {
         flip-v: bool,
     );
 
+    // Fit/fill clip helper (M1 canvas settings): re-place the clip centered
+    // at aspect-fit scale (fill: false) or at the cover scale that fills the
+    // canvas (fill: true). The worker computes the scale from engine state
+    // (media dims × crop vs canvas) and commits one undoable
+    // SetClipTransform that keyframes at `tick` on animated clips.
+    callback fit-clip(clip-id: string, fill: bool, tick: int);
+
     // Replace a text clip's content and/or styling in one undoable edit. The
     // inspector always sends the full current style with the single changed
     // field, so the engine writes one coherent `Generator::Text`.

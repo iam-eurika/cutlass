@@ -1,5 +1,5 @@
 import { Slider, LineEdit } from "std-widgets.slint";
-import { CutlassText } from "../../components/index.slint";
+import { CutlassText, SubtleButton } from "../../components/index.slint";
 import { AppStore, EditorStore, TimelineStore, PreviewStore } from "../../store/index.slint";
 import { Clip } from "../../models/index.slint";
 import {
@@ -239,11 +239,11 @@ export component TransformInspector inherits VerticalLayout {
 
     HorizontalLayout {
         spacing: AppStore.theme.metrics.spacing.sm;
-        alignment: LayoutAlignment.start;
 
         CutlassText {
             text: "Transform";
             style: AppStore.theme.typography.heading-sm;
+            vertical-alignment: TextVerticalAlignment.center;
         }
 
         if root.badge-visible: Rectangle {
@@ -275,6 +275,28 @@ export component TransformInspector inherits VerticalLayout {
                     foreground: AppStore.theme.accent.primary;
                     vertical-alignment: TextVerticalAlignment.center;
                 }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        // Fit/fill helpers (M1 canvas settings): center the clip at
+        // aspect-fit scale, or at the cover scale that fills the canvas.
+        // One undoable transform commit each; the worker computes the
+        // cover scale from media dims × crop vs the canvas.
+        SubtleButton {
+            label: "Fit";
+            clicked => {
+                InspectorBackend.fit-clip(model.id, false, TimelineStore.playhead-tick);
+            }
+        }
+
+        SubtleButton {
+            label: "Fill";
+            clicked => {
+                InspectorBackend.fit-clip(model.id, true, TimelineStore.playhead-tick);
             }
         }
     }

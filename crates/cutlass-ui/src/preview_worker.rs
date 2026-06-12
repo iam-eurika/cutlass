@@ -132,6 +132,15 @@ enum WorkerMsg {
         aspect_index: i32,
         background: [u8; 3],
     },
+    /// Fit/fill clip helper (M1 canvas settings): re-place the clip centered
+    /// at aspect-fit scale (`fill: false`) or the cover scale that fills the
+    /// canvas (`fill: true`). Rides `SetClipTransform`, so it composes with
+    /// keyframes at `tick` like any transform gesture and undoes in one step.
+    FitClip {
+        clip: String,
+        fill: bool,
+        tick: i64,
+    },
     /// Live drag override (preview roadmap Phase 3): render `tick` with
     /// `clip`'s transform replaced — session state on the engine, no history
     /// entry, no projection republish. Bursts coalesce to the newest value
@@ -516,6 +525,10 @@ impl WorkerHandle {
             aspect_index,
             background,
         });
+    }
+
+    pub fn fit_clip(&self, clip: String, fill: bool, tick: i64) {
+        let _ = self.tx.send(WorkerMsg::FitClip { clip, fill, tick });
     }
 
     pub fn transform_override(&self, clip: String, transform: ClipTransform, tick: i64) {
@@ -922,6 +935,10 @@ fn worker_loop(
                 set_transform_and_publish(engine, &clip, transform, at, &ui);
                 render_frame(engine, tl_rate, &preview_weak, tick);
             }
+            WorkerMsg::FitClip { clip, fill, tick } => {
+                fit_clip_and_publish(engine, &clip, fill, tick, tl_rate, &ui);
+                render_frame(engine, tl_rate, &preview_weak, tick);
+            }
             WorkerMsg::SetParamKeyframe {
                 clip,
                 param,
@@ -1212,6 +1229,74 @@ fn apply_generator_override(engine: &mut Engine, clip: &str, generator: Generato
         Some(id) => engine.set_generator_override(Some((id, generator))),
         None => error!(clip, "generator override ignored: unparsable clip id"),
     }
+}
+
+/// Fit/fill helper (M1 canvas settings): compute the centered fit (scale
+/// 1.0) or cover transform for a clip and commit it through the regular
+/// `SetClipTransform` path, so it keyframes at the playhead on animated
+/// clips and undoes in one step like any gesture.
+fn fit_clip_and_publish(
+    engine: &mut Engine,
+    clip: &str,
+    fill: bool,
+    tick: i64,
+    tl_rate: Rational,
+    ui: &UiSink,
+) {
+    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+        error!(clip, "fit/fill ignored: unparsable clip id");
+        return;
+    };
+    let Some(transform) = fit_clip_transform(engine, clip_id, fill, tick) else {
+        error!(%clip_id, "fit/fill ignored: unknown clip or degenerate content");
+        return;
+    };
+    let at = RationalTime::new(tick, tl_rate);
+    set_transform_and_publish(engine, clip, transform, at, ui);
+}
+
+/// The transform that centers a clip at aspect-fit (scale 1.0 by the
+/// placement convention) or at the cover scale that fills the canvas — the
+/// crop's kept region is what aspect-fits, so it is also what must cover.
+/// Rotation and opacity keep their playhead-sampled values; position resets
+/// to center (CapCut fit/fill semantics).
+fn fit_clip_transform(
+    engine: &Engine,
+    clip_id: ClipId,
+    fill: bool,
+    tick: i64,
+) -> Option<ClipTransform> {
+    let project = engine.project();
+    let clip = project.clip(clip_id)?;
+    let (canvas_w, canvas_h) = cutlass_engine::composite_canvas_size(project);
+    let (content_w, content_h) = match clip.media() {
+        Some(media_id) => {
+            let media = project.media(media_id)?;
+            (media.width, media.height)
+        }
+        // Generators raster at canvas size: fit and fill are both 1.0.
+        None => (canvas_w, canvas_h),
+    };
+    let (w, h) = (
+        content_w as f32 * clip.crop.w,
+        content_h as f32 * clip.crop.h,
+    );
+    if w <= 0.0 || h <= 0.0 || canvas_w == 0 || canvas_h == 0 {
+        return None;
+    }
+    let (cw, ch) = (canvas_w as f32, canvas_h as f32);
+    let fit = (cw / w).min(ch / h);
+    let cover = (cw / w).max(ch / h);
+    let scale = if fill { cover / fit } else { 1.0 };
+    let sampled = clip
+        .transform
+        .sample_at(clip.animation_tick_f(tick as f64));
+    Some(ClipTransform {
+        position: [0.0, 0.0],
+        scale,
+        rotation: sampled.rotation,
+        opacity: sampled.opacity,
+    })
 }
 
 /// Commit a transform gesture as one undoable `SetClipTransform`, keyframing

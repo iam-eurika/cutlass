@@ -1375,6 +1375,12 @@ fn main() -> Result<(), slint::PlatformError> {
         },
     );
 
+    let fit_clip_handle = preview_worker.handle();
+    app.global::<InspectorBackend>()
+        .on_fit_clip(move |clip_id, fill, tick| {
+            fit_clip_handle.fit_clip(clip_id.to_string(), fill, i64::from(tick));
+        });
+
     let set_text_handle = preview_worker.handle();
     app.global::<InspectorBackend>()
         .on_set_text_generator(move |_track_id, clip_id, content, style| {
