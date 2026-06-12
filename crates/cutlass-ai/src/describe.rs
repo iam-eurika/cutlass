@@ -75,6 +75,15 @@ pub struct ClipSummary {
     /// Playing backwards (set_clip_speed); absent when forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reversed: Option<bool>,
+    /// Audio gain multiplier (set_clip_audio); absent when 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    /// Fade-in seconds (set_clip_audio); absent when 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_in: Option<f64>,
+    /// Fade-out seconds (set_clip_audio); absent when 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_out: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -207,6 +216,9 @@ pub fn summarize(project: &Project) -> ProjectSummary {
                         f64::from(clip.speed.num) / f64::from(clip.speed.den)
                     }),
                     reversed: clip.reversed.then_some(true),
+                    volume: (clip.volume != 1.0).then(|| f64::from(clip.volume)),
+                    fade_in: (clip.fade_in > 0).then(|| seconds(clip.fade_in, rate)),
+                    fade_out: (clip.fade_out > 0).then(|| seconds(clip.fade_out, rate)),
                 })
                 .collect(),
         })

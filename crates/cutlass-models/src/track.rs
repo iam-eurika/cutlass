@@ -267,6 +267,9 @@ mod tests {
             transform: ClipTransform::IDENTITY.into(),
             speed: crate::time::Rational::new(1, 1),
             reversed: false,
+            volume: 1.0,
+            fade_in: 0,
+            fade_out: 0,
         };
         let displaced = track.insert_clip(replacement).unwrap();
         assert_eq!(displaced.timeline, tr(0, 10));
@@ -328,6 +331,9 @@ mod tests {
             transform: ClipTransform::IDENTITY.into(),
             speed: crate::time::Rational::new(1, 1),
             reversed: false,
+            volume: 1.0,
+            fade_in: 0,
+            fade_out: 0,
         };
         let b = Clip {
             id: ClipId::from_raw(1),
@@ -337,6 +343,9 @@ mod tests {
             transform: ClipTransform::IDENTITY.into(),
             speed: crate::time::Rational::new(1, 1),
             reversed: false,
+            volume: 1.0,
+            fade_in: 0,
+            fade_out: 0,
         };
         track.insert_clip(a);
         track.insert_clip(b);

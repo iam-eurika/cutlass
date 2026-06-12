@@ -158,6 +158,83 @@ pub fn validate(command: &WireCommand, project: &Project) -> Result<Command, Rej
                 reversed: args.reversed.unwrap_or(clip.reversed),
             }
         }
+        WireCommand::SetClipAudio(args) => {
+            let clip = clip_ref(project, args.clip)?;
+            if clip.is_generated() {
+                return Err(Rejection::new(format!(
+                    "clip {} is a generated clip; set_clip_audio only works on media \
+                     clips (footage with a source file)",
+                    args.clip
+                )));
+            }
+            // Audio rides audio-lane clips: a video-lane target would be a
+            // silent no-op, so steer the model to the clip that sounds.
+            let timeline = project.timeline();
+            let on_audio_lane = timeline
+                .track_of(clip.id)
+                .and_then(|id| timeline.track(id))
+                .is_some_and(|t| t.kind == TrackKind::Audio);
+            if !on_audio_lane {
+                let companion = clip.link.and_then(|link| {
+                    timeline
+                        .tracks_ordered()
+                        .filter(|t| t.kind == TrackKind::Audio)
+                        .flat_map(|t| t.clips())
+                        .find(|c| c.link == Some(link))
+                        .map(|c| c.id.raw())
+                });
+                return Err(Rejection::new(match companion {
+                    Some(id) => format!(
+                        "clip {} is not on an audio lane; its audio plays through \
+                         linked clip {id} — call set_clip_audio on clip {id} instead",
+                        args.clip
+                    ),
+                    None => format!(
+                        "clip {} is not on an audio lane and has no linked audio \
+                         companion; there is nothing audible to adjust",
+                        args.clip
+                    ),
+                }));
+            }
+            // Omitted fields keep the clip's current mix.
+            let volume = match args.volume {
+                Some(volume) => {
+                    if !volume.is_finite() || !(0.0..=10.0).contains(&volume) {
+                        return Err(Rejection::new(format!(
+                            "volume must be between 0 (mute) and 10 (got {volume})"
+                        )));
+                    }
+                    volume as f32
+                }
+                None => clip.volume,
+            };
+            let rate = timeline_rate(project);
+            let clip_ticks = clip.timeline.duration.value;
+            let fade = |current: i64,
+                        requested: Option<f64>,
+                        what: &str|
+             -> Result<RationalTime, Rejection> {
+                let Some(seconds) = requested else {
+                    return Ok(RationalTime::new(current, rate));
+                };
+                require_non_negative(seconds, what)?;
+                let time = timeline_time(project, seconds, what)?;
+                if time.value > clip_ticks {
+                    return Err(Rejection::new(format!(
+                        "{what} of {seconds}s is longer than clip {} ({:.3}s)",
+                        args.clip,
+                        ticks_to_seconds(clip_ticks, rate),
+                    )));
+                }
+                Ok(time)
+            };
+            EditCommand::SetClipAudio {
+                clip: clip.id,
+                volume,
+                fade_in: fade(clip.fade_in, args.fade_in, "fade_in")?,
+                fade_out: fade(clip.fade_out, args.fade_out, "fade_out")?,
+            }
+        }
         WireCommand::SetParamConstant(args) => {
             let clip = clip_ref(project, args.clip)?;
             let value = param_value(args.param, args.value, args.position)?;
@@ -1005,6 +1082,112 @@ mod tests {
                 clip: title,
                 speed: Some(2.0),
                 reversed: None,
+            }),
+        );
+        assert!(msg.contains("generated clip"), "{msg}");
+    }
+
+    #[test]
+    fn clip_audio_lowers_volume_and_fades() {
+        let (mut project, media, _, _, video_clip, title) = fixture();
+        // An audio lane carrying the linked companion of the video clip.
+        let lane = project.add_track(TrackKind::Audio, "A1");
+        let audio_clip = project
+            .add_clip(
+                lane,
+                cutlass_models::MediaId::from_raw(media),
+                TimeRange::at_rate(0, 240, R24),
+                RationalTime::new(0, R24),
+            )
+            .unwrap();
+        let link = cutlass_models::LinkId::next();
+        for id in [ClipId::from_raw(video_clip), audio_clip] {
+            project.timeline_mut().clip_mut(id).unwrap().link = Some(link);
+        }
+
+        // Volume + fades lower to ticks at the timeline rate (1s = 24).
+        let edit = lower(
+            &project,
+            WireCommand::SetClipAudio(wire::SetClipAudio {
+                clip: audio_clip.raw(),
+                volume: Some(0.5),
+                fade_in: Some(1.0),
+                fade_out: Some(0.5),
+            }),
+        );
+        assert_eq!(
+            edit,
+            EditCommand::SetClipAudio {
+                clip: audio_clip,
+                volume: 0.5,
+                fade_in: RationalTime::new(24, R24),
+                fade_out: RationalTime::new(12, R24),
+            }
+        );
+
+        // Omitted fields keep the clip's current mix.
+        let edit = lower(
+            &project,
+            WireCommand::SetClipAudio(wire::SetClipAudio {
+                clip: audio_clip.raw(),
+                volume: Some(0.0),
+                fade_in: None,
+                fade_out: None,
+            }),
+        );
+        assert_eq!(
+            edit,
+            EditCommand::SetClipAudio {
+                clip: audio_clip,
+                volume: 0.0,
+                fade_in: RationalTime::new(0, R24),
+                fade_out: RationalTime::new(0, R24),
+            }
+        );
+
+        // A video-lane target is steered to its linked audio companion.
+        let msg = reject(
+            &project,
+            WireCommand::SetClipAudio(wire::SetClipAudio {
+                clip: video_clip,
+                volume: Some(0.5),
+                fade_in: None,
+                fade_out: None,
+            }),
+        );
+        assert!(
+            msg.contains(&format!("linked clip {}", audio_clip.raw())),
+            "{msg}"
+        );
+
+        // Out-of-range volume, over-long fades, generated clips: rejected.
+        let msg = reject(
+            &project,
+            WireCommand::SetClipAudio(wire::SetClipAudio {
+                clip: audio_clip.raw(),
+                volume: Some(11.0),
+                fade_in: None,
+                fade_out: None,
+            }),
+        );
+        assert!(msg.contains("between 0 (mute) and 10"), "{msg}");
+        let msg = reject(
+            &project,
+            WireCommand::SetClipAudio(wire::SetClipAudio {
+                clip: audio_clip.raw(),
+                volume: None,
+                fade_in: Some(60.0),
+                fade_out: None,
+            }),
+        );
+        assert!(msg.contains("longer than clip"), "{msg}");
+        let msg = reject(
+            &project,
+            WireCommand::SetClipAudio(wire::SetClipAudio {
+                clip: title,
+                volume: Some(0.5),
+                fade_in: None,
+                fade_out: None,
             }),
         );
         assert!(msg.contains("generated clip"), "{msg}");

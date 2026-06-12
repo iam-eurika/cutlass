@@ -105,6 +105,16 @@ enum WorkerMsg {
         den: i32,
         reversed: bool,
     },
+    /// Set a clip's audio mix (CapCut volume + fades, M1): gain multiplier
+    /// plus fade durations in seconds (converted to ticks at the timeline
+    /// rate worker-side). Routed to the clip's audio-lane link partners when
+    /// a video half is targeted; one undoable history entry.
+    SetClipAudio {
+        clip: String,
+        volume: f32,
+        fade_in_s: f32,
+        fade_out_s: f32,
+    },
     /// Live drag override (preview roadmap Phase 3): render `tick` with
     /// `clip`'s transform replaced — session state on the engine, no history
     /// entry, no projection republish. Bursts coalesce to the newest value
@@ -408,6 +418,15 @@ impl WorkerHandle {
             num,
             den,
             reversed,
+        });
+    }
+
+    pub fn set_clip_audio(&self, clip: String, volume: f32, fade_in_s: f32, fade_out_s: f32) {
+        let _ = self.tx.send(WorkerMsg::SetClipAudio {
+            clip,
+            volume,
+            fade_in_s,
+            fade_out_s,
         });
     }
 
@@ -757,6 +776,12 @@ fn worker_loop(
                 den,
                 reversed,
             } => set_clip_speed_and_publish(engine, &clip, num, den, reversed, *linkage, &ui),
+            WorkerMsg::SetClipAudio {
+                clip,
+                volume,
+                fade_in_s,
+                fade_out_s,
+            } => set_clip_audio_and_publish(engine, &clip, volume, fade_in_s, fade_out_s, &ui),
             WorkerMsg::ClearTransformOverride { tick } => {
                 engine.set_transform_override(None);
                 render_frame(engine, tl_rate, &preview_weak, tick);
@@ -1761,6 +1786,72 @@ fn set_clip_speed_and_publish(
     }
     engine.commit_group();
     info!(%clip_id, num, den, reversed, clips = targets.len(), "retimed clip");
+    publish_projection(engine, ui);
+}
+
+/// Set a clip's audio mix (CapCut volume + fades, M1). Audio rides
+/// audio-lane clips, so a video half of a linked pair routes to its
+/// audio-lane link partners — the inspector edit lands where the sound is.
+/// One history group; the republish re-snapshots the playback mixer, so the
+/// change is audible within a block.
+fn set_clip_audio_and_publish(
+    engine: &mut Engine,
+    clip: &str,
+    volume: f32,
+    fade_in_s: f32,
+    fade_out_s: f32,
+    ui: &UiSink,
+) {
+    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+        error!(clip, "set-clip-audio ignored: unparsable clip id");
+        return;
+    };
+    let on_audio_lane = |engine: &Engine, id: ClipId| {
+        let timeline = engine.project().timeline();
+        timeline
+            .track_of(id)
+            .and_then(|t| timeline.track(t))
+            .is_some_and(|t| t.kind == TrackKind::Audio)
+    };
+    let targets: Vec<ClipId> = if on_audio_lane(engine, clip_id) {
+        vec![clip_id]
+    } else {
+        // Always follow linkage here: volume on the video half alone is
+        // inaudible, so the edit must land on the audio companions.
+        link_group_ids(engine, clip_id)
+            .into_iter()
+            .filter(|id| on_audio_lane(engine, *id))
+            .collect()
+    };
+    if targets.is_empty() {
+        warn!(%clip_id, "set-clip-audio ignored: no audio-lane clip to adjust");
+        return;
+    }
+
+    let tl_rate = engine.project().timeline().frame_rate;
+    let to_ticks = |seconds: f32| {
+        let ticks =
+            (f64::from(seconds) * f64::from(tl_rate.num) / f64::from(tl_rate.den)).round();
+        RationalTime::new(ticks.max(0.0) as i64, tl_rate)
+    };
+    let (fade_in, fade_out) = (to_ticks(fade_in_s), to_ticks(fade_out_s));
+
+    engine.begin_group();
+    for target in &targets {
+        if let Err(e) = engine.apply(Command::Edit(EditCommand::SetClipAudio {
+            clip: *target,
+            volume,
+            fade_in,
+            fade_out,
+        })) {
+            error!(clip_id = %target, "set clip audio failed: {e}");
+            engine.rollback_group();
+            publish_projection(engine, ui);
+            return;
+        }
+    }
+    engine.commit_group();
+    info!(%clip_id, volume, fade_in_s, fade_out_s, clips = targets.len(), "set clip audio");
     publish_projection(engine, ui);
 }
 
@@ -3146,8 +3237,9 @@ fn audio_snapshot(engine: &Engine) -> AudioSnapshot {
         for clip in track.clips_ordered() {
             // Retimed clips (speed ≠ 1× or reversed) play silent until
             // varispeed lands (M8) — the export mixer mutes them the same
-            // way, so what you hear is what you ship.
-            if clip.is_retimed() {
+            // way, so what you hear is what you ship. Zero-volume clips
+            // contribute nothing either way.
+            if clip.is_retimed() || clip.volume <= 0.0 {
                 continue;
             }
             let Some(media_id) = clip.media() else {
@@ -3168,6 +3260,9 @@ fn audio_snapshot(engine: &Engine) -> AudioSnapshot {
                 end_tick: clip.timeline.end_tick(),
                 source_start: source.start.value,
                 source_rate: (source.start.rate.num, source.start.rate.den),
+                volume: clip.volume,
+                fade_in_ticks: clip.fade_in,
+                fade_out_ticks: clip.fade_out,
             });
         }
     }

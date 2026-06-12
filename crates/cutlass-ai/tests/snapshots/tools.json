@@ -670,6 +670,51 @@
       }
     },
     {
+      "description": "Set an audio-lane clip's volume (0.0 mutes, 1.0 unchanged, 2.0 doubles) and/or fade-in/fade-out durations in seconds. Omitted fields keep their current value. For a video clip, target its linked audio companion clip.",
+      "name": "set_clip_audio",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Set a clip's audio mix: a constant volume gain plus linear fade-in/out\nramps. Volume 1.0 is unchanged, 0.0 mutes, 2.0 doubles (max 10). Fades\nare seconds of ramp at the clip's head/tail. Audio lives on audio-lane\nclips; for a video clip, target its linked audio companion instead.",
+        "properties": {
+          "clip": {
+            "description": "The audio-lane media clip to adjust.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fade_in": {
+            "description": "Fade-in duration in seconds from the clip's start (0 removes the\nfade). Omit to keep the current fade-in.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "fade_out": {
+            "description": "Fade-out duration in seconds ending at the clip's end (0 removes the\nfade). Omit to keep the current fade-out.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "volume": {
+            "description": "Gain multiplier: 0.0 mutes, 1.0 keeps the recorded level, up to a\nmaximum of 10. Omit to keep the current volume.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "clip"
+        ],
+        "title": "SetClipAudio",
+        "type": "object"
+      }
+    },
+    {
       "description": "Split a clip at a timeline position (seconds) into two abutting clips.",
       "name": "split_clip",
       "parameters": {
@@ -1003,5 +1048,5 @@
       }
     }
   ],
-  "version": 3
+  "version": 4
 }

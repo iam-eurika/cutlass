@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 
 use cutlass_decoder::{AUDIO_CHANNELS, AudioReader};
-use cutlass_models::{Project, TrackKind};
+use cutlass_models::{Project, TrackKind, audio_gain_at};
 
 use crate::error::EngineError;
 
@@ -30,6 +30,11 @@ struct Span {
     end: i64,
     /// Source position (in output sample frames) of the span's first sample.
     source_start: i64,
+    /// Clip gain (volume, M1): `1.0` ⇔ unchanged.
+    volume: f32,
+    /// Fade ramp lengths in output sample frames, anchored at the span edges.
+    fade_in: i64,
+    fade_out: i64,
     /// Opened on first overlap, dropped with the mixer.
     reader: Option<AudioReader>,
     /// Source ran out before the span's out-point: the rest pads as silence.
@@ -58,7 +63,8 @@ impl ExportAudioMixer {
             for clip in track.clips_ordered() {
                 // Retimed clips (speed ≠ 1× or reversed) are silent until
                 // varispeed lands (M8) — same as CapCut's pre-pitch days.
-                if clip.is_retimed() {
+                // Zero-volume clips contribute nothing either way.
+                if clip.is_retimed() || clip.volume <= 0.0 {
                     continue;
                 }
                 let Some(media_id) = clip.media() else {
@@ -82,6 +88,9 @@ impl ExportAudioMixer {
                         source.start.rate.num,
                         source.start.rate.den,
                     ),
+                    volume: clip.volume,
+                    fade_in: ticks_to_samples(clip.fade_in, fps.num, fps.den),
+                    fade_out: ticks_to_samples(clip.fade_out, fps.num, fps.den),
                     reader: None,
                     exhausted: false,
                 });
@@ -146,11 +155,36 @@ impl ExportAudioMixer {
             }
 
             let offset = ((s - pos + lead) as usize) * AUDIO_CHANNELS;
-            for (dst, src) in out[offset..]
-                .iter_mut()
-                .zip(&self.scratch[..got * AUDIO_CHANNELS])
-            {
-                *dst += *src;
+            let flat = span.fade_in == 0 && span.fade_out == 0;
+            if flat && span.volume == 1.0 {
+                for (dst, src) in out[offset..]
+                    .iter_mut()
+                    .zip(&self.scratch[..got * AUDIO_CHANNELS])
+                {
+                    *dst += *src;
+                }
+            } else {
+                // Volume + fade ramps (M1): gain per sample frame so fades
+                // are smooth at sample resolution, not block-stepped.
+                let span_len = span.end - span.start;
+                let first = s + lead - span.start;
+                for frame in 0..got {
+                    let gain = if flat {
+                        span.volume
+                    } else {
+                        audio_gain_at(
+                            first + frame as i64,
+                            span_len,
+                            span.volume,
+                            span.fade_in,
+                            span.fade_out,
+                        )
+                    };
+                    for ch in 0..AUDIO_CHANNELS {
+                        out[offset + frame * AUDIO_CHANNELS + ch] +=
+                            self.scratch[frame * AUDIO_CHANNELS + ch] * gain;
+                    }
+                }
             }
         }
 
@@ -246,6 +280,58 @@ mod tests {
             ExportAudioMixer::for_project(&project).is_none(),
             "a 2× clip contributes no audio"
         );
+    }
+
+    #[test]
+    fn zero_volume_clips_are_skipped_and_fades_resolve_to_samples() {
+        let mut project = Project::new("test", Rational::FPS_24);
+        let media = project.add_media(MediaSource::new(
+            "/tmp/clip.mp4",
+            640,
+            480,
+            Rational::FPS_24,
+            100,
+            true,
+        ));
+        let lane = project.add_track(TrackKind::Audio, "A1");
+        let clip = project
+            .add_clip(
+                lane,
+                media,
+                TimeRange::at_rate(0, 48, Rational::FPS_24),
+                RationalTime::new(0, Rational::FPS_24),
+            )
+            .unwrap();
+
+        // Muted by volume: no span at all.
+        project
+            .set_clip_audio(
+                clip,
+                0.0,
+                RationalTime::new(0, Rational::FPS_24),
+                RationalTime::new(0, Rational::FPS_24),
+            )
+            .unwrap();
+        assert!(
+            ExportAudioMixer::for_project(&project).is_none(),
+            "a muted clip contributes no audio"
+        );
+
+        // Audible with fades: span carries the gain shape in sample frames
+        // (24 ticks at 24fps = 1s = 48000 sample frames).
+        project
+            .set_clip_audio(
+                clip,
+                0.5,
+                RationalTime::new(24, Rational::FPS_24),
+                RationalTime::new(12, Rational::FPS_24),
+            )
+            .unwrap();
+        let mixer = ExportAudioMixer::for_project(&project).expect("audible span");
+        let span = &mixer.spans[0];
+        assert_eq!(span.volume, 0.5);
+        assert_eq!(span.fade_in, 48_000);
+        assert_eq!(span.fade_out, 24_000);
     }
 
     #[test]

@@ -103,6 +103,17 @@ pub enum EditCommand {
         speed: Rational,
         reversed: bool,
     },
+    /// Set a media clip's audio mix (CapCut volume + fades, M1): constant
+    /// gain `volume` (`0` mutes, `1` = unchanged, up to 10× boost) plus
+    /// linear fade-in/out durations at the timeline rate. Audible for clips
+    /// on audio lanes; rejected on generated clips and on fades longer than
+    /// the clip. The inverse restores the previous clip state.
+    SetClipAudio {
+        clip: ClipId,
+        volume: f32,
+        fade_in: RationalTime,
+        fade_out: RationalTime,
+    },
     /// Split a clip at a timeline position into two abutting clips.
     SplitClip { clip: ClipId, at: RationalTime },
     /// Re-place / trim a clip to occupy `timeline`.

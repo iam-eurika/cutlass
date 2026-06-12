@@ -52,6 +52,11 @@ pub struct AudioSpan {
     /// Source-in value at `source_rate` (the media's native rate).
     pub source_start: i64,
     pub source_rate: (i32, i32),
+    /// Clip gain (volume, M1): `1.0` ⇔ unchanged.
+    pub volume: f32,
+    /// Fade ramp lengths, sequence ticks at the snapshot's fps.
+    pub fade_in_ticks: i64,
+    pub fade_out_ticks: i64,
 }
 
 /// Every unmuted audio clip on the timeline + the sequence rate.
@@ -339,6 +344,9 @@ struct ResolvedSpan {
     start_frame: i64,
     end_frame: i64,
     source_start_frame: i64,
+    volume: f32,
+    fade_in_frames: i64,
+    fade_out_frames: i64,
 }
 
 fn mixer_loop(
@@ -489,11 +497,37 @@ fn mix_block(
             Err(_) => continue,
         };
         let offset = ((s - pos) as usize + lead) * AUDIO_CHANNELS;
-        for (i, sample) in slots[lead * AUDIO_CHANNELS..(lead + got) * AUDIO_CHANNELS]
-            .iter()
-            .enumerate()
-        {
-            out[offset + i] += sample;
+        let flat = span.fade_in_frames == 0 && span.fade_out_frames == 0;
+        if flat && span.volume == 1.0 {
+            for (i, sample) in slots[lead * AUDIO_CHANNELS..(lead + got) * AUDIO_CHANNELS]
+                .iter()
+                .enumerate()
+            {
+                out[offset + i] += sample;
+            }
+        } else {
+            // Volume + fade ramps (M1): gain per sample frame so fades are
+            // smooth at sample resolution, not block-stepped.
+            let span_len = span.end_frame - span.start_frame;
+            let first = s + lead as i64 - span.start_frame;
+            for frame in 0..got {
+                let gain = if flat {
+                    span.volume
+                } else {
+                    cutlass_models::audio_gain_at(
+                        first + frame as i64,
+                        span_len,
+                        span.volume,
+                        span.fade_in_frames,
+                        span.fade_out_frames,
+                    )
+                };
+                let src = (lead + frame) * AUDIO_CHANNELS;
+                let dst = offset + frame * AUDIO_CHANNELS;
+                for ch in 0..AUDIO_CHANNELS {
+                    out[dst + ch] += slots[src + ch] * gain;
+                }
+            }
         }
     }
 
@@ -511,6 +545,9 @@ fn resolve_spans(snapshot: &AudioSnapshot, sample_rate: u32) -> Vec<ResolvedSpan
             start_frame: ticks_to_frames(span.start_tick, snapshot.fps, sample_rate),
             end_frame: ticks_to_frames(span.end_tick, snapshot.fps, sample_rate),
             source_start_frame: ticks_to_frames(span.source_start, span.source_rate, sample_rate),
+            volume: span.volume,
+            fade_in_frames: ticks_to_frames(span.fade_in_ticks, snapshot.fps, sample_rate),
+            fade_out_frames: ticks_to_frames(span.fade_out_ticks, snapshot.fps, sample_rate),
         })
         .collect()
 }
@@ -626,6 +663,9 @@ mod tests {
                 end_tick: 48,
                 source_start: 0,
                 source_rate: (24, 1),
+                volume: 1.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
             }],
         };
         let spans = resolve_spans(&snapshot, RATE);
@@ -670,6 +710,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mix_block_applies_volume_and_fade_gain() {
+        let Some(path) = audio_asset() else {
+            return;
+        };
+        const RATE: u32 = 48_000;
+        let span_at = |volume: f32, fade_in_ticks: i64| AudioSnapshot {
+            fps: (24, 1),
+            spans: vec![AudioSpan {
+                path: path.clone(),
+                start_tick: 0,
+                end_tick: 48,
+                source_start: 0,
+                source_rate: (24, 1),
+                volume,
+                fade_in_ticks,
+                fade_out_ticks: 0,
+            }],
+        };
+        // Mix the same block at full and half volume: every sample halves.
+        let mut readers = HashMap::new();
+        let mut failed = HashMap::new();
+        let pos = 8 * BLOCK_FRAMES as i64;
+        let mut full = vec![0f32; BLOCK_FRAMES * AUDIO_CHANNELS];
+        let spans = resolve_spans(&span_at(1.0, 0), RATE);
+        mix_block(&spans, &mut readers, &mut failed, pos, RATE, &mut full);
+        assert!(full.iter().any(|&s| s != 0.0), "fixture block is audible");
+
+        let mut half = vec![0f32; BLOCK_FRAMES * AUDIO_CHANNELS];
+        let spans = resolve_spans(&span_at(0.5, 0), RATE);
+        mix_block(&spans, &mut readers, &mut failed, pos, RATE, &mut half);
+        for (f, h) in full.iter().zip(&half) {
+            assert!((f * 0.5 - h).abs() < 1e-4, "half volume halves samples");
+        }
+
+        // A fade-in covering the whole clip silences its very first sample
+        // and leaves the block quieter than the flat mix.
+        let mut faded = vec![0f32; BLOCK_FRAMES * AUDIO_CHANNELS];
+        let spans = resolve_spans(&span_at(1.0, 48), RATE);
+        mix_block(&spans, &mut readers, &mut failed, 0, RATE, &mut faded);
+        assert_eq!(faded[0], 0.0, "fade-in starts from silence");
+        let mut flat = vec![0f32; BLOCK_FRAMES * AUDIO_CHANNELS];
+        let spans = resolve_spans(&span_at(1.0, 0), RATE);
+        mix_block(&spans, &mut readers, &mut failed, 0, RATE, &mut flat);
+        let energy = |b: &[f32]| b.iter().map(|s| f64::from(s * s)).sum::<f64>();
+        if energy(&flat) > 0.0 {
+            assert!(energy(&faded) < energy(&flat), "ramp lowers block energy");
+        }
+    }
+
     /// End-to-end mixer thread, no device: snapshot + play produce blocks
     /// whose epoch tags and silence/audio boundaries match the timeline;
     /// a re-anchored play (seek) switches epochs so stale blocks are
@@ -696,6 +786,9 @@ mod tests {
                     end_tick: 48,
                     source_start: 0,
                     source_rate: (24, 1),
+                    volume: 1.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
                 }],
             }))
             .unwrap();

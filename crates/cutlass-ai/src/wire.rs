@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 /// 2: M2 keyframe commands (`set_param_keyframe`, `remove_param_keyframe`,
 ///    `set_param_constant`).
 /// 3: M1 clip speed (`set_clip_speed`).
-pub const TOOL_SCHEMA_VERSION: u32 = 3;
+/// 4: M1 clip audio mix (`set_clip_audio`).
+pub const TOOL_SCHEMA_VERSION: u32 = 4;
 
 /// Track lane categories the agent may create or target.
 ///
@@ -238,6 +239,28 @@ pub struct SetClipSpeed {
     pub reversed: Option<bool>,
 }
 
+/// Set a clip's audio mix: a constant volume gain plus linear fade-in/out
+/// ramps. Volume 1.0 is unchanged, 0.0 mutes, 2.0 doubles (max 10). Fades
+/// are seconds of ramp at the clip's head/tail. Audio lives on audio-lane
+/// clips; for a video clip, target its linked audio companion instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SetClipAudio {
+    /// The audio-lane media clip to adjust.
+    pub clip: u64,
+    /// Gain multiplier: 0.0 mutes, 1.0 keeps the recorded level, up to a
+    /// maximum of 10. Omit to keep the current volume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    /// Fade-in duration in seconds from the clip's start (0 removes the
+    /// fade). Omit to keep the current fade-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_in: Option<f64>,
+    /// Fade-out duration in seconds ending at the clip's end (0 removes the
+    /// fade). Omit to keep the current fade-out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_out: Option<f64>,
+}
+
 /// Split a clip at a timeline position into two abutting clips.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SplitClip {
@@ -361,6 +384,7 @@ pub enum WireCommand {
     RemoveParamKeyframe(RemoveParamKeyframe),
     SetParamConstant(SetParamConstant),
     SetClipSpeed(SetClipSpeed),
+    SetClipAudio(SetClipAudio),
     SplitClip(SplitClip),
     TrimClip(TrimClip),
     MoveClip(MoveClip),
@@ -409,6 +433,7 @@ impl WireCommand {
             WireCommand::RemoveParamKeyframe(a) => clip(&mut a.clip),
             WireCommand::SetParamConstant(a) => clip(&mut a.clip),
             WireCommand::SetClipSpeed(a) => clip(&mut a.clip),
+            WireCommand::SetClipAudio(a) => clip(&mut a.clip),
             WireCommand::SplitClip(a) => clip(&mut a.clip),
             WireCommand::TrimClip(a) => clip(&mut a.clip),
             WireCommand::MoveClip(a) => {
@@ -519,6 +544,8 @@ tools! {
         "Set a clip property to a fixed value and remove all its keyframes (stops its animation).";
     "set_clip_speed" => SetClipSpeed(SetClipSpeed),
         "Change a media clip's playback speed (2.0 = double speed, 0.5 = slow motion) and/or play it in reverse. The clip's timeline length re-derives from the speed; its audio is muted while retimed. Not valid for generated clips.";
+    "set_clip_audio" => SetClipAudio(SetClipAudio),
+        "Set an audio-lane clip's volume (0.0 mutes, 1.0 unchanged, 2.0 doubles) and/or fade-in/fade-out durations in seconds. Omitted fields keep their current value. For a video clip, target its linked audio companion clip.";
     "split_clip" => SplitClip(SplitClip),
         "Split a clip at a timeline position (seconds) into two abutting clips.";
     "trim_clip" => TrimClip(TrimClip),
@@ -646,7 +673,7 @@ mod tests {
     #[test]
     fn tool_specs_cover_every_command_with_object_schemas() {
         let specs = tool_specs();
-        assert_eq!(specs.len(), 21);
+        assert_eq!(specs.len(), 22);
         for spec in &specs {
             assert!(!spec.description.is_empty(), "{} missing description", spec.name);
             assert_eq!(

@@ -663,7 +663,26 @@ pub struct Clip {
     /// backward). Media clips only; absent from saves while false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub reversed: bool,
+    /// Audio gain multiplier (CapCut volume, M1): `0.0` mutes, `1.0` is
+    /// unchanged, up to [`MAX_CLIP_VOLUME`]× boost. Read by both audio
+    /// mixers for clips on audio lanes; meaningless elsewhere. Constant for
+    /// now — envelopes ride the M8 `Param` migration. `1.0` (and absent
+    /// from saves) when never touched, so old files load unchanged.
+    #[serde(default = "unit_volume", skip_serializing_if = "is_unit_volume")]
+    pub volume: f32,
+    /// Fade-in duration in timeline ticks from the clip's start: a linear
+    /// gain ramp 0 → `volume`. First-class field like CapCut, not keyframe
+    /// sugar. Absent from saves while 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fade_in: i64,
+    /// Fade-out duration in timeline ticks ending at the clip's end: a
+    /// linear gain ramp `volume` → 0. Absent from saves while 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fade_out: i64,
 }
+
+/// Upper bound for [`Clip::volume`] (CapCut's 1000% ceiling).
+pub const MAX_CLIP_VOLUME: f32 = 10.0;
 
 fn unit_speed() -> Rational {
     Rational::new(1, 1)
@@ -671,6 +690,39 @@ fn unit_speed() -> Rational {
 
 fn is_unit_speed(speed: &Rational) -> bool {
     speed.num == speed.den
+}
+
+fn unit_volume() -> f32 {
+    1.0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_unit_volume(volume: &f32) -> bool {
+    *volume == 1.0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(ticks: &i64) -> bool {
+    *ticks == 0
+}
+
+/// Audio gain at `pos` within a span of `len` (clip-relative, any unit —
+/// ticks or sample frames — as long as all arguments share it): `volume`
+/// shaped by the linear fade ramps. Fades anchor at the span edges, so a
+/// fade longer than a trimmed span just ramps part-way. Both audio mixers
+/// evaluate this per sample frame; keep it branch-light.
+pub fn audio_gain_at(pos: i64, len: i64, volume: f32, fade_in: i64, fade_out: i64) -> f32 {
+    let mut gain = volume;
+    if fade_in > 0 && pos < fade_in {
+        gain *= pos.max(0) as f32 / fade_in as f32;
+    }
+    if fade_out > 0 {
+        let remain = len - pos;
+        if remain < fade_out {
+            gain *= remain.max(0) as f32 / fade_out as f32;
+        }
+    }
+    gain
 }
 
 // `&bool` is the signature `skip_serializing_if` requires.
@@ -690,6 +742,9 @@ impl Clip {
             transform: AnimatedTransform::identity(),
             speed: unit_speed(),
             reversed: false,
+            volume: unit_volume(),
+            fade_in: 0,
+            fade_out: 0,
         }
     }
 
@@ -703,7 +758,16 @@ impl Clip {
             transform: AnimatedTransform::identity(),
             speed: unit_speed(),
             reversed: false,
+            volume: unit_volume(),
+            fade_in: 0,
+            fade_out: 0,
         }
+    }
+
+    /// True iff the clip's audio mix differs from the default (full volume,
+    /// no fades) — drives the inspector reset state and timeline badges.
+    pub fn has_custom_audio(&self) -> bool {
+        !is_unit_volume(&self.volume) || self.fade_in > 0 || self.fade_out > 0
     }
 
     /// True iff the clip plays at anything but forward 1× — the audio
@@ -1113,6 +1177,62 @@ mod tests {
         let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(loaded.speed, Rational::new(2, 1));
         assert!(loaded.reversed);
+    }
+
+    // --- audio mix: volume + fades (M1) --------------------------------------
+
+    #[test]
+    fn default_audio_serializes_without_fields() {
+        let clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 10, R24));
+        assert!(!clip.has_custom_audio());
+        let value = serde_json::to_value(&clip).expect("serialize");
+        let map = value.as_object().expect("clip serializes to a map");
+        assert!(!map.contains_key("volume"), "unit volume must stay absent");
+        assert!(!map.contains_key("fade_in"), "zero fade must stay absent");
+        assert!(!map.contains_key("fade_out"), "zero fade must stay absent");
+
+        // And a pre-volume save loads with the defaults.
+        let loaded: Clip = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(loaded.volume, 1.0);
+        assert_eq!((loaded.fade_in, loaded.fade_out), (0, 0));
+    }
+
+    #[test]
+    fn custom_audio_roundtrips_through_serde() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 48, R24), tr(0, 48, R24));
+        clip.volume = 0.5;
+        clip.fade_in = 12;
+        clip.fade_out = 24;
+        assert!(clip.has_custom_audio());
+        let json = serde_json::to_string(&clip).expect("serialize");
+        let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(loaded.volume, 0.5);
+        assert_eq!((loaded.fade_in, loaded.fade_out), (12, 24));
+    }
+
+    #[test]
+    fn audio_gain_ramps_linearly_at_both_edges() {
+        // No fades: flat volume everywhere.
+        assert_eq!(audio_gain_at(0, 100, 0.8, 0, 0), 0.8);
+        assert_eq!(audio_gain_at(99, 100, 0.8, 0, 0), 0.8);
+
+        // Fade-in over the first 10: silence at 0, half at 5, full at 10.
+        assert_eq!(audio_gain_at(0, 100, 1.0, 10, 0), 0.0);
+        assert_eq!(audio_gain_at(5, 100, 1.0, 10, 0), 0.5);
+        assert_eq!(audio_gain_at(10, 100, 1.0, 10, 0), 1.0);
+
+        // Fade-out over the last 10: full until 90, half at 95, ~0 at the end.
+        assert_eq!(audio_gain_at(90, 100, 1.0, 0, 10), 1.0);
+        assert_eq!(audio_gain_at(95, 100, 1.0, 0, 10), 0.5);
+        assert!(audio_gain_at(99, 100, 1.0, 0, 10) <= 0.11);
+
+        // Ramps scale by the volume and overlapping fades multiply.
+        assert_eq!(audio_gain_at(5, 100, 2.0, 10, 0), 1.0);
+        assert_eq!(audio_gain_at(5, 10, 1.0, 10, 10), 0.25);
+
+        // Out-of-span positions never go negative.
+        assert_eq!(audio_gain_at(-3, 100, 1.0, 10, 0), 0.0);
+        assert_eq!(audio_gain_at(105, 100, 1.0, 0, 10), 0.0);
     }
 
     // --- transform ----------------------------------------------------------

@@ -114,6 +114,15 @@ fn dispatch_edit(
             let inverse = edit::set_speed::set_speed(ctx, clip, speed, reversed)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
         }
+        EditCommand::SetClipAudio {
+            clip,
+            volume,
+            fade_in,
+            fade_out,
+        } => {
+            let inverse = edit::set_audio::set_audio(ctx, clip, volume, fade_in, fade_out)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
         EditCommand::SplitClip { clip, at } => {
             let (id, inverse) = edit::split_clip::execute(ctx, clip, at)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Created(id)), Some(inverse)))

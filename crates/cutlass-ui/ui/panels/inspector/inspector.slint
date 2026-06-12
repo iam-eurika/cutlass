@@ -3,6 +3,7 @@ import {
     PanelHeader,
     CutlassScrollView,
     CutlassDropdown,
+    CutlassSlider,
     CutlassText,
 } from "../../components/index.slint";
 import { AppState } from "../../state.slint";
@@ -223,6 +224,167 @@ component SpeedInspector inherits VerticalLayout {
     }
 }
 
+// One audio-mix row: label, slider, live readout. The value only moves on
+// commit (slider release ⇒ one history entry); the readout tracks the cap
+// during the drag. Double-click the label to reset.
+component AudioSliderRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in property <float> step: 1;
+    in property <string> suffix;
+    in property <float> reset-value: 0;
+    // Readout precision: 0 ⇒ whole numbers (percent), 1 ⇒ tenths (seconds).
+    in property <int> decimals: 0;
+
+    callback commit(value: float);
+
+    function format(v: float) -> string {
+        return root.decimals == 0
+            ? Math.round(v) + ""
+            : Math.round(v * 10) / 10 + "";
+    }
+
+    spacing: AppStore.theme.metrics.spacing.md;
+    height: 28px;
+    vertical-stretch: 0;
+
+    changed value => {
+        sl.value = clamp(root.value, root.minimum, root.maximum);
+        readout.text = root.format(root.value);
+    }
+
+    TouchArea {
+        width: 64px;
+        height: 28px;
+        vertical-stretch: 0;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            AppState.refocus-shortcuts();
+        }
+        double-clicked => {
+            root.commit(root.reset-value);
+        }
+
+        CutlassText {
+            width: 100%;
+            height: 100%;
+            text: root.label;
+            style: AppStore.theme.typography.label;
+            foreground: AppStore.theme.text.secondary;
+            vertical-alignment: TextVerticalAlignment.center;
+            overflow: TextOverflow.elide;
+        }
+    }
+
+    sl := CutlassSlider {
+        horizontal-stretch: 1;
+        height: 28px;
+        vertical-stretch: 0;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        step: root.step;
+        value: clamp(root.value, root.minimum, root.maximum);
+
+        changed(v) => {
+            // `root.value` only moves on commit; drive the readout off the
+            // live slider value so it doesn't lag the cap.
+            readout.text = root.format(v);
+        }
+
+        released(v) => {
+            root.commit(v);
+            AppState.refocus-shortcuts();
+        }
+    }
+
+    readout := CutlassText {
+        width: 44px;
+        height: 28px;
+        vertical-stretch: 0;
+        text: root.format(root.value);
+        style: AppStore.theme.typography.label;
+        foreground: AppStore.theme.text.primary;
+        horizontal-alignment: TextHorizontalAlignment.right;
+        vertical-alignment: TextVerticalAlignment.center;
+    }
+
+    CutlassText {
+        width: 16px;
+        height: 28px;
+        vertical-stretch: 0;
+        text: root.suffix;
+        style: AppStore.theme.typography.label;
+        foreground: AppStore.theme.text.muted;
+        vertical-alignment: TextVerticalAlignment.center;
+    }
+}
+
+// Volume + fades for audio-lane clips (CapCut audio mix, M1). Constant
+// gain for now — envelopes ride M8. Each commit is one undoable edit; the
+// projection republish re-snapshots the playback mixer, so the change is
+// audible within a buffer block.
+component AudioMixInspector inherits VerticalLayout {
+    in property <Clip> model;
+
+    // Clip length in seconds bounds the fade sliders (the engine rejects
+    // fades longer than the clip). Rates are exact rationals; the float is
+    // only a slider bound.
+    private property <float> duration-s: root.model.source-range.duration.rate.num > 0
+        ? root.model.source-range.duration.value * root.model.source-range.duration.rate.den
+            / root.model.source-range.duration.rate.num
+        : 0;
+    private property <float> fade-max: min(10.0, root.duration-s);
+
+    spacing: AppStore.theme.metrics.spacing.sm;
+
+    function commit(volume: float, fade-in: float, fade-out: float) {
+        InspectorBackend.set-clip-audio(root.model.id, volume, fade-in, fade-out);
+    }
+
+    CutlassText {
+        text: "Audio";
+        style: AppStore.theme.typography.heading-sm;
+        foreground: AppStore.theme.text.primary;
+    }
+
+    AudioSliderRow {
+        label: "Volume";
+        value: root.model.volume * 100;
+        maximum: 200;
+        suffix: "%";
+        reset-value: 100;
+        commit(v) => {
+            root.commit(v / 100, root.model.fade-in-s, root.model.fade-out-s);
+        }
+    }
+
+    AudioSliderRow {
+        label: "Fade in";
+        value: root.model.fade-in-s;
+        maximum: root.fade-max;
+        step: 0.1;
+        decimals: 1;
+        suffix: "s";
+        commit(v) => {
+            root.commit(root.model.volume, v, root.model.fade-out-s);
+        }
+    }
+
+    AudioSliderRow {
+        label: "Fade out";
+        value: root.model.fade-out-s;
+        maximum: root.fade-max;
+        step: 0.1;
+        decimals: 1;
+        suffix: "s";
+        commit(v) => {
+            root.commit(root.model.volume, root.model.fade-in-s, v);
+        }
+    }
+}
+
 component VisualClipInspector inherits VerticalLayout {
     in property <Clip> model;
 
@@ -286,6 +448,12 @@ component AudioClipInspector inherits VerticalLayout {
                 font-size: AppStore.theme.typography.heading-sm.size;
                 font-weight: AppStore.theme.typography.heading-sm.weight;
                 color: AppStore.theme.text.primary;
+            }
+
+            // Volume + fades (M1): the audio-lane clip is where sound
+            // lives, so the mix controls sit here.
+            if root.model.media-id != "": AudioMixInspector {
+                model: root.model;
             }
 
             // Same retime control as visual clips — the engine retimes the

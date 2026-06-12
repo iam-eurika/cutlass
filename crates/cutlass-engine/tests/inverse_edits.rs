@@ -610,6 +610,69 @@ fn set_clip_speed_undo_redo_roundtrip() {
 }
 
 #[test]
+fn set_clip_audio_undo_redo_roundtrip() {
+    let Some(path) = small_video_asset() else {
+        return;
+    };
+    let (_dir, mut engine) = temp_engine();
+    let media_id = import_asset(&mut engine, &path);
+    let track = common::add_track(&mut engine, TrackKind::Audio, "A1");
+    let clip_id = created(
+        engine
+            .apply(Command::Edit(EditCommand::AddClip {
+                track,
+                media: media_id,
+                source: tr(0, 48),
+                start: rt(0),
+            }))
+            .expect("add"),
+    );
+
+    engine
+        .apply(Command::Edit(EditCommand::SetClipAudio {
+            clip: clip_id,
+            volume: 0.5,
+            fade_in: rt(12),
+            fade_out: rt(24),
+        }))
+        .expect("set audio");
+    let clip = |engine: &cutlass_engine::Engine| engine.project().clip(clip_id).unwrap().clone();
+    assert_eq!(clip(&engine).volume, 0.5);
+    assert_eq!((clip(&engine).fade_in, clip(&engine).fade_out), (12, 24));
+
+    // One undo restores volume and both fades.
+    assert!(engine.undo());
+    let restored = clip(&engine);
+    assert_eq!(restored.volume, 1.0);
+    assert_eq!((restored.fade_in, restored.fade_out), (0, 0));
+    assert!(!restored.has_custom_audio());
+
+    assert!(engine.redo());
+    assert!(clip(&engine).has_custom_audio());
+    assert_eq!(clip(&engine).volume, 0.5);
+}
+
+#[test]
+fn set_clip_audio_rejects_generated_clips_and_long_fades() {
+    let (_dir, mut engine) = temp_engine();
+    let clip_id = text_clip(&mut engine);
+    let before = engine.project().clip(clip_id).unwrap().clone();
+
+    assert!(
+        engine
+            .apply(Command::Edit(EditCommand::SetClipAudio {
+                clip: clip_id,
+                volume: 0.5,
+                fade_in: rt(0),
+                fade_out: rt(0),
+            }))
+            .is_err()
+    );
+    // The rejection left the clip untouched.
+    assert_eq!(engine.project().clip(clip_id).unwrap(), &before);
+}
+
+#[test]
 fn set_clip_speed_rejects_generated_clips() {
     let (_dir, mut engine) = temp_engine();
     let clip_id = text_clip(&mut engine);

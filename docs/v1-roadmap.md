@@ -347,9 +347,15 @@ Goal: the everyday CapCut edit vocabulary, minus animation.
       duration math, badges (`2x R`), inspector preset dropdown + reverse
       toggle, filmstrip stretch, `set_clip_speed` agent tool.
       Audio of retimed clips mutes until M8 varispeed.
-- [ ] **Clip volume + fade in/out fields** on the model + inspector +
-      export mixer + playback mixer (constant volume now; envelopes in
-      M8). Fade = first-class fields like CapCut, not keyframe sugar.
+- [x] **Clip volume + fade in/out fields**: `volume` (0–10×) +
+      `fade_in`/`fade_out` ticks on clips, sample-accurate linear ramps in
+      *both* mixers (`audio_gain_at`, shared), `SetClipAudio` command with
+      full-clip-restore inverse, inspector Audio section (volume slider +
+      fade sliders on audio-lane clips), splits keep volume and partition
+      fades CapCut-style, `set_clip_audio` agent tool (schema v4, steers
+      video-lane targets to the linked audio companion). Constant volume
+      now; envelopes ride M8. Fade = first-class fields like CapCut, not
+      keyframe sugar.
 - [ ] **Crop** (normalized rect on `ClipTransform`) + **flip H/V** —
       compositor samples the sub-rect; preview gets crop handles mode.
 - [ ] **Canvas settings**: project resolution/aspect presets (16:9, 9:16,

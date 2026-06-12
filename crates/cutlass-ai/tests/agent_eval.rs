@@ -645,6 +645,72 @@ fn delete_every_clip_on_the_music_track() {
 }
 
 #[test]
+fn lower_music_volume_with_fades() {
+    // Fixture with an audio lane holding one music clip.
+    let mut project = Project::new("eval-volume", R24);
+    let media = project.add_media(MediaSource::new(
+        "/tmp/music.mp3",
+        0,
+        0,
+        R24,
+        120 * 24,
+        true,
+    ));
+    project.add_track(TrackKind::Video, "V1");
+    let music = project.add_track(TrackKind::Audio, "Music");
+    let clip = project
+        .add_clip(
+            music,
+            media,
+            TimeRange::at_rate(0, 240, R24),
+            RationalTime::new(0, R24),
+        )
+        .unwrap()
+        .raw();
+    let mut host = EngineHost::new(project);
+
+    let provider = ScriptedProvider::new(vec![
+        tool_turn(vec![(
+            "call_1",
+            "set_clip_audio",
+            serde_json::json!({
+                "clip": clip, "volume": 0.5, "fade_in": 1.0, "fade_out": 2.0,
+            }),
+        )]),
+        text_turn("Lowered the music to 50% with fades."),
+    ]);
+
+    let (outcome, _) = run(
+        &provider,
+        &mut host,
+        &EditorContext::default(),
+        "lower the music to half volume and fade it in and out",
+        &AgentConfig::default(),
+    );
+
+    assert_eq!(outcome.status, PromptStatus::Completed);
+    assert_eq!(outcome.actions.len(), 1);
+    assert_eq!(
+        outcome.actions[0].description,
+        format!("set clip {clip} volume 50%, fade in 1.00s, fade out 2.00s")
+    );
+
+    let clip_id = cutlass_models::ClipId::from_raw(clip);
+    let c = host.engine.project().clip(clip_id).unwrap();
+    assert_eq!(c.volume, 0.5);
+    assert_eq!((c.fade_in, c.fade_out), (24, 48));
+    // The summary the next prompt would see carries the new mix.
+    let summary = summarize(host.engine.project());
+    let summarized = &summary.tracks.iter().find(|t| t.name == "Music").unwrap().clips[0];
+    assert_eq!(summarized.volume, Some(0.5));
+    assert_eq!(summarized.fade_in, Some(1.0));
+
+    // One undo restores the default mix.
+    assert!(host.engine.undo());
+    assert!(!host.engine.project().clip(clip_id).unwrap().has_custom_audio());
+}
+
+#[test]
 fn fade_in_with_opacity_keyframes() {
     let (mut host, _, _, clip) = fixture();
     let provider = ScriptedProvider::new(vec![

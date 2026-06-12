@@ -203,6 +203,10 @@ fn clip_to_slint(
         speed: speed_factor(clip.speed),
         reversed: clip.reversed,
         speed_label: speed_label(clip).into(),
+        volume: clip.volume,
+        fade_in_s: time_to_seconds(EngineTime::new(clip.fade_in, clip.timeline.start.rate)) as f32,
+        fade_out_s: time_to_seconds(EngineTime::new(clip.fade_out, clip.timeline.start.rate))
+            as f32,
         text_content: text_content.into(),
         text_style: clip_text_style(clip),
         generator_kind: generator_kind.into(),

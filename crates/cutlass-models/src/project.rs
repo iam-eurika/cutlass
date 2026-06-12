@@ -431,6 +431,10 @@ impl Project {
                 // The retiming rides along on both halves.
                 right.speed = clip.speed;
                 right.reversed = clip.reversed;
+                // Audio mix splits CapCut-style: volume on both halves, the
+                // fade-in stays with the head, the fade-out with the tail.
+                right.volume = clip.volume;
+                right.fade_out = clip.fade_out;
                 (Some(left_source), right)
             }
             ClipSource::Generated(generator) => (None, Clip::generated(generator, right_tl)),
@@ -447,6 +451,8 @@ impl Project {
                 .clip_mut(clip_id)
                 .expect("clip existence checked above");
             left.timeline = left_tl;
+            // The tail's fade-out moved to the right half.
+            left.fade_out = 0;
             if let (Some(src), ClipSource::Media { source, .. }) =
                 (new_left_source, &mut left.content)
             {
@@ -582,6 +588,59 @@ impl Project {
         clip.speed = speed;
         clip.reversed = reversed;
         clip.timeline = new_timeline;
+        Ok(())
+    }
+
+    /// Set a media clip's audio mix (CapCut volume + fades, M1): constant
+    /// gain `volume` (`0` mutes, `1` unchanged, up to
+    /// [`crate::MAX_CLIP_VOLUME`]× boost) plus linear fade-in/out durations
+    /// at the timeline rate. Rejected on generated clips (nothing to hear),
+    /// out-of-range volume, negative fades, and fades longer than the clip.
+    pub fn set_clip_audio(
+        &mut self,
+        clip_id: ClipId,
+        volume: f32,
+        fade_in: RationalTime,
+        fade_out: RationalTime,
+    ) -> Result<(), ModelError> {
+        if !volume.is_finite() || !(0.0..=crate::MAX_CLIP_VOLUME).contains(&volume) {
+            return Err(ModelError::InvalidParam(format!(
+                "volume must be between 0 and {}",
+                crate::MAX_CLIP_VOLUME
+            )));
+        }
+        let tl_rate = self.timeline.frame_rate;
+        check_same_rate(fade_in.rate, tl_rate)?;
+        check_same_rate(fade_out.rate, tl_rate)?;
+
+        let clip = self
+            .timeline
+            .clip(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        if clip.is_generated() {
+            return Err(ModelError::InvalidParam(
+                "volume requires a media-backed clip".into(),
+            ));
+        }
+        let duration = clip.timeline.duration.value;
+        for (name, fade) in [("fade_in", fade_in.value), ("fade_out", fade_out.value)] {
+            if fade < 0 {
+                return Err(ModelError::InvalidParam(format!("{name} must be ≥ 0")));
+            }
+            if fade > duration {
+                return Err(ModelError::InvalidParam(format!(
+                    "{name} ({fade} ticks) is longer than the clip ({duration} ticks)"
+                )));
+            }
+        }
+
+        let clip = self
+            .timeline
+            .clip_mut(clip_id)
+            .expect("clip existence checked above");
+        clip.volume = volume;
+        clip.fade_in = fade_in.value;
+        clip.fade_out = fade_out.value;
         Ok(())
     }
 
@@ -1178,6 +1237,76 @@ mod tests {
         let c = project.clip(clip).unwrap();
         assert_eq!(c.timeline, tr(0, 100));
         assert_eq!(c.speed, Rational::new(1, 1));
+    }
+
+    // --- set_clip_audio (M1) -------------------------------------------------
+
+    #[test]
+    fn set_clip_audio_sets_volume_and_fades() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        project.set_clip_audio(clip, 0.5, rt(10), rt(20)).unwrap();
+        let c = project.clip(clip).unwrap();
+        assert_eq!(c.volume, 0.5);
+        assert_eq!((c.fade_in, c.fade_out), (10, 20));
+        assert!(c.has_custom_audio());
+
+        // Back to defaults clears the custom-audio state.
+        project.set_clip_audio(clip, 1.0, rt(0), rt(0)).unwrap();
+        assert!(!project.clip(clip).unwrap().has_custom_audio());
+    }
+
+    #[test]
+    fn set_clip_audio_rejects_invalid_inputs() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        for volume in [-0.1, 11.0, f32::NAN, f32::INFINITY] {
+            assert!(matches!(
+                project.set_clip_audio(clip, volume, rt(0), rt(0)),
+                Err(ModelError::InvalidParam(_))
+            ));
+        }
+        // Negative or longer-than-the-clip fades.
+        assert!(matches!(
+            project.set_clip_audio(clip, 1.0, rt(-1), rt(0)),
+            Err(ModelError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            project.set_clip_audio(clip, 1.0, rt(0), rt(101)),
+            Err(ModelError::InvalidParam(_))
+        ));
+
+        let fx = project.add_track(TrackKind::Adjustment, "FX");
+        let generated = project
+            .add_generated(fx, Generator::Adjustment, tr(0, 100))
+            .unwrap();
+        assert!(matches!(
+            project.set_clip_audio(generated, 0.5, rt(0), rt(0)),
+            Err(ModelError::InvalidParam(_))
+        ));
+
+        assert_eq!(
+            project.set_clip_audio(ClipId::from_raw(404), 0.5, rt(0), rt(0)),
+            Err(ModelError::UnknownClip(ClipId::from_raw(404)))
+        );
+    }
+
+    #[test]
+    fn split_keeps_volume_and_partitions_fades() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+        project.set_clip_audio(clip, 0.5, rt(10), rt(20)).unwrap();
+
+        let right = project.split_clip(clip, rt(60)).unwrap();
+        let left = project.clip(clip).unwrap();
+        let right = project.clip(right).unwrap();
+        // Volume rides both halves; the fade-in stays with the head, the
+        // fade-out moves to the tail.
+        assert_eq!((left.volume, right.volume), (0.5, 0.5));
+        assert_eq!((left.fade_in, left.fade_out), (10, 0));
+        assert_eq!((right.fade_in, right.fade_out), (0, 20));
     }
 
     #[test]

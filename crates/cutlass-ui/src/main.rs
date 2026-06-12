@@ -1245,6 +1245,11 @@ fn main() -> Result<(), slint::PlatformError> {
         .on_set_clip_speed(move |clip_id, num, den, reversed| {
             set_speed_handle.set_clip_speed(clip_id.to_string(), num, den, reversed);
         });
+    let set_audio_handle = preview_worker.handle();
+    app.global::<InspectorBackend>()
+        .on_set_clip_audio(move |clip_id, volume, fade_in_s, fade_out_s| {
+            set_audio_handle.set_clip_audio(clip_id.to_string(), volume, fade_in_s, fade_out_s);
+        });
 
     let set_text_handle = preview_worker.handle();
     app.global::<InspectorBackend>()

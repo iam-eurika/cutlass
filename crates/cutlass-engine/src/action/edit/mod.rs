@@ -9,6 +9,7 @@ pub mod link_clips;
 pub mod move_clip;
 pub mod remove_clip;
 pub mod remove_media;
+pub mod set_audio;
 pub mod set_generator;
 pub mod set_param;
 pub mod set_speed;

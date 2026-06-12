@@ -413,6 +413,26 @@ pub fn describe_action(command: &WireCommand, outcome: Option<&EditOutcome>) -> 
             }
             format!("set clip {} {}", a.clip, parts.join(", "))
         }
+        WireCommand::SetClipAudio(a) => {
+            let mut parts = Vec::new();
+            if let Some(v) = a.volume {
+                parts.push(if v == 0.0 {
+                    "muted".to_string()
+                } else {
+                    format!("volume {:.0}%", v * 100.0)
+                });
+            }
+            if let Some(f) = a.fade_in {
+                parts.push(format!("fade in {}", secs(f)));
+            }
+            if let Some(f) = a.fade_out {
+                parts.push(format!("fade out {}", secs(f)));
+            }
+            if parts.is_empty() {
+                parts.push("audio unchanged".into());
+            }
+            format!("set clip {} {}", a.clip, parts.join(", "))
+        }
         WireCommand::SplitClip(a) => format!("split clip {} at {}", a.clip, secs(a.at)),
         WireCommand::TrimClip(a) => format!(
             "trimmed clip {} to {}–{}",
