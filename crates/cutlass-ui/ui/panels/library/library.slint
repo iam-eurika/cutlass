@@ -26,9 +26,9 @@ global LibraryState {
     in-out property <string> audio-section: "local";
 }
 
-// Shared accent for active tab / section labels (same teal as AccentButton).
+// Shared accent for active tab / section labels (same accent as AccentButton).
 global LibraryStyle {
-    out property <color> accent: #00E5C7;
+    out property <color> accent: AppStore.theme.accent.primary;
 }
 
 // One top tab: icon over label, CapCut-style (active = teal, no underline).

@@ -71,7 +71,7 @@ component CategoryTab inherits Rectangle {
         height: 100%;
         text: root.label;
         style: AppStore.theme.typography.heading-md;
-        foreground: root.selected ? #00E5C7 : AppStore.theme.text.primary;
+        foreground: root.selected ? AppStore.theme.accent.primary : AppStore.theme.text.primary;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -105,8 +105,8 @@ component SectionHeader inherits HorizontalLayout {
         height: 14px;
         border-radius: 3px;
         border-width: 1px;
-        border-color: active ? #00E5C7 : #ffffff2f;
-        background: active ? #00E5C7 : #ffffff14;
+        border-color: active ? AppStore.theme.accent.primary : #ffffff2f;
+        background: active ? AppStore.theme.accent.primary : #ffffff14;
         vertical-stretch: 0;
         y: 5px;
 
@@ -196,7 +196,7 @@ component MultilineTextInput inherits Rectangle {
     horizontal-stretch: 1;
     border-radius: AppStore.theme.metrics.radius.md;
     border-width: input.has-focus ? 1px : 0px;
-    border-color: #00E5C7;
+    border-color: AppStore.theme.accent.primary;
     background: input.has-focus ? #202020 : #1a1a1a;
     clip: true;
     forward-focus: input;
@@ -238,7 +238,7 @@ component MultilineTextInput inherits Rectangle {
             color: AppStore.theme.text.primary;
             font-size: AppStore.theme.typography.body.size;
             font-weight: AppStore.theme.typography.body.weight;
-            selection-background-color: #00E5C755;
+            selection-background-color: AppStore.theme.accent.primary.with-alpha(0.33);
             selection-foreground-color: AppStore.theme.text.primary;
             page-height: editor-scroll.height;
             accessible-role: none;
@@ -299,7 +299,7 @@ component LineTextInput inherits Rectangle {
     horizontal-stretch: 1;
     border-radius: AppStore.theme.metrics.radius.sm;
     border-width: input.has-focus ? 1px : 0px;
-    border-color: #00E5C7;
+    border-color: AppStore.theme.accent.primary;
     background: input.has-focus ? #202020 : #1a1a1a;
     opacity: enabled ? 1.0 : 0.55;
     clip: true;
@@ -337,7 +337,7 @@ component LineTextInput inherits Rectangle {
         color: AppStore.theme.text.primary;
         font-size: AppStore.theme.typography.body.size;
         font-weight: AppStore.theme.typography.body.weight;
-        selection-background-color: #00E5C755;
+        selection-background-color: AppStore.theme.accent.primary.with-alpha(0.33);
         selection-foreground-color: AppStore.theme.text.primary;
         accessible-role: none;
 
@@ -417,7 +417,7 @@ component PresetStyle inherits Rectangle {
     border-radius: AppStore.theme.metrics.radius.md;
     background: selected ? #ffffff12 : #ffffff0d;
     border-width: selected ? 2px : 0px;
-    border-color: #00E5C7;
+    border-color: AppStore.theme.accent.primary;
     opacity: 0.65;
 
     Rectangle {
@@ -685,7 +685,7 @@ component ToggleSwitch inherits Rectangle {
     height: 22px;
     vertical-stretch: 0;
     border-radius: 11px;
-    background: checked ? #00E5C7 : #ffffff1a;
+    background: checked ? AppStore.theme.accent.primary : #ffffff1a;
     opacity: enabled ? 1.0 : 0.7;
 
     Rectangle {
@@ -707,7 +707,7 @@ component DisabledEffectCard inherits Rectangle {
     border-radius: AppStore.theme.metrics.radius.md;
     background: #ffffff0a;
     border-width: selected ? 2px : 0px;
-    border-color: #00E5C7;
+    border-color: AppStore.theme.accent.primary;
     opacity: 0.45;
 
     CutlassText {
@@ -1715,7 +1715,7 @@ export component TextInspector inherits VerticalLayout {
                     height: 28px;
                     width: 116px;
                     border-radius: AppStore.theme.metrics.radius.sm;
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                     opacity: 0.45;
 
                     CutlassText {

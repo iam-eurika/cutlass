@@ -298,7 +298,7 @@ export component ClipView inherits Rectangle {
             if root.audio-muted && root.width > 50px: Rectangle {
                 width: 14px;
                 border-radius: 2px;
-                background: dimmed ? #00E5C733 : #00E5C755;
+                background: dimmed ? AppStore.theme.accent.primary.with-alpha(0.2) : AppStore.theme.accent.primary.with-alpha(0.33);
 
                 // Speaker pointing right, small X struck beside the cone
                 // (the open subpaths carry no fill; the stroke draws them).
@@ -328,7 +328,7 @@ export component ClipView inherits Rectangle {
             if root.audio-gain-changed && root.width > 50px: Rectangle {
                 width: vol-text.preferred-width + 6px;
                 border-radius: 2px;
-                background: dimmed ? #00E5C733 : #00E5C755;
+                background: dimmed ? AppStore.theme.accent.primary.with-alpha(0.2) : AppStore.theme.accent.primary.with-alpha(0.33);
 
                 vol-text := Text {
                     text: (root.model.volume * 100).to-fixed(0) + "%";
@@ -341,7 +341,7 @@ export component ClipView inherits Rectangle {
             if root.audio-faded-only && root.width > 50px: Rectangle {
                 width: 14px;
                 border-radius: 2px;
-                background: dimmed ? #00E5C733 : #00E5C755;
+                background: dimmed ? AppStore.theme.accent.primary.with-alpha(0.2) : AppStore.theme.accent.primary.with-alpha(0.33);
 
                 // Fade ramp: a right triangle rising left-to-right.
                 Path {
@@ -364,7 +364,7 @@ export component ClipView inherits Rectangle {
             if model.speed-label != "" && root.width > 50px: Rectangle {
                 width: badge-text.preferred-width + 6px;
                 border-radius: 2px;
-                background: dimmed ? #00E5C733 : #00E5C755;
+                background: dimmed ? AppStore.theme.accent.primary.with-alpha(0.2) : AppStore.theme.accent.primary.with-alpha(0.33);
 
                 badge-text := Text {
                     text: model.speed-label;
@@ -525,7 +525,7 @@ export component ClipView inherits Rectangle {
                 viewbox-width: 10;
                 viewbox-height: 10;
                 visible: !grabbed;
-                fill: #00E5C7;
+                fill: AppStore.theme.accent.primary;
                 stroke: kf-ta.has-hover ? #ffffff : #000000a0;
                 stroke-width: 1px;
 
@@ -579,7 +579,7 @@ export component ClipView inherits Rectangle {
         height: 9px;
         viewbox-width: 10;
         viewbox-height: 10;
-        fill: #00E5C7;
+        fill: AppStore.theme.accent.primary;
         stroke: #ffffff;
         stroke-width: 1px;
 

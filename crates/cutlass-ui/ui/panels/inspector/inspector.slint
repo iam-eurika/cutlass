@@ -202,8 +202,8 @@ component SpeedInspector inherits VerticalLayout {
             y: (parent.height - self.height) / 2;
             border-radius: 3px;
             border-width: 1px;
-            border-color: root.model.reversed ? #00E5C7 : #ffffff2f;
-            background: root.model.reversed ? #00E5C7 : #ffffff14;
+            border-color: root.model.reversed ? AppStore.theme.accent.primary : #ffffff2f;
+            background: root.model.reversed ? AppStore.theme.accent.primary : #ffffff14;
 
             TouchArea {
                 mouse-cursor: MouseCursor.pointer;

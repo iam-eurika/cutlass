@@ -574,7 +574,7 @@ export component TimelinePanel inherits PanelBase {
                     y: (clip-drag-res.target-row + 1) * row-pitch - track-spacing / 2 - self.height / 2;
                     width: max(parent.width, content-width);
                     height: 2px;
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                 }
                 if single-dragging && clip-drag-res.valid && clip-drag-res.is-new-lane: Rectangle {
                     x: clip-drag-res.resolved-start * TimelineStore.zoom * 1px;
@@ -583,7 +583,7 @@ export component TimelinePanel inherits PanelBase {
                     height: (track-height - 5px) * 0.5;
                     background: TimelineViewState.dragging-color.with-alpha(0.3);
                     border-width: 1px;
-                    border-color: #00E5C7;
+                    border-color: AppStore.theme.accent.primary;
                     border-radius: AppStore.theme.track-lane.clip.radius;
                 }
 
@@ -595,7 +595,7 @@ export component TimelinePanel inherits PanelBase {
                     y: (clip-drag-res.target-row + 1) * row-pitch - 2px;
                     width: 3px;
                     height: track-height - 1px;
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                 }
 
                 // Same insertion caret for library drags over the main lane.
@@ -604,7 +604,7 @@ export component TimelinePanel inherits PanelBase {
                     y: (library-drop-res.target-row + 1) * row-pitch - 2px;
                     width: 3px;
                     height: track-height - 1px;
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                 }
 
                 // Honest landing ghost for a freeform library drop: the snapped,
@@ -615,9 +615,9 @@ export component TimelinePanel inherits PanelBase {
                     y: (library-drop-res.target-row + 1) * row-pitch;
                     width: AppState.library-drag-duration-ticks * TimelineStore.zoom * 1px;
                     height: track-height - 5px;
-                    background: #00E5C74D;
+                    background: AppStore.theme.accent.primary.with-alpha(0.3);
                     border-width: 1px;
-                    border-color: #00E5C7;
+                    border-color: AppStore.theme.accent.primary;
                     border-radius: AppStore.theme.track-lane.clip.radius;
                 }
 
@@ -627,7 +627,7 @@ export component TimelinePanel inherits PanelBase {
                     y: 0;
                     width: 1px;
                     height: max(parent.height, content-height);
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                 }
 
                 // Vertical magnet guide at the snapped edge (CapCut-style).
@@ -636,7 +636,7 @@ export component TimelinePanel inherits PanelBase {
                     y: 0;
                     width: 1px;
                     height: max(parent.height, content-height);
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                 }
 
                 // --- group drag visuals (multi-selection) ---------------------
@@ -664,7 +664,7 @@ export component TimelinePanel inherits PanelBase {
                     y: 0;
                     width: 1px;
                     height: max(parent.height, content-height);
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                 }
 
                 // Floating copies of every selected clip, following the
@@ -758,7 +758,7 @@ export component TimelinePanel inherits PanelBase {
                     y: 0;
                     width: 1px;
                     height: max(parent.height, content-height);
-                    background: #00E5C7;
+                    background: AppStore.theme.accent.primary;
                 }
 
                 // Floating copy of the grabbed clip, following the cursor on
@@ -812,9 +812,9 @@ export component TimelinePanel inherits PanelBase {
                     y: min(TimelineViewState.marquee-anchor-y, TimelineViewState.marquee-y);
                     width: max(TimelineViewState.marquee-anchor-x, TimelineViewState.marquee-x) - self.x;
                     height: max(TimelineViewState.marquee-anchor-y, TimelineViewState.marquee-y) - self.y;
-                    background: #00E5C71A;
+                    background: AppStore.theme.accent.primary.with-alpha(0.1);
                     border-width: 1px;
-                    border-color: #00E5C7;
+                    border-color: AppStore.theme.accent.primary;
                 }
 
                 // Playhead line — content-space x; scrolls with the lanes.

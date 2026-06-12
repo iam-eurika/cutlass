@@ -63,7 +63,7 @@ export component KeyframeControl inherits HorizontalLayout {
     // Re-ease the keyframe under the playhead (0 linear … 3 ease-in-out).
     callback set-easing(easing: int);
 
-    private property <color> accent: #00E5C7;
+    private property <color> accent: AppStore.theme.accent.primary;
     private property <[string]> easing-names: ["Linear", "Ease in", "Ease out", "Ease in & out"];
 
     spacing: AppStore.theme.metrics.spacing.none;
@@ -171,7 +171,7 @@ export component KeyframeControl inherits HorizontalLayout {
                         height: 26px;
                         border-radius: AppStore.theme.metrics.radius.sm;
                         background: idx == root.state.easing
-                            ? #00E5C71f
+                            ? AppStore.theme.accent.primary.with-alpha(0.12)
                             : (row-ta.has-hover ? #ffffff10 : transparent);
 
                         CutlassText {

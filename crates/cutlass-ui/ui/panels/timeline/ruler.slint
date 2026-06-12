@@ -87,7 +87,7 @@ export component Ruler inherits Rectangle {
         y: 0;
         width: range-out-x - range-in-x;
         height: parent.height;
-        background: #00E5C71A;
+        background: AppStore.theme.accent.primary.with-alpha(0.1);
     }
 
     if TimelineStore.range-in-tick >= 0: Rectangle {
@@ -95,7 +95,7 @@ export component Ruler inherits Rectangle {
         y: 0;
         width: 2px;
         height: parent.height;
-        background: #00E5C7;
+        background: AppStore.theme.accent.primary;
     }
 
     if TimelineStore.range-out-tick >= 0: Rectangle {
@@ -103,7 +103,7 @@ export component Ruler inherits Rectangle {
         y: 0;
         width: 2px;
         height: parent.height;
-        background: #00E5C7;
+        background: AppStore.theme.accent.primary;
     }
 
     // One zero-width anchor per mark; the dot or label hangs off it,

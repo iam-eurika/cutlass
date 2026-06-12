@@ -12,6 +12,8 @@
 // rail), `progress-color` (the filled part up to the cap), `handle-color`
 // (the cap), plus `track-thickness` / `handle-size` for geometry.
 
+import { AppStore } from "../store/index.slint";
+
 export component CutlassSlider {
     // std `Slider` API — keep names and semantics identical.
     in property <Orientation> orientation;
@@ -27,7 +29,7 @@ export component CutlassSlider {
 
     // Styling knobs.
     in property <brush> track-color: #ffffff1f;
-    in property <brush> progress-color: #00E5C7;
+    in property <brush> progress-color: AppStore.theme.accent.primary;
     in property <brush> handle-color: #ffffff;
     in property <length> track-thickness: 4px;
     in property <length> handle-size: 14px;

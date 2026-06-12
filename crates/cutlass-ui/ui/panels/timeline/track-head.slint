@@ -11,7 +11,7 @@ component HeadToggle inherits Rectangle {
     width: 18px;
     height: 18px;
     border-radius: AppStore.theme.metrics.radius.sm;
-    background: active ? #00E5C722 : ta.has-hover ? #ffffff1a : transparent;
+    background: active ? AppStore.theme.accent.primary.with-alpha(0.13) : ta.has-hover ? #ffffff1a : transparent;
 
     Text {
         width: 100%;
@@ -20,7 +20,7 @@ component HeadToggle inherits Rectangle {
         font-size: 10px;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: active ? #00E5C7 : AppStore.theme.text.secondary;
+        color: active ? AppStore.theme.accent.primary : AppStore.theme.text.secondary;
     }
 
     ta := TouchArea {

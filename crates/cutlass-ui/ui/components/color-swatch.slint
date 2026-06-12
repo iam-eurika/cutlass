@@ -88,7 +88,7 @@ export component CutlassColorSwatch inherits Rectangle {
                         border-radius: AppStore.theme.metrics.radius.sm;
                         background: swatch-color;
                         border-width: swatch-color == root.value ? 2px : 1px;
-                        border-color: swatch-color == root.value ? #00E5C7 : #ffffff24;
+                        border-color: swatch-color == root.value ? AppStore.theme.accent.primary : #ffffff24;
 
                         TouchArea {
                             clicked => {

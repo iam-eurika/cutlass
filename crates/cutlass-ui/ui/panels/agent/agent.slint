@@ -29,7 +29,7 @@ component PromptInput inherits Rectangle {
     horizontal-stretch: 1;
     border-radius: AppStore.theme.metrics.radius.md;
     border-width: input.has-focus ? 1px : 0px;
-    border-color: #00E5C7;
+    border-color: AppStore.theme.accent.primary;
     background: input.has-focus ? #202020 : #1a1a1a;
     opacity: enabled ? 1.0 : 0.55;
     clip: true;
@@ -82,7 +82,7 @@ component PromptInput inherits Rectangle {
             color: AppStore.theme.text.primary;
             font-size: AppStore.theme.typography.body.size;
             font-weight: AppStore.theme.typography.body.weight;
-            selection-background-color: #00E5C755;
+            selection-background-color: AppStore.theme.accent.primary.with-alpha(0.33);
             selection-foreground-color: AppStore.theme.text.primary;
             page-height: editor-scroll.height;
             accessible-role: none;
@@ -159,7 +159,7 @@ component TranscriptEntry inherits VerticalLayout {
 
         Rectangle {
             width: 2px;
-            background: #00E5C7;
+            background: AppStore.theme.accent.primary;
             border-radius: 1px;
         }
 
@@ -188,7 +188,7 @@ component TranscriptEntry inherits VerticalLayout {
             text: entry.text;
             wrap: word-wrap;
             style: AppStore.theme.typography.caption;
-            foreground: #00E5C7;
+            foreground: AppStore.theme.accent.primary;
         }
 
         if offer-undo: SubtleButton {
@@ -304,7 +304,7 @@ export component AgentPanel inherits PanelBase {
         if AgentStore.plan-pending: Rectangle {
             background: #1f1f1f;
             border-width: 1px;
-            border-color: #00E5C744;
+            border-color: AppStore.theme.accent.primary.with-alpha(0.27);
             border-radius: AppStore.theme.metrics.radius.md;
 
             VerticalLayout {
@@ -403,8 +403,8 @@ export component AgentPanel inherits PanelBase {
                             height: 12px;
                             border-radius: AppStore.theme.metrics.radius.sm;
                             border-width: 1px;
-                            border-color: AgentStore.dry-run ? #00E5C7 : #ffffff44;
-                            background: AgentStore.dry-run ? #00E5C7 : transparent;
+                            border-color: AgentStore.dry-run ? AppStore.theme.accent.primary : #ffffff44;
+                            background: AgentStore.dry-run ? AppStore.theme.accent.primary : transparent;
 
                             if AgentStore.dry-run: CutlassText {
                                 width: parent.width;

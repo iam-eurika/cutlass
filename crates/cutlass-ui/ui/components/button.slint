@@ -13,7 +13,7 @@ export component AccentButton inherits Rectangle {
     width: text.preferred-width + 2 * AppStore.theme.metrics.spacing.lg;
     height: 26px;
     border-radius: AppStore.theme.metrics.radius.sm;
-    background: ta.has-hover && enabled ? #2BEFD6 : #00E5C7;
+    background: ta.has-hover && enabled ? AppStore.theme.accent.hover : AppStore.theme.accent.primary;
     opacity: enabled ? 1.0 : 0.35;
 
     text := CutlassText {
@@ -23,7 +23,7 @@ export component AccentButton inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         style: AppStore.theme.typography.label;
-        foreground: #0A0A0A;
+        foreground: AppStore.theme.accent.on-accent;
     }
 
     ta := TouchArea {

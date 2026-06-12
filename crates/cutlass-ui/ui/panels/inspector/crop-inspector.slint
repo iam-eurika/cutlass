@@ -91,9 +91,9 @@ component FlipToggle inherits Rectangle {
     width: text.preferred-width + 2 * AppStore.theme.metrics.spacing.lg;
     height: 26px;
     border-radius: AppStore.theme.metrics.radius.sm;
-    background: active ? #00E5C71f : (ta.has-hover ? #ffffff14 : transparent);
+    background: active ? AppStore.theme.accent.primary.with-alpha(0.12) : (ta.has-hover ? #ffffff14 : transparent);
     border-width: 1px;
-    border-color: active ? #00E5C7 : #ffffff22;
+    border-color: active ? AppStore.theme.accent.primary : #ffffff22;
 
     text := CutlassText {
         width: parent.width;
@@ -102,7 +102,7 @@ component FlipToggle inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         style: AppStore.theme.typography.label;
-        foreground: root.active ? #00E5C7 : AppStore.theme.text.primary;
+        foreground: root.active ? AppStore.theme.accent.primary : AppStore.theme.text.primary;
     }
 
     ta := TouchArea {

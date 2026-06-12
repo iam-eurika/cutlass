@@ -83,7 +83,7 @@ export component CutlassDropdown inherits Rectangle {
                     border-radius: AppStore.theme.metrics.radius.sm;
                     background: #111111;
                     border-width: search.has-focus ? 1px : 0px;
-                    border-color: #00E5C7;
+                    border-color: AppStore.theme.accent.primary;
                     clip: true;
                     forward-focus: search;
 
@@ -95,7 +95,7 @@ export component CutlassDropdown inherits Rectangle {
                         single-line: true;
                         color: AppStore.theme.text.primary;
                         font-size: AppStore.theme.typography.body.size;
-                        selection-background-color: #00E5C755;
+                        selection-background-color: AppStore.theme.accent.primary.with-alpha(0.33);
                         text <=> root.query;
                         accessible-role: none;
                     }
@@ -126,7 +126,7 @@ export component CutlassDropdown inherits Rectangle {
                             height: root.row-height;
                             border-radius: AppStore.theme.metrics.radius.sm;
                             background: item == root.current
-                                ? #00E5C71f
+                                ? AppStore.theme.accent.primary.with-alpha(0.12)
                                 : (row-ta.has-hover ? #ffffff10 : transparent);
 
                             CutlassText {
@@ -137,7 +137,7 @@ export component CutlassDropdown inherits Rectangle {
                                 text: item;
                                 style: AppStore.theme.typography.body;
                                 foreground: item == root.current
-                                    ? #00E5C7
+                                    ? AppStore.theme.accent.primary
                                     : AppStore.theme.text.primary;
                                 overflow: TextOverflow.elide;
                             }

@@ -19,10 +19,10 @@ component ToolButton inherits Rectangle {
     width: text.preferred-width + 2 * AppStore.theme.metrics.spacing.sm;
     border-radius: AppStore.theme.metrics.radius.sm;
     background: active
-        ? #00E5C733
+        ? AppStore.theme.accent.primary.with-alpha(0.2)
         : ta.has-hover && enabled ? #ffffff14 : transparent;
     border-width: active ? 1px : 0px;
-    border-color: #00E5C7;
+    border-color: AppStore.theme.accent.primary;
     opacity: enabled ? 1.0 : 0.35;
 
     text := CutlassText {
@@ -32,7 +32,7 @@ component ToolButton inherits Rectangle {
         style: AppStore.theme.typography.label;
         horizontal-alignment: center;
         vertical-alignment: center;
-        foreground: active ? #00E5C7 : AppStore.theme.text.primary;
+        foreground: active ? AppStore.theme.accent.primary : AppStore.theme.text.primary;
     }
 
     ta := TouchArea {

@@ -199,7 +199,7 @@ export component ExportDialog inherits Rectangle {
                         width: parent.width * clamp(ExportBackend.progress, 0.0, 1.0);
                         height: parent.height;
                         border-radius: parent.border-radius;
-                        background: #00E5C7;
+                        background: AppStore.theme.accent.primary;
                     }
                 }
 
@@ -216,7 +216,7 @@ export component ExportDialog inherits Rectangle {
                 text: ExportBackend.status;
                 wrap: word-wrap;
                 style: AppStore.theme.typography.caption;
-                foreground: ExportBackend.failed ? #FF6B6B : #00E5C7;
+                foreground: ExportBackend.failed ? #FF6B6B : AppStore.theme.accent.primary;
             }
 
             // --- actions -----------------------------------------------

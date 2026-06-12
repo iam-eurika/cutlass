@@ -1,3 +1,8 @@
+// Ember — the warm counterpart to the cool default theme. Graphite-brown
+// surfaces (a few degrees toward firelight instead of neutral black) with an
+// amber accent that fades to ember red in the brand gradient. Geometry stays
+// identical to the default theme except for slightly softer corner radii, so
+// switching themes never reflows the layout.
 import {
     Accent,
     Layout,
@@ -15,29 +20,29 @@ import {
     Typography,
 } from "../types/index.slint";
 
-export global DefaultTheme {
+export global EmberTheme {
     private property <Surface> surface: {
-        app-background: #141414,
-        content-background: #000000,
-        divider: #161616,
+        app-background: #191512,
+        content-background: #0B0908,
+        divider: #1E1915,
     };
 
     private property <TextColors> text: {
-        primary: #ffffff,
-        secondary: #a3a3a3,
-        muted: #737373,
+        primary: #F4EDE3,
+        secondary: #B0A395,
+        muted: #7C7164,
     };
 
     private property <Accent> accent: {
-        primary: #00E5C7,
-        hover: #2BEFD6,
-        on-accent: #0A0A0A,
-        gradient-end: #00A3FF,
+        primary: #FFB454,
+        hover: #FFC878,
+        on-accent: #221405,
+        gradient-end: #FF5E3D,
     };
 
     private property <SplitGrip> split-grip: {
-        normal: #141414,
-        hover: #141414,
+        normal: #191512,
+        hover: #191512,
     };
 
     private property <Typography> typography: {
@@ -63,9 +68,9 @@ export global DefaultTheme {
 
     private property <Radius> radius: {
         none: 0px,
-        sm: 3px,
-        md: 6px,
-        lg: 8px,
+        sm: 4px,
+        md: 7px,
+        lg: 10px,
     };
 
     private property <Stroke> stroke: {
@@ -91,8 +96,8 @@ export global DefaultTheme {
     };
 
     private property <Panel> panel: {
-        background: #262626,
-        header-background: #303030,
+        background: #241E19,
+        header-background: #2E2620,
         radius: self.radius.md,
     };
 
@@ -103,18 +108,18 @@ export global DefaultTheme {
         thumb-radius: 1px,
         // Translucent: the bars overlay content (and auto-hide), so the
         // track softens rather than blanks what it covers.
-        track: #2c2c2e99,
-        thumb: #636363e6,
-        thumb-hover: #7a7a7a,
-        thumb-active: #9a9a9a,
+        track: #322A2399,
+        thumb: #6B5F53E6,
+        thumb-hover: #837567,
+        thumb-active: #A08E7C,
     };
 
     private property <TrackLane> track-lane: {
         height: 60px,
-        background: #292929,
+        background: #272019,
         clip: {
             height: 58px,
-            background: #373737,
+            background: #3A3128,
             radius: 4px,
         },
     };
