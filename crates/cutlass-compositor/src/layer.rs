@@ -59,6 +59,36 @@ impl LayerPlacement {
 /// Content UV rect covering the whole texture (no crop, no mirroring).
 pub const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
+/// A GPU effect applied to a single layer, with its parameters already
+/// resolved to scalars (the engine samples animated `Param`s at the frame
+/// tick before building the layer — the compositor never sees a curve).
+///
+/// `params` are packed in the effect's declared slot order (see
+/// [`crate::effects::effect_param_index`]); unused slots stay zero. An
+/// `effect_id` the registry doesn't know is skipped.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerEffect {
+    pub effect_id: String,
+    pub params: [f32; crate::effects::EFFECT_PARAM_SLOTS],
+}
+
+impl LayerEffect {
+    pub fn new(effect_id: impl Into<String>) -> Self {
+        Self {
+            effect_id: effect_id.into(),
+            params: [0.0; crate::effects::EFFECT_PARAM_SLOTS],
+        }
+    }
+
+    /// Set one parameter slot (builder style).
+    pub fn with_param(mut self, slot: usize, value: f32) -> Self {
+        if slot < self.params.len() {
+            self.params[slot] = value;
+        }
+        self
+    }
+}
+
 /// One layer in bottom-to-top stacking order: pixel content plus where it
 /// lands on the canvas.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +100,10 @@ pub struct CompositeLayer {
     /// bottom-right. A sub-rect crops; a reversed axis (`u0 > u1` or
     /// `v0 > v1`) mirrors. Ignored by solid fills.
     pub uv: [f32; 4],
+    /// Per-layer effect chain, applied in order before the layer composites
+    /// onto the canvas. Empty for the common case (the no-effect render path
+    /// stays a single pass).
+    pub effects: Vec<LayerEffect>,
 }
 
 impl CompositeLayer {
@@ -78,6 +112,7 @@ impl CompositeLayer {
             content: LayerContent::Yuv420p(layer),
             placement,
             uv: FULL_UV,
+            effects: Vec::new(),
         }
     }
 
@@ -90,6 +125,7 @@ impl CompositeLayer {
             },
             placement,
             uv: FULL_UV,
+            effects: Vec::new(),
         }
     }
 
@@ -98,12 +134,19 @@ impl CompositeLayer {
             content: LayerContent::Solid { rgba },
             placement,
             uv: FULL_UV,
+            effects: Vec::new(),
         }
     }
 
     /// Replace the sampled UV rect (crop / mirror).
     pub fn with_uv(mut self, uv: [f32; 4]) -> Self {
         self.uv = uv;
+        self
+    }
+
+    /// Attach an effect chain (applied in order before compositing).
+    pub fn with_effects(mut self, effects: Vec<LayerEffect>) -> Self {
+        self.effects = effects;
         self
     }
 }

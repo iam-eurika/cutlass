@@ -9,6 +9,7 @@
 //! it to both Slint (`WGPUConfiguration::Manual`) and [`Compositor::new`].
 
 mod compositor;
+pub mod effects;
 mod error;
 mod gpu;
 mod image;
@@ -16,10 +17,13 @@ mod layer;
 mod yuv;
 
 pub use compositor::Compositor;
+pub use effects::{EFFECT_PARAM_SLOTS, EffectDescriptor, effect_descriptors, effect_param_index};
 pub use error::CompositorError;
 pub use gpu::GpuContext;
 pub use image::RgbaImage;
-pub use layer::{CompositeLayer, CompositorConfig, FULL_UV, LayerContent, LayerPlacement};
+pub use layer::{
+    CompositeLayer, CompositorConfig, FULL_UV, LayerContent, LayerEffect, LayerPlacement,
+};
 pub use yuv::{Yuv420pImage, Yuv420pLayer, legacy_rgba_to_yuv420p};
 
 use tracing::info;
