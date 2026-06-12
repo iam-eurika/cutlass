@@ -1,10 +1,40 @@
 use cutlass_commands::{Command, EditCommand, EditOutcome, ProjectCommand};
 
 use super::edit::add_track::RemoveTrackAction;
+use super::edit::restore_transitions::RestoreTransitionsAction;
 use super::edit::{self, remove_clip::RemoveClipAction};
 use super::project::{self, import};
-use super::{ApplyContext, EditAction};
+use super::{ApplyContext, CompoundAction, EditAction};
 use crate::error::EngineError;
+use cutlass_models::{TrackId, Transition};
+
+/// Capture every track's transitions before a structural edit, but only when
+/// some exist — the common case (no transitions) pays nothing.
+fn transitions_guard(ctx: &ApplyContext<'_>) -> Option<Vec<(TrackId, Vec<Transition>)>> {
+    ctx.project
+        .has_transitions()
+        .then(|| ctx.project.transitions_snapshot())
+}
+
+/// After a structural edit, prune junctions whose abutment broke. If anything
+/// was pruned, fold a transitions-restore into the inverse so undo brings the
+/// dropped junctions back; otherwise the primary inverse stands alone.
+fn finalize_structural(
+    ctx: &mut ApplyContext<'_>,
+    guard: Option<Vec<(TrackId, Vec<Transition>)>>,
+    primary: Box<dyn EditAction>,
+) -> Box<dyn EditAction> {
+    let Some(snapshot) = guard else {
+        return primary;
+    };
+    if ctx.project.prune_dead_transitions() {
+        Box::new(CompoundAction {
+            actions: vec![primary, Box::new(RestoreTransitionsAction { snapshot })],
+        })
+    } else {
+        primary
+    }
+}
 
 /// Result of applying a wire [`Command`] through the engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,12 +184,31 @@ fn dispatch_edit(
             let inverse = edit::set_effect::set_effect_param(ctx, clip, index, param, value)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
         }
+        EditCommand::AddTransition {
+            clip,
+            transition_id,
+        } => {
+            let inverse = edit::set_transition::add_transition(ctx, clip, &transition_id)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
+        EditCommand::RemoveTransition { clip } => {
+            let inverse = edit::set_transition::remove_transition(ctx, clip)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
+        EditCommand::SetTransition { clip, duration } => {
+            let inverse = edit::set_transition::set_transition(ctx, clip, duration)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
         EditCommand::SplitClip { clip, at } => {
-            let (id, inverse) = edit::split_clip::execute(ctx, clip, at)?;
+            let guard = transitions_guard(ctx);
+            let (id, primary) = edit::split_clip::execute(ctx, clip, at)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::Created(id)), Some(inverse)))
         }
         EditCommand::TrimClip { clip, timeline } => {
-            let inverse = edit::trim_clip::execute(ctx, clip, timeline)?;
+            let guard = transitions_guard(ctx);
+            let primary = edit::trim_clip::execute(ctx, clip, timeline)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
         }
         EditCommand::MoveClip {
@@ -167,15 +216,21 @@ fn dispatch_edit(
             to_track,
             start,
         } => {
-            let inverse = edit::move_clip::execute(ctx, clip, to_track, start)?;
+            let guard = transitions_guard(ctx);
+            let primary = edit::move_clip::execute(ctx, clip, to_track, start)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
         }
         EditCommand::RemoveClip { clip } => {
-            let inverse = Box::new(RemoveClipAction { clip }).apply(ctx)?;
+            let guard = transitions_guard(ctx);
+            let primary = Box::new(RemoveClipAction { clip }).apply(ctx)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::Removed(clip)), Some(inverse)))
         }
         EditCommand::RemoveTrack { track } => {
-            let inverse = Box::new(RemoveTrackAction { track_id: track }).apply(ctx)?;
+            let guard = transitions_guard(ctx);
+            let primary = Box::new(RemoveTrackAction { track_id: track }).apply(ctx)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::RemovedTrack(track)), Some(inverse)))
         }
         EditCommand::SetTrackEnabled { track, enabled } => {
@@ -191,11 +246,15 @@ fn dispatch_edit(
             Ok((ApplyOutcome::Edited(EditOutcome::UpdatedTrack(track)), Some(inverse)))
         }
         EditCommand::RippleDelete { clip } => {
-            let inverse = edit::ripple_delete::execute(ctx, clip)?;
+            let guard = transitions_guard(ctx);
+            let primary = edit::ripple_delete::execute(ctx, clip)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::Removed(clip)), Some(inverse)))
         }
         EditCommand::ShiftClips { track, from, delta } => {
-            let inverse = edit::shift_clips::execute(ctx, track, from, delta)?;
+            let guard = transitions_guard(ctx);
+            let primary = edit::shift_clips::execute(ctx, track, from, delta)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::ShiftedTrack(track)), Some(inverse)))
         }
         EditCommand::RippleInsert {
@@ -204,7 +263,9 @@ fn dispatch_edit(
             source,
             at,
         } => {
-            let (id, inverse) = edit::ripple_insert::execute(ctx, track, media, source, at)?;
+            let guard = transitions_guard(ctx);
+            let (id, primary) = edit::ripple_insert::execute(ctx, track, media, source, at)?;
+            let inverse = finalize_structural(ctx, guard, primary);
             Ok((ApplyOutcome::Edited(EditOutcome::Created(id)), Some(inverse)))
         }
         EditCommand::LinkClips { clips } => {

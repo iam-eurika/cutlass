@@ -148,6 +148,16 @@ pub enum EditCommand {
         param: usize,
         value: f32,
     },
+    /// Add a transition (M4) at the junction where `clip` abuts the next clip
+    /// on its track. `transition_id` must exist in the transition catalog. The
+    /// inverse removes it (track-transitions snapshot).
+    AddTransition { clip: ClipId, transition_id: String },
+    /// Remove the transition at `clip`'s right junction. The inverse restores
+    /// it (track-transitions snapshot).
+    RemoveTransition { clip: ClipId },
+    /// Set the window length (timeline ticks) of the transition at `clip`'s
+    /// right junction. The inverse restores the previous length.
+    SetTransition { clip: ClipId, duration: i64 },
     /// Split a clip at a timeline position into two abutting clips.
     SplitClip { clip: ClipId, at: RationalTime },
     /// Re-place / trim a clip to occupy `timeline`.
