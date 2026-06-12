@@ -93,8 +93,10 @@ export global DefaultTheme {
         thumb-inset: 2px,
         thumb-min: 24px,
         thumb-radius: 1px,
-        track: #2c2c2e,
-        thumb: #636363,
+        // Translucent: the bars overlay content (and auto-hide), so the
+        // track softens rather than blanks what it covers.
+        track: #2c2c2e99,
+        thumb: #636363e6,
         thumb-hover: #7a7a7a,
         thumb-active: #9a9a9a,
     };

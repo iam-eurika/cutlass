@@ -4,6 +4,11 @@ import { CutlassGridView } from "components/index.slint";
 // `CutlassScrollView`). Produces a grid large enough to overflow both
 // axes so we can exercise the vertical bar, horizontal bar, corner
 // cap, drag-to-scroll, click-track jumping, and mouse-wheel scrolling.
+//
+// Note the bars auto-hide: they appear briefly on launch (initial
+// extent change), then fade out ~1s after the last scroll unless the
+// pointer is over a bar. Hovering the faded bar area reveals it, and
+// the thumb widens slightly on hover.
 export component TestApp inherits Window {
     title: "Test App — CutlassGridView";
 

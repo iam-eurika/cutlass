@@ -7,7 +7,6 @@
 import {
     CutlassGridView,
     CutlassText,
-    AccentButton,
     SubtleButton,
     PanelBase,
     VerticalDivider,
@@ -151,10 +150,6 @@ export component LibraryPanel inherits PanelBase {
     // Read-only projections of the engine media pool (see src/projection.rs).
     property <[Media]> media: EditorStore.project.media;
     property <[Media]> audio-media: EditorStore.project.media-audio;
-    // A truly fresh session (nothing imported, nothing on the timeline):
-    // Media > Local trades the grid for the lifecycle welcome below.
-    property <bool> session-empty: root.media.length == 0
-        && EditorStore.project.sequence.tracks.length == 0;
 
     VerticalLayout {
         spacing: AppStore.theme.metrics.spacing.none;
@@ -307,96 +302,7 @@ export component LibraryPanel inherits PanelBase {
 
                     ImportToolbar { }
 
-                    // Empty-session welcome (lifecycle roadmap Phase 3,
-                    // CapCut-home-lite): a fresh session gets the lifecycle
-                    // entry points where the media grid will live once
-                    // something is imported or opened. Recents reuse the same
-                    // MRU the File menu shows (newest first, dead paths
-                    // pruned on read).
-                    if root.session-empty: VerticalLayout {
-                        vertical-stretch: 1;
-                        padding: AppStore.theme.metrics.spacing.lg;
-                        spacing: AppStore.theme.metrics.spacing.md;
-                        alignment: start;
-
-                        CutlassText {
-                            text: "Get started";
-                            style: AppStore.theme.typography.heading-sm;
-                        }
-
-                        CutlassText {
-                            text: "Create something new, or pick up where you left off.";
-                            style: AppStore.theme.typography.caption;
-                            foreground: AppStore.theme.text.secondary;
-                            wrap: word-wrap;
-                        }
-
-                        HorizontalLayout {
-                            spacing: AppStore.theme.metrics.spacing.sm;
-                            alignment: start;
-
-                            AccentButton {
-                                label: "New project";
-                                clicked => {
-                                    EditorStore.on-new-requested();
-                                }
-                            }
-
-                            SubtleButton {
-                                label: "Open…";
-                                clicked => {
-                                    EditorStore.on-open-requested();
-                                }
-                            }
-                        }
-
-                        if EditorStore.recent-projects.length > 0: VerticalLayout {
-                            padding-top: AppStore.theme.metrics.spacing.md;
-                            spacing: AppStore.theme.metrics.spacing.xs;
-
-                            CutlassText {
-                                text: "Recent projects";
-                                style: AppStore.theme.typography.label;
-                                foreground: AppStore.theme.text.secondary;
-                            }
-
-                            for entry in EditorStore.recent-projects: Rectangle {
-                                height: 44px;
-                                border-radius: AppStore.theme.metrics.radius.sm;
-                                background: row-ta.has-hover
-                                    ? AppStore.theme.surface.content-background
-                                    : transparent;
-
-                                row-ta := TouchArea {
-                                    clicked => {
-                                        EditorStore.on-open-recent-requested(entry.path);
-                                    }
-                                }
-
-                                VerticalLayout {
-                                    padding-left: AppStore.theme.metrics.spacing.sm;
-                                    padding-right: AppStore.theme.metrics.spacing.sm;
-                                    alignment: center;
-                                    spacing: 2px;
-
-                                    CutlassText {
-                                        text: entry.name;
-                                        style: AppStore.theme.typography.body;
-                                        overflow: elide;
-                                    }
-
-                                    CutlassText {
-                                        text: entry.path;
-                                        style: AppStore.theme.typography.label;
-                                        foreground: AppStore.theme.text.secondary;
-                                        overflow: elide;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if !root.session-empty: media-grid := CutlassGridView {
+                    media-grid := CutlassGridView {
                         show-horizontal-scrollbar: false;
                         show-vertical-scrollbar: false;
                         vertical-stretch: 1;

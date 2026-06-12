@@ -1,74 +1,1226 @@
-import { LineEdit } from "std-widgets.slint";
-import { CutlassText } from "../../components/index.slint";
-import { AppStore } from "../../store/index.slint";
+import { Slider } from "std-widgets.slint";
+import {
+    CutlassScrollView,
+    CutlassText,
+    PanelHeader,
+} from "../../components/index.slint";
+import {
+    AppStore,
+    EditorStore,
+    TimelineStore,
+    PreviewStore,
+} from "../../store/index.slint";
 import { InspectorBackend } from "../../lib/inspector-backend.slint";
 import { Clip } from "../../models/index.slint";
 
-// Basic property sheet for text / title clips.
+component InspectorDivider inherits Rectangle {
+    height: 1px;
+    background: #ffffff12;
+}
+
+component PillTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+
+    height: 30px;
+    horizontal-stretch: 1;
+    border-radius: AppStore.theme.metrics.radius.md;
+    background: selected ? #444444 : (ta.has-hover && enabled ? #ffffff10 : #1b1b1b);
+    opacity: enabled ? 1.0 : 0.45;
+
+    CutlassText {
+        width: 100%;
+        height: 100%;
+        text: root.label;
+        style: AppStore.theme.typography.label;
+        foreground: selected ? AppStore.theme.text.primary : AppStore.theme.text.secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+    }
+}
+
+component CategoryTab inherits Rectangle {
+    in property <string> label;
+    in-out property <bool> selected: false;
+    in property <bool> enabled: false;
+
+    width: label-text.preferred-width + 28px;
+    height: 50px;
+    border-radius: AppStore.theme.metrics.radius.sm;
+    background: transparent;
+    opacity: enabled || selected ? 1.0 : 0.78;
+
+    label-text := CutlassText {
+        width: 100%;
+        height: 100%;
+        text: root.label;
+        style: AppStore.theme.typography.heading-md;
+        foreground: root.selected ? #00E5C7 : AppStore.theme.text.primary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+    }
+}
+
+component SectionHeader inherits HorizontalLayout {
+    in property <string> title;
+    in property <bool> active: true;
+    in property <bool> checkable: false;
+
+    spacing: AppStore.theme.metrics.spacing.sm;
+    height: 24px;
+    vertical-stretch: 0;
+    opacity: active ? 1.0 : 0.45;
+
+    if checkable: Rectangle {
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: active ? #00E5C7 : #ffffff2f;
+        background: active ? #00E5C7 : #ffffff14;
+        vertical-stretch: 0;
+        y: 5px;
+    }
+
+    CutlassText {
+        text: root.title + " ^";
+        style: AppStore.theme.typography.heading-sm;
+        foreground: active ? AppStore.theme.text.primary : AppStore.theme.text.secondary;
+        vertical-alignment: TextVerticalAlignment.center;
+    }
+
+    Rectangle {
+        horizontal-stretch: 1;
+    }
+
+    CutlassText {
+        text: active ? "reset" : "";
+        style: AppStore.theme.typography.caption;
+        foreground: AppStore.theme.text.muted;
+        vertical-alignment: TextVerticalAlignment.center;
+    }
+}
+
+component FakeField inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: false;
+
+    height: 28px;
+    horizontal-stretch: 1;
+    border-radius: AppStore.theme.metrics.radius.sm;
+    background: #1a1a1a;
+    opacity: enabled ? 1.0 : 0.45;
+
+    CutlassText {
+        x: AppStore.theme.metrics.spacing.sm;
+        width: parent.width - 2 * AppStore.theme.metrics.spacing.sm;
+        height: parent.height;
+        text: root.text;
+        style: AppStore.theme.typography.body;
+        foreground: AppStore.theme.text.secondary;
+        vertical-alignment: TextVerticalAlignment.center;
+        overflow: TextOverflow.elide;
+    }
+}
+
+component MultilineTextInput inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder-text;
+
+    callback edited(text: string);
+    callback commit(text: string);
+
+    private property <length> pad: AppStore.theme.metrics.spacing.md;
+
+    height: 96px;
+    horizontal-stretch: 1;
+    border-radius: AppStore.theme.metrics.radius.md;
+    border-width: input.has-focus ? 1px : 0px;
+    border-color: #00E5C7;
+    background: input.has-focus ? #202020 : #1a1a1a;
+    clip: true;
+    forward-focus: input;
+
+    animate background {
+        duration: 120ms;
+        easing: ease-out;
+    }
+    animate border-width {
+        duration: 120ms;
+        easing: ease-out;
+    }
+
+    editor-scroll := CutlassScrollView {
+        x: root.pad;
+        y: root.pad;
+        width: max(0px, root.width - 2 * root.pad);
+        height: max(0px, root.height - 2 * root.pad);
+        viewport-width: self.width;
+        viewport-height: max(self.height, input.preferred-height);
+        show-horizontal-scrollbar: false;
+        show-vertical-scrollbar: input.preferred-height > self.height;
+
+        input := TextInput {
+            width: editor-scroll.width;
+            height: max(editor-scroll.height, self.preferred-height);
+            text <=> root.text;
+            single-line: false;
+            wrap: word-wrap;
+            color: AppStore.theme.text.primary;
+            font-size: AppStore.theme.typography.body.size;
+            font-weight: AppStore.theme.typography.body.weight;
+            selection-background-color: #00E5C755;
+            selection-foreground-color: AppStore.theme.text.primary;
+            page-height: editor-scroll.height;
+            accessible-role: none;
+
+            changed has-focus => {
+                if (!self.has-focus) {
+                    root.commit(self.text);
+                }
+            }
+
+            edited => {
+                root.edited(self.text);
+            }
+
+            cursor-position-changed(cpos) => {
+                if (cpos.y + editor-scroll.viewport-y < 8px) {
+                    editor-scroll.viewport-y = min(0px, max(
+                        editor-scroll.height - self.height,
+                        -cpos.y + 8px,
+                    ));
+                } else if (cpos.y + editor-scroll.viewport-y > editor-scroll.height - 24px) {
+                    editor-scroll.viewport-y = min(0px, max(
+                        editor-scroll.height - self.height,
+                        editor-scroll.height - cpos.y - 24px,
+                    ));
+                }
+            }
+        }
+    }
+
+    placeholder := CutlassText {
+        x: root.pad;
+        y: root.pad;
+        width: max(0px, root.width - 2 * root.pad);
+        height: AppStore.theme.typography.body.size + 6px;
+        text: (root.text == "" && input.preedit-text == "") ? root.placeholder-text : "";
+        style: AppStore.theme.typography.body;
+        foreground: AppStore.theme.text.muted;
+        vertical-alignment: TextVerticalAlignment.center;
+        accessible-role: none;
+    }
+}
+
+component LineTextInput inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder-text: "";
+    in property <TextHorizontalAlignment> horizontal-alignment: TextHorizontalAlignment.left;
+    in property <length> text-padding-left: AppStore.theme.metrics.spacing.sm;
+    in property <length> text-padding-right: AppStore.theme.metrics.spacing.sm;
+    in property <bool> read-only: false;
+    in property <bool> enabled: true;
+    out property <bool> has-focus: input.has-focus;
+
+    callback accepted(text: string);
+    callback edited(text: string);
+
+    height: 28px;
+    horizontal-stretch: 1;
+    border-radius: AppStore.theme.metrics.radius.sm;
+    border-width: input.has-focus ? 1px : 0px;
+    border-color: #00E5C7;
+    background: input.has-focus ? #202020 : #1a1a1a;
+    opacity: enabled ? 1.0 : 0.55;
+    clip: true;
+    forward-focus: input;
+
+    animate background {
+        duration: 120ms;
+        easing: ease-out;
+    }
+    animate border-width {
+        duration: 120ms;
+        easing: ease-out;
+    }
+
+    input := TextInput {
+        x: root.text-padding-left;
+        width: max(0px, root.width - root.text-padding-left - root.text-padding-right);
+        height: root.height;
+        text <=> root.text;
+        enabled: root.enabled;
+        read-only: root.read-only;
+        single-line: true;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: TextVerticalAlignment.center;
+        color: AppStore.theme.text.primary;
+        font-size: AppStore.theme.typography.body.size;
+        font-weight: AppStore.theme.typography.body.weight;
+        selection-background-color: #00E5C755;
+        selection-foreground-color: AppStore.theme.text.primary;
+        accessible-role: none;
+
+        accepted => {
+            root.accepted(self.text);
+        }
+
+        edited => {
+            root.edited(self.text);
+        }
+    }
+
+    placeholder := CutlassText {
+        x: root.text-padding-left;
+        width: max(0px, root.width - root.text-padding-left - root.text-padding-right);
+        height: root.height;
+        text: (root.text == "" && input.preedit-text == "") ? root.placeholder-text : "";
+        style: AppStore.theme.typography.body;
+        foreground: AppStore.theme.text.muted;
+        vertical-alignment: TextVerticalAlignment.center;
+        overflow: TextOverflow.elide;
+        accessible-role: none;
+    }
+}
+
+component IconButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <bool> enabled: false;
+
+    width: 32px;
+    height: 28px;
+    border-radius: AppStore.theme.metrics.radius.sm;
+    background: selected ? #4a4a4a : #ffffff10;
+    opacity: enabled ? 1.0 : 0.45;
+
+    CutlassText {
+        width: 100%;
+        height: 100%;
+        text: root.label;
+        style: AppStore.theme.typography.label;
+        foreground: AppStore.theme.text.primary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component DisabledSwatch inherits Rectangle {
+    in property <color> swatch-color: #ffffff;
+
+    width: 104px;
+    height: 28px;
+    border-radius: AppStore.theme.metrics.radius.sm;
+    background: #ffffff10;
+    opacity: 0.45;
+
+    Rectangle {
+        x: 3px;
+        y: 3px;
+        width: parent.width - 28px;
+        height: parent.height - 6px;
+        border-radius: AppStore.theme.metrics.radius.sm;
+        background: root.swatch-color;
+    }
+
+    CutlassText {
+        x: parent.width - 22px;
+        width: 18px;
+        height: parent.height;
+        text: "v";
+        style: AppStore.theme.typography.caption;
+        foreground: AppStore.theme.text.muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component PresetStyle inherits Rectangle {
+    in property <string> label: "Aa";
+    in property <color> foreground: #ffffff;
+    in property <color> fill: #4a4a4a;
+    in property <color> outline: transparent;
+    in property <bool> selected: false;
+
+    width: 50px;
+    height: 50px;
+    border-radius: AppStore.theme.metrics.radius.md;
+    background: selected ? #ffffff12 : #ffffff0d;
+    border-width: selected ? 2px : 0px;
+    border-color: #00E5C7;
+    opacity: 0.65;
+
+    Rectangle {
+        x: 7px;
+        y: 7px;
+        width: parent.width - 14px;
+        height: parent.height - 14px;
+        border-radius: AppStore.theme.metrics.radius.md;
+        background: root.fill;
+    }
+
+    Text {
+        width: 100%;
+        height: 100%;
+        text: root.label;
+        color: root.foreground;
+        font-size: 24px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component LabelCell inherits CutlassText {
+    in property <string> label;
+
+    text: label;
+    width: 96px;
+    height: 28px;
+    vertical-stretch: 0;
+    style: AppStore.theme.typography.label;
+    foreground: AppStore.theme.text.secondary;
+    vertical-alignment: TextVerticalAlignment.center;
+}
+
+component DisabledPropertyRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+
+    spacing: AppStore.theme.metrics.spacing.md;
+    height: 28px;
+    vertical-stretch: 0;
+    opacity: 0.55;
+
+    LabelCell {
+        label: root.label;
+    }
+
+    FakeField {
+        text: root.value;
+    }
+}
+
+component SliderRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <float> value;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <string> suffix;
+    in property <float> reset-value: 0;
+
+    callback preview(value: float);
+    callback commit(value: float);
+
+    spacing: AppStore.theme.metrics.spacing.md;
+    height: 28px;
+    vertical-stretch: 0;
+
+    changed value => {
+        sl.value = clamp(root.value, root.minimum, root.maximum);
+        num.text = Math.round(root.value) + "";
+    }
+
+    TouchArea {
+        width: 96px;
+        height: 28px;
+        vertical-stretch: 0;
+        mouse-cursor: MouseCursor.pointer;
+        double-clicked => {
+            root.commit(root.reset-value);
+        }
+
+        CutlassText {
+            width: 100%;
+            height: 100%;
+            text: root.label;
+            style: AppStore.theme.typography.label;
+            foreground: AppStore.theme.text.secondary;
+            vertical-alignment: TextVerticalAlignment.center;
+            overflow: TextOverflow.elide;
+        }
+    }
+
+    sl := Slider {
+        horizontal-stretch: 1;
+        height: 28px;
+        vertical-stretch: 0;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        value: clamp(root.value, root.minimum, root.maximum);
+
+        changed(v) => {
+            root.preview(v);
+        }
+
+        released(v) => {
+            root.commit(v);
+        }
+    }
+
+    num := LineTextInput {
+        width: 62px;
+        height: 28px;
+        vertical-stretch: 0;
+        horizontal-alignment: TextHorizontalAlignment.right;
+        text: Math.round(root.value) + "";
+
+        accepted(entered) => {
+            if (entered.is-float()) {
+                root.commit(entered.to-float());
+            }
+            self.text = Math.round(root.value) + "";
+        }
+    }
+
+    CutlassText {
+        width: 20px;
+        height: 28px;
+        vertical-stretch: 0;
+        text: root.suffix;
+        style: AppStore.theme.typography.label;
+        foreground: AppStore.theme.text.muted;
+        vertical-alignment: TextVerticalAlignment.center;
+    }
+}
+
+component NumberBox inherits Rectangle {
+    in property <string> prefix;
+    in property <float> value;
+    callback commit(value: float);
+
+    width: 92px;
+    height: 28px;
+    vertical-stretch: 0;
+
+    changed value => {
+        field.text = Math.round(root.value) + "";
+    }
+
+    field := LineTextInput {
+        width: 100%;
+        height: parent.height;
+        text-padding-left: 24px;
+        text-padding-right: AppStore.theme.metrics.spacing.xs;
+        horizontal-alignment: TextHorizontalAlignment.right;
+        text: Math.round(root.value) + "";
+
+        accepted(entered) => {
+            if (entered.is-float()) {
+                root.commit(entered.to-float());
+            }
+            self.text = Math.round(root.value) + "";
+        }
+    }
+
+    CutlassText {
+        x: AppStore.theme.metrics.spacing.sm;
+        width: 16px;
+        height: 100%;
+        text: root.prefix;
+        style: AppStore.theme.typography.label;
+        foreground: AppStore.theme.text.muted;
+        vertical-alignment: TextVerticalAlignment.center;
+        accessible-role: none;
+    }
+}
+
+component PositionRow inherits HorizontalLayout {
+    in property <float> x-value;
+    in property <float> y-value;
+
+    callback commit-x(value: float);
+    callback commit-y(value: float);
+
+    spacing: AppStore.theme.metrics.spacing.md;
+    height: 28px;
+    vertical-stretch: 0;
+
+    LabelCell {
+        label: "Position";
+    }
+
+    NumberBox {
+        prefix: "X";
+        value: root.x-value;
+        commit(v) => {
+            root.commit-x(v);
+        }
+    }
+
+    NumberBox {
+        prefix: "Y";
+        value: root.y-value;
+        commit(v) => {
+            root.commit-y(v);
+        }
+    }
+
+    Rectangle {
+        horizontal-stretch: 1;
+    }
+}
+
+component ToggleSwitch inherits Rectangle {
+    in property <bool> checked: true;
+    in property <bool> enabled: false;
+
+    width: 42px;
+    height: 22px;
+    vertical-stretch: 0;
+    border-radius: 11px;
+    background: checked ? #00E5C7 : #ffffff1a;
+    opacity: enabled ? 1.0 : 0.7;
+
+    Rectangle {
+        width: 16px;
+        height: 16px;
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        y: 3px;
+        border-radius: 8px;
+        background: #f7f7f7;
+    }
+}
+
+component DisabledEffectCard inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+
+    width: 78px;
+    height: 78px;
+    border-radius: AppStore.theme.metrics.radius.md;
+    background: #ffffff0a;
+    border-width: selected ? 2px : 0px;
+    border-color: #00E5C7;
+    opacity: 0.45;
+
+    CutlassText {
+        width: 100%;
+        height: 100%;
+        text: root.label;
+        style: AppStore.theme.typography.heading-md;
+        foreground: AppStore.theme.text.secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// CapCut-inspired property sheet for text / title clips. Only fields backed
+// by the current model are interactive; style/effect controls are shown as
+// disabled placeholders until text generator styling is persisted.
 export component TextInspector inherits VerticalLayout {
     in property <string> track-id;
     // Named `model` — `clip` is a built-in boolean on Slint elements.
     in property <Clip> model;
 
-    spacing: AppStore.theme.metrics.spacing.lg;
-    alignment: LayoutAlignment.start;
+    spacing: AppStore.theme.metrics.spacing.none;
 
     private property <string> bound-clip-id: model.id;
     private property <string> edit-text: model.text-content;
+    private property <float> canvas-w: EditorStore.project.sequence.width / 1px;
+    private property <float> canvas-h: EditorStore.project.sequence.height / 1px;
+    private property <bool> live: PreviewStore.gesture-active
+        && PreviewStore.gesture-clip == model.id
+        && PreviewStore.gesture.valid;
+    private property <float> pos-x: live ? PreviewStore.gesture.position-x : model.transform-position-x;
+    private property <float> pos-y: live ? PreviewStore.gesture.position-y : model.transform-position-y;
+    private property <float> scale-v: live ? PreviewStore.gesture.scale : model.transform-scale;
+    private property <float> rot-v: live ? PreviewStore.gesture.rotation : model.transform-rotation;
+    private property <float> opacity-v: live ? PreviewStore.gesture.opacity : model.transform-opacity;
 
     changed bound-clip-id => {
         edit-text = model.text-content;
     }
 
-    CutlassText {
-        text: "Title";
-        style: AppStore.theme.typography.heading-sm;
+    function apply(px: float, py: float, s: float, r: float, o: float, commit: bool) {
+        if (commit) {
+            if (px == model.transform-position-x
+                && py == model.transform-position-y
+                && s == model.transform-scale
+                && r == model.transform-rotation
+                && o == model.transform-opacity) {
+                if (PreviewStore.gesture-active && PreviewStore.gesture-clip == model.id) {
+                    EditorStore.on-preview-override-cleared(TimelineStore.playhead-tick);
+                }
+            } else {
+                EditorStore.on-clip-transform-committed(
+                    model.id, px, py, s, r, o, TimelineStore.playhead-tick);
+            }
+            PreviewStore.gesture-active = false;
+        } else {
+            PreviewStore.gesture-clip = model.id;
+            PreviewStore.gesture = {
+                valid: true,
+                moved: true,
+                position-x: px,
+                position-y: py,
+                scale: s,
+                rotation: r,
+                opacity: o,
+                snap-h: false,
+                snap-v: false,
+                guide-x: 0,
+                guide-y: 0,
+            };
+            PreviewStore.gesture-active = true;
+            EditorStore.on-preview-transform-overridden(
+                model.id, px, py, s, r, o, TimelineStore.playhead-tick);
+        }
     }
 
-    HorizontalLayout {
-        spacing: AppStore.theme.metrics.spacing.lg;
-        horizontal-stretch: 1;
+    PanelHeader {
+        CutlassScrollView {
+            width: 100%;
+            height: 100%;
+            viewport-width: category-tabs.preferred-width;
+            viewport-height: self.height;
+            show-vertical-scrollbar: false;
+            show-horizontal-scrollbar: false;
 
-        CutlassText {
-            text: "Name";
-            min-width: 72px;
-            style: AppStore.theme.typography.label;
-            foreground: AppStore.theme.text.secondary;
-        }
+            category-tabs := HorizontalLayout {
+                height: 100%;
+                spacing: AppStore.theme.metrics.spacing.sm;
+                padding-left: AppStore.theme.metrics.spacing.lg;
+                padding-right: AppStore.theme.metrics.spacing.lg;
 
-        CutlassText {
-            text: model.name;
-            horizontal-stretch: 1;
-            style: AppStore.theme.typography.body;
+                CategoryTab {
+                    label: "Text";
+                    selected: true;
+                    enabled: true;
+                }
+
+                CategoryTab {
+                    label: "Animation";
+                }
+
+                CategoryTab {
+                    label: "Tracking";
+                }
+
+                CategoryTab {
+                    label: "Text to speech";
+                }
+
+                CategoryTab {
+                    label: "AI avatars";
+                }
+            }
         }
     }
 
-    HorizontalLayout {
-        spacing: AppStore.theme.metrics.spacing.lg;
-        horizontal-stretch: 1;
+    CutlassScrollView {
+        vertical-stretch: 1;
+        viewport-width: root.width;
+        viewport-height: content.preferred-height;
+        show-horizontal-scrollbar: false;
 
-        CutlassText {
-            text: "Text";
-            min-width: 72px;
-            style: AppStore.theme.typography.label;
-            foreground: AppStore.theme.text.secondary;
-        }
+        content := VerticalLayout {
+            width: max(0px, root.width - AppStore.theme.scrollbar.size);
+            spacing: AppStore.theme.metrics.spacing.lg;
+            alignment: LayoutAlignment.start;
+            padding: AppStore.theme.metrics.spacing.lg;
 
-        LineEdit {
-            horizontal-stretch: 1;
-            text: root.edit-text;
-            placeholder-text: "Enter title text";
+            HorizontalLayout {
+                spacing: 1px;
+                height: 30px;
 
-            // Typing only updates the local field; the engine edit (one
-            // undoable history entry) commits on Enter so undo isn't spammed
-            // per keystroke and the projection republish can't fight the box.
-            edited(new-text) => {
-                root.edit-text = new-text;
+                PillTab {
+                    label: "Basic";
+                    selected: true;
+                }
+
+                PillTab {
+                    label: "Bubble";
+                    enabled: false;
+                }
+
+                PillTab {
+                    label: "Effects";
+                    enabled: false;
+                }
             }
 
-            accepted(new-text) => {
-                root.edit-text = new-text;
-                InspectorBackend.set-text-content(track-id, model.id, new-text);
+            InspectorDivider { }
+
+            MultilineTextInput {
+                text: root.edit-text;
+                placeholder-text: "Default text";
+
+                // Typing only updates the local field; the engine edit (one undoable
+                // history entry) commits on blur so undo isn't spammed per keystroke
+                // and the projection republish can't fight the box.
+                edited(new-text) => {
+                    root.edit-text = new-text;
+                }
+
+                commit(new-text) => {
+                    root.edit-text = new-text;
+                    if (new-text != model.text-content) {
+                        InspectorBackend.set-text-content(track-id, model.id, new-text);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+
+                LabelCell {
+                    label: "Font";
+                }
+
+                FakeField {
+                    text: "System";
+                }
+            }
+
+            DisabledPropertyRow {
+                label: "Font size";
+                value: "15";
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+
+                LabelCell {
+                    label: "Pattern";
+                }
+
+                IconButton {
+                    label: "B";
+                }
+
+                IconButton {
+                    label: "U";
+                }
+
+                IconButton {
+                    label: "I";
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+
+                LabelCell {
+                    label: "Case";
+                }
+
+                IconButton {
+                    label: "TT";
+                }
+
+                IconButton {
+                    label: "tt";
+                }
+
+                IconButton {
+                    label: "Tt";
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+
+                LabelCell {
+                    label: "Color";
+                }
+
+                DisabledSwatch {
+                    swatch-color: #ffffff;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+                opacity: 0.55;
+
+                LabelCell {
+                    label: "Spacing";
+                }
+
+                NumberBox {
+                    prefix: "C";
+                    value: 0;
+                }
+
+                NumberBox {
+                    prefix: "L";
+                    value: 0;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+                opacity: 0.55;
+
+                LabelCell {
+                    label: "Alignment";
+                }
+
+                IconButton {
+                    label: "|<";
+                    selected: true;
+                }
+
+                IconButton {
+                    label: "-";
+                }
+
+                IconButton {
+                    label: ">|";
+                }
+
+                IconButton {
+                    label: "T";
+                }
+
+                IconButton {
+                    label: "M";
+                }
+
+                IconButton {
+                    label: "B";
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            InspectorDivider { }
+
+            CutlassText {
+                text: "Preset style";
+                style: AppStore.theme.typography.label;
+                foreground: AppStore.theme.text.secondary;
+            }
+
+            CutlassScrollView {
+                width: 100%;
+                height: 50px;
+                viewport-width: preset-styles.preferred-width;
+                viewport-height: self.height;
+                show-horizontal-scrollbar: false;
+                show-vertical-scrollbar: false;
+
+                preset-styles := HorizontalLayout {
+                    spacing: AppStore.theme.metrics.spacing.md;
+
+                    PresetStyle {
+                        label: "/";
+                        selected: true;
+                        foreground: AppStore.theme.text.muted;
+                        fill: #303030;
+                    }
+
+                    PresetStyle {
+                        foreground: #ffffff;
+                        fill: #111111;
+                    }
+
+                    PresetStyle {
+                        foreground: #ffffff;
+                        fill: #3f3f3f;
+                    }
+
+                    PresetStyle {
+                        foreground: #f2f2f2;
+                        fill: #8b6d4b;
+                    }
+
+                    PresetStyle {
+                        foreground: #fff157;
+                        fill: #1d1d1d;
+                    }
+
+                    PresetStyle {
+                        foreground: #ff3b3b;
+                        fill: #f5f5f5;
+                    }
+
+                    PresetStyle {
+                        foreground: #2bbcff;
+                        fill: #e7f5ff;
+                    }
+
+                    PresetStyle {
+                        foreground: #00ef66;
+                        fill: #151515;
+                    }
+                }
+            }
+
+            InspectorDivider { }
+
+            SectionHeader {
+                title: "Transform";
+            }
+
+            SliderRow {
+                label: "Scale";
+                suffix: "%";
+                value: root.scale-v * 100;
+                minimum: 1;
+                maximum: 400;
+                reset-value: 100;
+                preview(v) => {
+                    root.apply(root.pos-x, root.pos-y, max(v, 1) / 100, root.rot-v, root.opacity-v, false);
+                }
+                commit(v) => {
+                    root.apply(root.pos-x, root.pos-y, max(v, 1) / 100, root.rot-v, root.opacity-v, true);
+                }
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+
+                LabelCell {
+                    label: "Uniform scale";
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                ToggleSwitch {
+                    checked: true;
+                }
+            }
+
+            PositionRow {
+                x-value: root.pos-x * root.canvas-w;
+                y-value: root.pos-y * root.canvas-h;
+                commit-x(v) => {
+                    root.apply(v / root.canvas-w, root.pos-y, root.scale-v, root.rot-v, root.opacity-v, true);
+                }
+                commit-y(v) => {
+                    root.apply(root.pos-x, v / root.canvas-h, root.scale-v, root.rot-v, root.opacity-v, true);
+                }
+            }
+
+            SliderRow {
+                label: "Plane rotation";
+                suffix: "deg";
+                value: root.rot-v;
+                minimum: -180;
+                maximum: 180;
+                reset-value: 0;
+                preview(v) => {
+                    root.apply(root.pos-x, root.pos-y, root.scale-v, v, root.opacity-v, false);
+                }
+                commit(v) => {
+                    root.apply(root.pos-x, root.pos-y, root.scale-v, v, root.opacity-v, true);
+                }
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.sm;
+                opacity: 0.55;
+
+                IconButton {
+                    label: "|<";
+                    selected: true;
+                }
+
+                IconButton {
+                    label: "+";
+                }
+
+                IconButton {
+                    label: ">|";
+                }
+
+                IconButton {
+                    label: "T";
+                }
+
+                IconButton {
+                    label: "B";
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            InspectorDivider { }
+
+            SectionHeader {
+                title: "Blend";
+                active: true;
+                checkable: true;
+            }
+
+            SliderRow {
+                label: "Opacity";
+                suffix: "%";
+                value: root.opacity-v * 100;
+                minimum: 0;
+                maximum: 100;
+                reset-value: 100;
+                preview(v) => {
+                    root.apply(root.pos-x, root.pos-y, root.scale-v, root.rot-v, clamp(v, 0, 100) / 100, false);
+                }
+                commit(v) => {
+                    root.apply(root.pos-x, root.pos-y, root.scale-v, root.rot-v, clamp(v, 0, 100) / 100, true);
+                }
+            }
+
+            InspectorDivider { }
+
+            SectionHeader {
+                title: "Stroke";
+                active: false;
+                checkable: true;
+            }
+
+            DisabledPropertyRow {
+                label: "Color";
+                value: "Hidden";
+            }
+
+            DisabledPropertyRow {
+                label: "Thickness";
+                value: "40";
+            }
+
+            InspectorDivider { }
+
+            SectionHeader {
+                title: "Background";
+                active: false;
+                checkable: true;
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+
+                DisabledEffectCard {
+                    label: "ABC";
+                }
+
+                DisabledEffectCard {
+                    label: "AB";
+                }
+            }
+
+            DisabledPropertyRow {
+                label: "Color";
+                value: "Hidden";
+            }
+
+            DisabledPropertyRow {
+                label: "Opacity";
+                value: "100%";
+            }
+
+            DisabledPropertyRow {
+                label: "Rounded";
+                value: "0%";
+            }
+
+            InspectorDivider { }
+
+            SectionHeader {
+                title: "Glow";
+                active: false;
+                checkable: true;
+            }
+
+            HorizontalLayout {
+                spacing: AppStore.theme.metrics.spacing.md;
+
+                DisabledEffectCard {
+                    label: "Aa";
+                    selected: true;
+                }
+
+                DisabledEffectCard {
+                    label: "Aa";
+                }
+            }
+
+            DisabledPropertyRow {
+                label: "Intensity";
+                value: "30";
+            }
+
+            DisabledPropertyRow {
+                label: "Range";
+                value: "20";
+            }
+
+            InspectorDivider { }
+
+            SectionHeader {
+                title: "Shadow";
+                active: false;
+                checkable: true;
+            }
+
+            DisabledPropertyRow {
+                label: "Opacity";
+                value: "90%";
+            }
+
+            DisabledPropertyRow {
+                label: "Blur";
+                value: "15%";
+            }
+
+            DisabledPropertyRow {
+                label: "Distance";
+                value: "5";
+            }
+
+            HorizontalLayout {
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Rectangle {
+                    height: 28px;
+                    width: 116px;
+                    border-radius: AppStore.theme.metrics.radius.sm;
+                    background: #00E5C7;
+                    opacity: 0.45;
+
+                    CutlassText {
+                        width: 100%;
+                        height: 100%;
+                        text: "Save as preset";
+                        style: AppStore.theme.typography.label;
+                        foreground: #0A0A0A;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
     }
