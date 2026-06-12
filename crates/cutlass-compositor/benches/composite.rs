@@ -141,12 +141,68 @@ fn bench_vignette(c: &mut Criterion) {
     );
 }
 
+fn bench_sharpen(c: &mut Criterion) {
+    bench_effect(c, "sharpen", vec![LayerEffect::new("sharpen").with_param(0, 1.0)]);
+}
+
+fn bench_pixelate(c: &mut Criterion) {
+    bench_effect(c, "pixelate", vec![LayerEffect::new("pixelate").with_param(0, 16.0)]);
+}
+
+fn bench_glitch(c: &mut Criterion) {
+    bench_effect(
+        c,
+        "glitch",
+        vec![LayerEffect::new("glitch").with_param(0, 0.6).with_param(1, 3.0)],
+    );
+}
+
+fn bench_chromatic_aberration(c: &mut Criterion) {
+    bench_effect(
+        c,
+        "chromatic_aberration",
+        vec![LayerEffect::new("chromatic_aberration").with_param(0, 0.6)],
+    );
+}
+
+fn bench_grain(c: &mut Criterion) {
+    bench_effect(
+        c,
+        "grain",
+        vec![LayerEffect::new("grain").with_param(0, 0.4).with_param(1, 7.0)],
+    );
+}
+
+fn bench_glow(c: &mut Criterion) {
+    bench_effect(
+        c,
+        "glow",
+        vec![LayerEffect::new("glow").with_param(0, 0.6).with_param(1, 1.0)],
+    );
+}
+
+fn bench_zoom_blur(c: &mut Criterion) {
+    bench_effect(c, "zoom_blur", vec![LayerEffect::new("zoom_blur").with_param(0, 0.6)]);
+}
+
+fn bench_mirror(c: &mut Criterion) {
+    bench_effect(c, "mirror", vec![LayerEffect::new("mirror").with_param(0, 0.0)]);
+}
+
 criterion_group!(
     benches,
     bench_solid,
     bench_rgba_layer,
     bench_two_layers,
     bench_gaussian_blur,
-    bench_vignette
+    bench_vignette,
+    bench_sharpen,
+    bench_pixelate,
+    bench_glitch,
+    bench_chromatic_aberration,
+    bench_grain,
+    bench_glow,
+    bench_zoom_blur,
+    bench_mirror
 );
 criterion_main!(benches);
