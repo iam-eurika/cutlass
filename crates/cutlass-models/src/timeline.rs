@@ -69,6 +69,94 @@ impl MarkerColor {
     }
 }
 
+/// Canvas aspect-ratio presets (M1 canvas settings, the CapCut ratio list).
+/// Serialized by ratio name (`"16:9"`) so project files stay readable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CanvasAspect {
+    /// Follow the footage: canvas shape and size derive from the largest
+    /// video media on the timeline (the pre-canvas-settings behavior).
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "16:9")]
+    Wide16x9,
+    #[serde(rename = "9:16")]
+    Tall9x16,
+    #[serde(rename = "1:1")]
+    Square1x1,
+    #[serde(rename = "4:5")]
+    Portrait4x5,
+    #[serde(rename = "21:9")]
+    Cinema21x9,
+}
+
+impl CanvasAspect {
+    pub const ALL: [CanvasAspect; 6] = [
+        CanvasAspect::Auto,
+        CanvasAspect::Wide16x9,
+        CanvasAspect::Tall9x16,
+        CanvasAspect::Square1x1,
+        CanvasAspect::Portrait4x5,
+        CanvasAspect::Cinema21x9,
+    ];
+
+    /// `(w, h)` ratio for fixed presets; `None` follows the footage.
+    pub fn ratio(self) -> Option<(u32, u32)> {
+        match self {
+            CanvasAspect::Auto => None,
+            CanvasAspect::Wide16x9 => Some((16, 9)),
+            CanvasAspect::Tall9x16 => Some((9, 16)),
+            CanvasAspect::Square1x1 => Some((1, 1)),
+            CanvasAspect::Portrait4x5 => Some((4, 5)),
+            CanvasAspect::Cinema21x9 => Some((21, 9)),
+        }
+    }
+
+    /// The serialized name (`"auto"`, `"16:9"`, …) — also the UI label and
+    /// the agent-facing identifier.
+    pub fn name(self) -> &'static str {
+        match self {
+            CanvasAspect::Auto => "auto",
+            CanvasAspect::Wide16x9 => "16:9",
+            CanvasAspect::Tall9x16 => "9:16",
+            CanvasAspect::Square1x1 => "1:1",
+            CanvasAspect::Portrait4x5 => "4:5",
+            CanvasAspect::Cinema21x9 => "21:9",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.name() == name)
+    }
+}
+
+/// Per-project canvas settings (M1): aspect preset + background color.
+/// The default (`Auto` + black) reproduces the pre-canvas-settings render
+/// exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CanvasSettings {
+    #[serde(default, skip_serializing_if = "CanvasSettings::aspect_is_auto")]
+    pub aspect: CanvasAspect,
+    /// Opaque canvas background, `[r, g, b]`. Layers composite over it;
+    /// uncovered canvas shows it in preview and export.
+    #[serde(default, skip_serializing_if = "CanvasSettings::background_is_black")]
+    pub background: [u8; 3],
+}
+
+impl CanvasSettings {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn aspect_is_auto(aspect: &CanvasAspect) -> bool {
+        *aspect == CanvasAspect::Auto
+    }
+
+    fn background_is_black(background: &[u8; 3]) -> bool {
+        *background == [0, 0, 0]
+    }
+}
+
 /// A named, colored anchor point on the timeline ruler (M1 markers): the
 /// agent aligns edits to them, beat-sync (M8) will emit them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +203,11 @@ pub struct Timeline {
     /// project files load unchanged and marker-free saves stay byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     markers: Vec<Marker>,
+    /// Canvas settings (M1): aspect preset + background color. Optional +
+    /// defaulted so pre-canvas project files load unchanged and default
+    /// saves stay byte-identical.
+    #[serde(default, skip_serializing_if = "CanvasSettings::is_default")]
+    canvas: CanvasSettings,
 }
 
 impl Timeline {
@@ -125,7 +218,19 @@ impl Timeline {
             order: Vec::new(),
             clip_index: Map::default(),
             markers: Vec::new(),
+            canvas: CanvasSettings::default(),
         }
+    }
+
+    // --- canvas -------------------------------------------------------------
+
+    /// Canvas settings: aspect preset + background color.
+    pub fn canvas(&self) -> CanvasSettings {
+        self.canvas
+    }
+
+    pub fn set_canvas(&mut self, settings: CanvasSettings) {
+        self.canvas = settings;
     }
 
     // --- tracks -----------------------------------------------------------
@@ -708,6 +813,73 @@ mod tests {
             assert_eq!(color.rgba()[3], 0xFF, "palette colors are opaque");
             assert!(!color.name().is_empty());
         }
+    }
+
+    // --- canvas -------------------------------------------------------------
+
+    #[test]
+    fn canvas_defaults_to_auto_black_and_round_trips() {
+        let mut timeline = Timeline::new(R24);
+        assert!(timeline.canvas().is_default());
+        assert_eq!(timeline.canvas().aspect, CanvasAspect::Auto);
+        assert_eq!(timeline.canvas().background, [0, 0, 0]);
+
+        // Default settings serialize without the field; pre-canvas files
+        // (no `canvas` key) deserialize to the default.
+        let json = serde_json::to_value(&timeline).unwrap();
+        assert!(json.get("canvas").is_none());
+        let loaded: Timeline = serde_json::from_value(json).unwrap();
+        assert!(loaded.canvas().is_default());
+
+        timeline.set_canvas(CanvasSettings {
+            aspect: CanvasAspect::Tall9x16,
+            background: [20, 30, 40],
+        });
+        let json = serde_json::to_value(&timeline).unwrap();
+        assert_eq!(json["canvas"]["aspect"], "9:16");
+        assert_eq!(json["canvas"]["background"], serde_json::json!([20, 30, 40]));
+        let back: Timeline = serde_json::from_value(json).unwrap();
+        assert_eq!(back.canvas(), timeline.canvas());
+    }
+
+    #[test]
+    fn canvas_partial_fields_serialize_independently() {
+        let mut timeline = Timeline::new(R24);
+        // Only the aspect set: the black background stays off the wire.
+        timeline.set_canvas(CanvasSettings {
+            aspect: CanvasAspect::Square1x1,
+            background: [0, 0, 0],
+        });
+        let json = serde_json::to_value(&timeline).unwrap();
+        assert_eq!(json["canvas"]["aspect"], "1:1");
+        assert!(json["canvas"].get("background").is_none());
+
+        // Only the background set: auto aspect stays off the wire.
+        timeline.set_canvas(CanvasSettings {
+            aspect: CanvasAspect::Auto,
+            background: [255, 255, 255],
+        });
+        let json = serde_json::to_value(&timeline).unwrap();
+        assert!(json["canvas"].get("aspect").is_none());
+        assert_eq!(json["canvas"]["background"], serde_json::json!([255, 255, 255]));
+        let back: Timeline = serde_json::from_value(json).unwrap();
+        assert_eq!(back.canvas().background, [255, 255, 255]);
+        assert_eq!(back.canvas().aspect, CanvasAspect::Auto);
+    }
+
+    #[test]
+    fn canvas_aspect_names_round_trip() {
+        for aspect in CanvasAspect::ALL {
+            assert_eq!(CanvasAspect::from_name(aspect.name()), Some(aspect));
+            match aspect.ratio() {
+                None => assert_eq!(aspect, CanvasAspect::Auto),
+                Some((w, h)) => {
+                    assert!(w > 0 && h > 0);
+                    assert_eq!(aspect.name(), format!("{w}:{h}"));
+                }
+            }
+        }
+        assert_eq!(CanvasAspect::from_name("4:3"), None);
     }
 
     // --- Clone ------------------------------------------------------------

@@ -46,5 +46,5 @@ pub use schema::{ProjectSchema, PROJECT_SCHEMA_KIND, PROJECT_SCHEMA_VERSION};
 pub use time::{
     Rational, RationalTime, TimeRange, check_same_rate, rate_eq, resample, time_add, time_sub,
 };
-pub use timeline::{Marker, MarkerColor, Timeline};
+pub use timeline::{CanvasAspect, CanvasSettings, Marker, MarkerColor, Timeline};
 pub use track::{Track, TrackKind};
