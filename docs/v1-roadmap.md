@@ -309,10 +309,10 @@ M10 is performance, platform, and release hardening.
 
 Goal: nothing in the shipped app lies to users or loses their work.
 
-- [ ] **Project lifecycle in the UI**: New / Open / Save / Save As /
+- [x] **Project lifecycle in the UI**: New / Open / Save / Save As /
       Recent menu, riding the existing `ProjectCommand::{Save, Open}`;
       dirty-state tracking (title-bar dot), save prompt on close.
-      Detailed plan: `project-lifecycle-roadmap.md` (Phases 1–3).
+      Detailed plan: `project-lifecycle-roadmap.md` (Phases 1–3 — done).
 - [x] **Autosave + crash recovery**: periodic snapshot to
       `~/.cutlass/autosave/`, offer restore on next launch
       (`project-lifecycle-roadmap.md` Phase 4 — done).

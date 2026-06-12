@@ -6,6 +6,7 @@ mod preview_gesture;
 mod preview_select;
 mod preview_worker;
 mod projection;
+mod recent;
 mod ruler;
 mod selection;
 mod snap;
@@ -122,10 +123,13 @@ async fn pick_open_path() -> Option<std::path::PathBuf> {
 // signal then continues or aborts it. A cancelled save picker aborts too
 // (the save handler clears `pending`).
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Transition {
     NewProject,
     OpenProject,
+    /// Open a known `.cutlass` path (Open Recent, welcome panel) — same
+    /// guard as `OpenProject`, no picker.
+    OpenPath(std::path::PathBuf),
     CloseWindow,
 }
 
@@ -146,6 +150,7 @@ fn perform_transition(handle: &preview_worker::WorkerHandle, transition: Transit
                 tracing::error!("failed to open project dialog: {e}");
             }
         }
+        Transition::OpenPath(path) => handle.open_project(path),
         Transition::CloseWindow => {
             let _ = slint::quit_event_loop();
         }
@@ -530,6 +535,29 @@ fn main() -> Result<(), slint::PlatformError> {
             Transition::NewProject,
         );
     });
+
+    // Open Recent (lifecycle roadmap Phase 3): a known path skips the
+    // picker but runs the same unsaved-changes guard. A file deleted since
+    // the list was read fails like any open (session-error dialog).
+    let recent_handle = preview_worker.handle();
+    let app_weak = app.as_weak();
+    let recent_pending = pending_transition.clone();
+    let recent_guard = guard_open.clone();
+    editor.on_on_open_recent_requested(move |path| {
+        request_transition(
+            &app_weak,
+            &recent_handle,
+            &recent_pending,
+            &recent_guard,
+            Transition::OpenPath(std::path::PathBuf::from(path.as_str())),
+        );
+    });
+
+    // Seed the MRU list (File menu, welcome panel) from disk; the worker
+    // republishes it after every successful save/open.
+    editor.set_recent_projects(slint::ModelRc::new(slint::VecModel::from(recent::to_rows(
+        &recent::read(&recent::default_path()),
+    ))));
 
     // Window close — the title-bar ✕ and the OS close request both consult
     // the same guard before the event loop quits.

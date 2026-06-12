@@ -842,6 +842,7 @@ fn save_project_and_publish(engine: &mut Engine, path: Option<PathBuf>, ui: &UiS
     match engine.apply(Command::Project(ProjectCommand::Save { path: path.clone() })) {
         Ok(ApplyOutcome::Saved) => {
             info!(path = %path.display(), "project saved");
+            note_recent_project(&path, ui);
             publish_projection(engine, ui);
             notify_save_finished(ui, true);
         }
@@ -881,6 +882,7 @@ fn open_project_and_publish(
             for media in engine.project().media_iter() {
                 register_media_with_workers(media, thumbs, strips);
             }
+            note_recent_project(&path, ui);
             publish_projection(engine, ui);
             bump_session_epoch(ui);
         }
@@ -2447,6 +2449,24 @@ fn publish_session_error(ui: &UiSink, message: String) {
         }
     }) {
         error!("failed to publish session error: {e}");
+    }
+}
+
+/// Record `path` at the front of the recent-projects MRU (lifecycle
+/// roadmap Phase 3) and push the refreshed list to
+/// `EditorStore.recent-projects`. Called on every successful save and
+/// open — the moments a `.cutlass` path is proven real and current.
+fn note_recent_project(path: &Path, ui: &UiSink) {
+    let entries = crate::recent::note(&crate::recent::default_path(), path);
+    let editor_weak = ui.editor.clone();
+    if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Some(store) = editor_weak.upgrade() {
+            store.set_recent_projects(slint::ModelRc::new(slint::VecModel::from(
+                crate::recent::to_rows(&entries),
+            )));
+        }
+    }) {
+        error!("failed to publish recent projects: {e}");
     }
 }
 

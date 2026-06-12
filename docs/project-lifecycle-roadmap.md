@@ -136,16 +136,27 @@ and never losing work to a careless close.
       close-request (`Window::on_close_requested`, answering
       `KeepWindowShown`) both consult the guard before `quit_event_loop`.
 
-## Phase 3 — Recent projects
+## Phase 3 — Recent projects ✅
 
-- [ ] MRU list (last ~10 `.cutlass` paths) persisted in the user config
-      dir (`~/.cutlass/recent.json`); updated on save/open; missing files
-      pruned on read.
-- [ ] Surfaced in the UI: a File menu on the title bar (New / Open /
-      Open Recent / Save / Save As) — the menu is also where Phase 1's
-      Save button folds into once it exists.
-- [ ] Optional polish: empty-session welcome state in the library panel
-      ("New project / Open / Recent…"), CapCut-home-lite.
+- [x] MRU list (last 10 `.cutlass` paths, newest first) persisted in the
+      user config dir (`~/.cutlass/recent.json`): the worker notes every
+      *successful* save and open — the moments a path is proven real —
+      and republishes `EditorStore.recent-projects`; main.rs seeds the
+      list at launch; missing files are pruned on read so the UI never
+      offers a dead path (`src/recent.rs`, unit-tested).
+- [x] Surfaced in the UI: a File menu on the title bar (New Project /
+      Open… / Open Recent ▸ / Save / Save As…) — a native Slint
+      `ContextMenuArea` under a quiet File button next to the brand.
+      Phase 1's standalone Save button folded into the menu as planned
+      (still gated on dirty-or-never-saved; the title-bar dot stays the
+      save-state surface). Open Recent routes a known path through the
+      same unsaved-changes guard as Cmd+O, just without the picker; a
+      file deleted since the list was read fails like any open and
+      surfaces in the session-error dialog.
+- [x] Optional polish: empty-session welcome state in the library panel
+      (CapCut-home-lite): a fresh session (no media, no tracks) shows
+      "Get started" — New project / Open… buttons and the clickable
+      recents list — where the media grid will live.
 
 ## Phase 4 — Autosave & crash recovery ✅
 
@@ -197,7 +208,11 @@ Tracked as its own M0 item; lands here because open is its entry point.
   complain.
 - `Project.title` and the file name are independent (CapCut names
   projects; we name files). A rename affordance — and whether save-as
-  retitles the project — is Phase 3 menu territory.
+  retitles the project — remains unbuilt; the Phase 3 File menu is where
+  it would live.
+- No "Clear Recent Projects" menu item: entries leave the MRU only by
+  falling off the 10-entry cap or their file disappearing. Add to the
+  Open Recent submenu if anyone asks.
 - Autosave of huge projects is an unmeasured cost (the revision check
   caps it at one JSON write per actual change, but a single write on the
   worker thread still steals from preview); profile before optimizing.

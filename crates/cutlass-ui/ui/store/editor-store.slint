@@ -1,6 +1,14 @@
 import { Project } from "../models/index.slint";
 import { ClipMove } from "../lib/drag-backend.slint";
 
+// A recently used project file (lifecycle roadmap Phase 3): `name` is the
+// file stem shown in the File menu and the welcome panel, `path` the full
+// path handed back to `on-open-recent-requested`.
+export struct RecentProject {
+    name: string,
+    path: string,
+}
+
 // Slint-side view model. This is a read-only projection of the engine's
 // project: the worker thread publishes a fresh `project` (built in
 // `src/projection.rs`) on startup and after every mutation. The default below
@@ -102,6 +110,11 @@ export global EditorStore {
     // main.rs runs the unsaved-changes guard first, then the open picker.
     callback on-open-requested();
     callback on-new-requested();
+    // Open a specific .cutlass file (Open Recent, welcome panel): same
+    // unsaved-changes guard as on-open-requested, no picker — the path is
+    // already known. A file that vanished since the list was read fails
+    // like any open and surfaces through `session-error`.
+    callback on-open-recent-requested(path: string);
     // Rust→Rust completion signal: the worker invokes it after every save
     // attempt; main.rs handles it to continue (or abort) a guarded
     // transition (open/new/close) that chose "Save" first.
@@ -124,6 +137,11 @@ export global EditorStore {
     // Non-empty mounts the error dialog (save/open failures); dismissing
     // clears it. Worker-set, UI-cleared.
     in-out property <string> session-error: "";
+    // MRU project list, newest first (lifecycle roadmap Phase 3): loaded
+    // from ~/.cutlass/recent.json at launch (main.rs), republished by the
+    // worker after every successful save/open. Drives the File menu's
+    // Open Recent submenu and the library welcome panel.
+    in-out property <[RecentProject]> recent-projects: [];
 
     // Engine history state, republished by the worker after every
     // mutation — drives the toolbar's undo/redo enabled states.
@@ -143,5 +161,6 @@ export global EditorStore {
             tracks: [],
         },
         media: [],
+        media-audio: [],
     };
 }

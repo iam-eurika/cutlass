@@ -51,6 +51,12 @@ pub fn project_to_slint(
 
     let id = project.id.raw().to_string();
 
+    let pool = media_pool(project);
+    // Audio-only subset for the library's Audio > Local section — projected
+    // here because Slint's `for` can't filter a model. `Media` clones are
+    // cheap (the thumbnail is a refcounted image handle).
+    let audio_pool: Vec<Media> = pool.iter().filter(|m| m.is_audio).cloned().collect();
+
     Project {
         id: id.clone().into(),
         title: project.name.clone().into(),
@@ -63,7 +69,8 @@ pub fn project_to_slint(
             height,
             tracks: model(tracks),
         },
-        media: model(media_pool(project)),
+        media: model(pool),
+        media_audio: model(audio_pool),
     }
 }
 

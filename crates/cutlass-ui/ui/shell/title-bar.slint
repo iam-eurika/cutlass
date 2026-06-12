@@ -1,9 +1,9 @@
-// Frameless-window title bar (CapCut layout): brand at the left, project
-// title centered, Export and the window controls at the right. The whole
-// strip doubles as the OS drag region — press-and-move anywhere that isn't
-// a button moves the window, double-click toggles maximize. Buttons are
-// declared after the drag TouchArea so they stack above it and keep their
-// clicks.
+// Frameless-window title bar (CapCut layout): brand and the File menu at
+// the left, project title centered, Export and the window controls at the
+// right. The whole strip doubles as the OS drag region — press-and-move
+// anywhere that isn't a button moves the window, double-click toggles
+// maximize. Buttons are declared after the drag TouchArea so they stack
+// above it and keep their clicks.
 
 import { CutlassText, AccentButton, SubtleButton } from "../components/index.slint";
 import { AppStore, EditorStore } from "../store/index.slint";
@@ -112,31 +112,76 @@ export component TitleBar inherits Rectangle {
             }
         }
 
-        // Flexible middle: stays empty (the centered title paints at bar
-        // level) and stays draggable — plain rectangles don't intercept
-        // the drag TouchArea below.
         Rectangle {
-            horizontal-stretch: 1;
+            width: AppStore.theme.metrics.spacing.sm;
         }
 
         VerticalLayout {
             alignment: center;
 
-            // Quiet twin of Cmd/Ctrl+S — discoverable saving for mouse
-            // users. Disabled when there is nothing to write (clean and
-            // already on disk); a never-saved session stays saveable so
-            // the first save can pick a path.
-            SubtleButton {
-                label: "Save";
-                enabled: EditorStore.project-dirty || !EditorStore.project-has-path;
-                clicked => {
-                    EditorStore.on-save-requested(false);
+            // File menu (lifecycle roadmap Phase 3): New / Open / Open
+            // Recent / Save / Save As. Phase 1's standalone Save button
+            // folded in here; the dirty dot in the title still marks
+            // unsaved work. The recents submenu mirrors
+            // EditorStore.recent-projects (newest first, dead paths pruned
+            // on read) and grays out while empty.
+            file-menu := ContextMenuArea {
+                width: file-button.width;
+                height: file-button.height;
+
+                Menu {
+                    MenuItem {
+                        title: "New Project";
+                        activated => {
+                            EditorStore.on-new-requested();
+                        }
+                    }
+                    MenuItem {
+                        title: "Open…";
+                        activated => {
+                            EditorStore.on-open-requested();
+                        }
+                    }
+                    Menu {
+                        title: "Open Recent";
+                        enabled: EditorStore.recent-projects.length > 0;
+                        for entry in EditorStore.recent-projects: MenuItem {
+                            title: entry.name;
+                            activated => {
+                                EditorStore.on-open-recent-requested(entry.path);
+                            }
+                        }
+                    }
+                    MenuSeparator { }
+                    MenuItem {
+                        title: "Save";
+                        enabled: EditorStore.project-dirty || !EditorStore.project-has-path;
+                        activated => {
+                            EditorStore.on-save-requested(false);
+                        }
+                    }
+                    MenuItem {
+                        title: "Save As…";
+                        activated => {
+                            EditorStore.on-save-requested(true);
+                        }
+                    }
+                }
+
+                file-button := SubtleButton {
+                    label: "File";
+                    clicked => {
+                        file-menu.show({ x: 0, y: file-button.height });
+                    }
                 }
             }
         }
 
+        // Flexible middle: stays empty (the centered title paints at bar
+        // level) and stays draggable — plain rectangles don't intercept
+        // the drag TouchArea below.
         Rectangle {
-            width: AppStore.theme.metrics.spacing.sm;
+            horizontal-stretch: 1;
         }
 
         VerticalLayout {

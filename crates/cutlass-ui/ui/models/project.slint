@@ -193,4 +193,7 @@ export struct Project {
     sequence: Sequence,
     // Imported media pool, shown in the Library panel.
     media: [Media],
+    // Audio-only subset of `media`, projected separately because Slint's
+    // `for` can't filter a model — feeds the Audio tab's Local section.
+    media-audio: [Media],
 }
