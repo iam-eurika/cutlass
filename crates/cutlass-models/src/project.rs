@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::Map;
-use crate::clip::{Clip, ClipParam, ClipSource, ClipTransform, Generator, ParamValue};
+use crate::clip::{Clip, ClipParam, ClipSource, ClipTransform, CropRect, Generator, ParamValue};
 use crate::error::ModelError;
 use crate::ids::{ClipId, MediaId, ProjectId, TrackId};
 use crate::media::MediaSource;
@@ -408,7 +408,7 @@ impl Project {
         let left_tl = TimeRange::at_rate(tl.start.value, at.value - tl.start.value, tl_rate);
         let right_tl = TimeRange::at_rate(at.value, tl.end_tick() - at.value, tl_rate);
 
-        let (new_left_source, new_clip) = match clip.content.clone() {
+        let (new_left_source, mut new_clip) = match clip.content.clone() {
             ClipSource::Media { media, source } => {
                 let media_fps = self
                     .media
@@ -452,6 +452,10 @@ impl Project {
             }
             ClipSource::Generated(generator) => (None, Clip::generated(generator, right_tl)),
         };
+        // Framing is identical on both halves: crop and flips ride along.
+        new_clip.crop = clip.crop;
+        new_clip.flip_h = clip.flip_h;
+        new_clip.flip_v = clip.flip_v;
 
         let track_id = self
             .timeline
@@ -666,6 +670,42 @@ impl Project {
         clip.volume = volume;
         clip.fade_in = fade_in.value;
         clip.fade_out = fade_out.value;
+        Ok(())
+    }
+
+    /// Set a clip's framing (CapCut crop, M1): the normalized kept region
+    /// plus horizontal/vertical mirroring. Visual clips only — audio has no
+    /// frame to crop. Rejected on a degenerate or out-of-frame crop rect.
+    pub fn set_clip_crop(
+        &mut self,
+        clip_id: ClipId,
+        crop: CropRect,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> Result<(), ModelError> {
+        crop.validate()?;
+        let track_id = self
+            .timeline
+            .track_of(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        let kind = self
+            .timeline
+            .track(track_id)
+            .ok_or(ModelError::UnknownTrack(track_id))?
+            .kind;
+        if !kind.is_visual() {
+            return Err(ModelError::IncompatibleTrackKind {
+                track: track_id,
+                kind,
+            });
+        }
+        let clip = self
+            .timeline
+            .clip_mut(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        clip.crop = crop;
+        clip.flip_h = flip_h;
+        clip.flip_v = flip_v;
         Ok(())
     }
 
@@ -1369,6 +1409,65 @@ mod tests {
         assert_eq!((left.volume, right.volume), (0.5, 0.5));
         assert_eq!((left.fade_in, left.fade_out), (10, 0));
         assert_eq!((right.fade_in, right.fade_out), (0, 20));
+    }
+
+    // --- set_clip_crop (M1) ---------------------------------------------------
+
+    #[test]
+    fn set_clip_crop_sets_framing() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        let crop = CropRect { x: 0.25, y: 0.0, w: 0.5, h: 1.0 };
+        project.set_clip_crop(clip, crop, true, false).unwrap();
+        let c = project.clip(clip).unwrap();
+        assert_eq!(c.crop, crop);
+        assert!(c.flip_h && !c.flip_v);
+        assert!(c.has_custom_crop());
+
+        // Back to the full frame clears the custom-framing state.
+        project.set_clip_crop(clip, CropRect::FULL, false, false).unwrap();
+        assert!(!project.clip(clip).unwrap().has_custom_crop());
+    }
+
+    #[test]
+    fn set_clip_crop_rejects_invalid_targets() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        // Invalid rects bounce.
+        assert!(matches!(
+            project.set_clip_crop(clip, CropRect { x: 0.8, y: 0.0, w: 0.5, h: 1.0 }, false, false),
+            Err(ModelError::InvalidParam(_))
+        ));
+
+        // Audio lanes have no frame to crop.
+        let audio = project.add_track(TrackKind::Audio, "A1");
+        let audio_clip = project.add_clip(audio, media_id, tr(0, 50), rt(0)).unwrap();
+        assert!(matches!(
+            project.set_clip_crop(audio_clip, CropRect::FULL, true, false),
+            Err(ModelError::IncompatibleTrackKind { .. })
+        ));
+
+        assert_eq!(
+            project.set_clip_crop(ClipId::from_raw(404), CropRect::FULL, false, false),
+            Err(ModelError::UnknownClip(ClipId::from_raw(404)))
+        );
+    }
+
+    #[test]
+    fn split_keeps_crop_and_flips_on_both_halves() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+        let crop = CropRect { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
+        project.set_clip_crop(clip, crop, true, true).unwrap();
+
+        let right = project.split_clip(clip, rt(60)).unwrap();
+        for id in [clip, right] {
+            let c = project.clip(id).unwrap();
+            assert_eq!(c.crop, crop);
+            assert!(c.flip_h && c.flip_v);
+        }
     }
 
     #[test]

@@ -263,13 +263,7 @@ mod tests {
             id,
             content: ClipSource::Generated(Generator::Adjustment),
             timeline: tr(20, 30),
-            link: None,
-            transform: ClipTransform::IDENTITY.into(),
-            speed: crate::time::Rational::new(1, 1),
-            reversed: false,
-            volume: 1.0,
-            fade_in: 0,
-            fade_out: 0,
+            ..generated_clip(20, 30)
         };
         let displaced = track.insert_clip(replacement).unwrap();
         assert_eq!(displaced.timeline, tr(0, 10));
@@ -325,27 +319,11 @@ mod tests {
         let mut track = video_track("V1");
         let a = Clip {
             id: ClipId::from_raw(2),
-            content: ClipSource::Generated(Generator::Adjustment),
-            timeline: tr(10, 5),
-            link: None,
-            transform: ClipTransform::IDENTITY.into(),
-            speed: crate::time::Rational::new(1, 1),
-            reversed: false,
-            volume: 1.0,
-            fade_in: 0,
-            fade_out: 0,
+            ..generated_clip(10, 5)
         };
         let b = Clip {
             id: ClipId::from_raw(1),
-            content: ClipSource::Generated(Generator::Adjustment),
-            timeline: tr(10, 5),
-            link: None,
-            transform: ClipTransform::IDENTITY.into(),
-            speed: crate::time::Rational::new(1, 1),
-            reversed: false,
-            volume: 1.0,
-            fade_in: 0,
-            fade_out: 0,
+            ..generated_clip(10, 5)
         };
         track.insert_clip(a);
         track.insert_clip(b);

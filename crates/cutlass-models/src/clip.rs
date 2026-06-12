@@ -277,6 +277,71 @@ impl Default for TextStyle {
     }
 }
 
+/// Normalized crop window into a clip's content (CapCut crop, M1).
+///
+/// Fractions of the uncropped frame: `(x, y)` is the kept region's top-left
+/// corner, `(w, h)` its extent — `{0, 0, 1, 1}` keeps everything. Crop
+/// happens in content space *before* placement: the kept region aspect-fits
+/// the canvas and transforms exactly like the full frame did, so cropping
+/// never moves the layer.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CropRect {
+    /// Left edge of the kept region, `0.0..1.0` of content width.
+    pub x: f32,
+    /// Top edge of the kept region, `0.0..1.0` of content height.
+    pub y: f32,
+    /// Kept width fraction, `(0.0..=1.0]`.
+    pub w: f32,
+    /// Kept height fraction, `(0.0..=1.0]`.
+    pub h: f32,
+}
+
+/// Smallest croppable extent per axis (1% of the content) — keeps the kept
+/// region non-degenerate so placement math and UV rects never collapse.
+pub const MIN_CROP_FRACTION: f32 = 0.01;
+
+impl CropRect {
+    /// Keep the whole frame (the default; absent from saves).
+    pub const FULL: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        w: 1.0,
+        h: 1.0,
+    };
+
+    /// True iff the crop keeps the whole frame.
+    pub fn is_full(&self) -> bool {
+        *self == Self::FULL
+    }
+
+    /// `Ok` iff the kept region is non-degenerate and inside the frame:
+    /// finite fields, `w`/`h` at least [`MIN_CROP_FRACTION`], edges within
+    /// `0..=1`.
+    pub fn validate(&self) -> Result<(), ModelError> {
+        let finite = [self.x, self.y, self.w, self.h].iter().all(|v| v.is_finite());
+        if !finite {
+            return Err(ModelError::InvalidParam("crop: non-finite component".into()));
+        }
+        if self.w < MIN_CROP_FRACTION || self.h < MIN_CROP_FRACTION {
+            return Err(ModelError::InvalidParam(format!(
+                "crop: kept region must be at least {MIN_CROP_FRACTION} per axis"
+            )));
+        }
+        if self.x < 0.0 || self.y < 0.0 || self.x + self.w > 1.0 || self.y + self.h > 1.0 {
+            return Err(ModelError::InvalidParam(
+                "crop: kept region must lie inside the frame".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for CropRect {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
 /// Spatial placement of a clip's content on the canvas (CapCut "Basic"
 /// transform: position, scale, rotation, opacity).
 ///
@@ -679,6 +744,20 @@ pub struct Clip {
     /// linear gain ramp `volume` → 0. Absent from saves while 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub fade_out: i64,
+    /// Normalized crop window into the content (CapCut crop, M1): only the
+    /// kept region renders, aspect-fit and transformed like the full frame
+    /// was. Meaningful on visual clips; full-frame (and absent from saves)
+    /// when never cropped, so old files load unchanged.
+    #[serde(default, skip_serializing_if = "CropRect::is_full")]
+    pub crop: CropRect,
+    /// Mirror the content left-right (after crop). Absent from saves while
+    /// false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip_h: bool,
+    /// Mirror the content top-bottom (after crop). Absent from saves while
+    /// false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip_v: bool,
 }
 
 /// Upper bound for [`Clip::volume`] (CapCut's 1000% ceiling).
@@ -745,6 +824,9 @@ impl Clip {
             volume: unit_volume(),
             fade_in: 0,
             fade_out: 0,
+            crop: CropRect::FULL,
+            flip_h: false,
+            flip_v: false,
         }
     }
 
@@ -761,7 +843,16 @@ impl Clip {
             volume: unit_volume(),
             fade_in: 0,
             fade_out: 0,
+            crop: CropRect::FULL,
+            flip_h: false,
+            flip_v: false,
         }
+    }
+
+    /// True iff the clip's framing differs from the default (full frame,
+    /// no mirroring) — drives the inspector reset state.
+    pub fn has_custom_crop(&self) -> bool {
+        !self.crop.is_full() || self.flip_h || self.flip_v
     }
 
     /// True iff the clip's audio mix differs from the default (full volume,
@@ -1233,6 +1324,74 @@ mod tests {
         // Out-of-span positions never go negative.
         assert_eq!(audio_gain_at(-3, 100, 1.0, 10, 0), 0.0);
         assert_eq!(audio_gain_at(105, 100, 1.0, 0, 10), 0.0);
+    }
+
+    // --- crop & flip (M1) ----------------------------------------------------
+
+    #[test]
+    fn default_crop_serializes_without_fields() {
+        let clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 10, R24));
+        assert!(!clip.has_custom_crop());
+        let value = serde_json::to_value(&clip).expect("serialize");
+        let map = value.as_object().expect("clip serializes to a map");
+        assert!(!map.contains_key("crop"), "full crop must stay absent");
+        assert!(!map.contains_key("flip_h"), "no flip must stay absent");
+        assert!(!map.contains_key("flip_v"), "no flip must stay absent");
+
+        // And a pre-crop save loads with the defaults.
+        let loaded: Clip = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(loaded.crop, CropRect::FULL);
+        assert!(!loaded.flip_h && !loaded.flip_v);
+    }
+
+    #[test]
+    fn custom_crop_roundtrips_through_serde() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 10, R24));
+        clip.crop = CropRect {
+            x: 0.1,
+            y: 0.2,
+            w: 0.5,
+            h: 0.25,
+        };
+        clip.flip_h = true;
+        assert!(clip.has_custom_crop());
+        let json = serde_json::to_string(&clip).expect("serialize");
+        let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(loaded.crop, clip.crop);
+        assert!(loaded.flip_h && !loaded.flip_v);
+    }
+
+    #[test]
+    fn crop_rect_validation() {
+        assert!(CropRect::FULL.validate().is_ok());
+        assert!(
+            CropRect {
+                x: 0.25,
+                y: 0.0,
+                w: 0.5,
+                h: 1.0,
+            }
+            .validate()
+            .is_ok()
+        );
+
+        // Degenerate extents.
+        for (w, h) in [(0.0, 1.0), (1.0, 0.0), (0.001, 1.0)] {
+            assert!(
+                CropRect { x: 0.0, y: 0.0, w, h }.validate().is_err(),
+                "w={w} h={h} must be rejected"
+            );
+        }
+        // Out of frame.
+        assert!(CropRect { x: -0.1, y: 0.0, w: 0.5, h: 0.5 }.validate().is_err());
+        assert!(CropRect { x: 0.6, y: 0.0, w: 0.5, h: 0.5 }.validate().is_err());
+        assert!(CropRect { x: 0.0, y: 0.9, w: 0.5, h: 0.2 }.validate().is_err());
+        // Non-finite.
+        assert!(
+            CropRect { x: f32::NAN, y: 0.0, w: 1.0, h: 1.0 }
+                .validate()
+                .is_err()
+        );
     }
 
     // --- transform ----------------------------------------------------------

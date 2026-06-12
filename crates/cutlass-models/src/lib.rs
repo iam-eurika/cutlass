@@ -31,9 +31,9 @@ mod track;
 pub type Map<K, V> = rustc_hash::FxHashMap<K, V>;
 
 pub use clip::{
-    AnimatedTransform, Clip, ClipParam, ClipSource, ClipTransform, Generator, MAX_CLIP_VOLUME,
-    ParamValue, Shape, TextAlignH, TextAlignV, TextBackground, TextCase, TextShadow, TextStroke,
-    TextStyle, audio_gain_at,
+    AnimatedTransform, Clip, ClipParam, ClipSource, ClipTransform, CropRect, Generator,
+    MAX_CLIP_VOLUME, MIN_CROP_FRACTION, ParamValue, Shape, TextAlignH, TextAlignV, TextBackground,
+    TextCase, TextShadow, TextStroke, TextStyle, audio_gain_at,
 };
 pub use error::ModelError;
 pub use param::{Easing, Keyframe, Lerp, Param};
