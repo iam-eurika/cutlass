@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/cutlass-ai",
     "crates/cutlass-app",
     "crates/cutlass-cache",
     "crates/cutlass-commands",

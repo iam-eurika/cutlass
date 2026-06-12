@@ -396,6 +396,7 @@ keyframes in preview and export, with CapCut's diamond UX.
 
 Goal: the reason Cutlass exists. Ships early because the command layer is
 ready today, then grows its vocabulary with each later milestone for free.
+Detailed plan: `ai-agent-roadmap.md`.
 
 - [ ] **`cutlass-ai` crate**: `ChatProvider` trait (chat + tool-calling,
       streaming); first providers: **local** (Ollama / llama.cpp-server

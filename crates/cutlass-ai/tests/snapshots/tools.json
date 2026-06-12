@@ -1,0 +1,743 @@
+{
+  "tools": [
+    {
+      "description": "Add a track to the timeline stack (video, audio, text, or sticker overlay lane).",
+      "name": "add_track",
+      "parameters": {
+        "$defs": {
+          "WireTrackKind": {
+            "description": "Track lane categories the agent may create or target.\n\nThe engine has more kinds (effect / filter / adjustment lanes); they are\nplaceholders that render nothing today, so the agent cannot create them.",
+            "oneOf": [
+              {
+                "const": "video",
+                "description": "Footage and other imported picture media.",
+                "type": "string"
+              },
+              {
+                "const": "audio",
+                "description": "Imported sound media.",
+                "type": "string"
+              },
+              {
+                "const": "text",
+                "description": "Titles and captions.",
+                "type": "string"
+              },
+              {
+                "const": "sticker",
+                "description": "Graphic overlays: solid colors and shapes.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Add a track to the timeline stack.",
+        "properties": {
+          "index": {
+            "description": "Stack position (0 = bottom layer, composited first). Omit to add on\ntop of the stack.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/WireTrackKind"
+          },
+          "name": {
+            "description": "Display name, e.g. \"V2\" or \"Music\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "title": "AddTrack",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Place a trimmed range of an imported media file on a video or audio track. Times are in seconds.",
+      "name": "add_clip",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Place a trimmed range of imported media on a video or audio track.",
+        "properties": {
+          "media": {
+            "description": "Media pool id of the source file.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_duration": {
+            "description": "Length of the source range to use, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "source_start": {
+            "description": "In-point within the source media, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "start": {
+            "description": "Where the clip begins on the timeline, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "track": {
+            "description": "Target track id.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "media",
+          "source_start",
+          "source_duration",
+          "start"
+        ],
+        "title": "AddClip",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Place a generated clip (text title, solid color, or shape) on a matching track. Times are in seconds.",
+      "name": "add_generated",
+      "parameters": {
+        "$defs": {
+          "WireGenerator": {
+            "description": "Synthetic clip content the agent may create.",
+            "oneOf": [
+              {
+                "description": "A title / text layer (rendered with the default style; styling is\npreserved when replacing the text of an existing text clip).",
+                "properties": {
+                  "content": {
+                    "description": "The text to display.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "text",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "content"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A solid color fill covering the canvas.",
+                "properties": {
+                  "rgba": {
+                    "description": "Fill color as `[red, green, blue, alpha]`, each 0-255.",
+                    "items": {
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxItems": 4,
+                    "minItems": 4,
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "solid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "rgba"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A filled vector shape centered on the canvas.",
+                "properties": {
+                  "rgba": {
+                    "description": "Fill color as `[red, green, blue, alpha]`, each 0-255.",
+                    "items": {
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxItems": 4,
+                    "minItems": 4,
+                    "type": "array"
+                  },
+                  "shape": {
+                    "$ref": "#/$defs/WireShape"
+                  },
+                  "type": {
+                    "const": "shape",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "shape",
+                  "rgba"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "WireShape": {
+            "description": "Geometry of a generated shape clip.",
+            "enum": [
+              "rectangle",
+              "ellipse"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Place a generated clip (text, solid color, shape) on a matching track.",
+        "properties": {
+          "duration": {
+            "description": "Clip length on the timeline, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "generator": {
+            "$ref": "#/$defs/WireGenerator"
+          },
+          "start": {
+            "description": "Where the clip begins on the timeline, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "track": {
+            "description": "Target track id. Text goes on text tracks; solids and shapes go on\nsticker (overlay) tracks.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "generator",
+          "start",
+          "duration"
+        ],
+        "title": "AddGenerated",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Replace a generated clip's content: change a title's text (styling preserved) or recolor a solid/shape. Not valid for media clips.",
+      "name": "set_generator",
+      "parameters": {
+        "$defs": {
+          "WireGenerator": {
+            "description": "Synthetic clip content the agent may create.",
+            "oneOf": [
+              {
+                "description": "A title / text layer (rendered with the default style; styling is\npreserved when replacing the text of an existing text clip).",
+                "properties": {
+                  "content": {
+                    "description": "The text to display.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "text",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "content"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A solid color fill covering the canvas.",
+                "properties": {
+                  "rgba": {
+                    "description": "Fill color as `[red, green, blue, alpha]`, each 0-255.",
+                    "items": {
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxItems": 4,
+                    "minItems": 4,
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "solid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "rgba"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "A filled vector shape centered on the canvas.",
+                "properties": {
+                  "rgba": {
+                    "description": "Fill color as `[red, green, blue, alpha]`, each 0-255.",
+                    "items": {
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxItems": 4,
+                    "minItems": 4,
+                    "type": "array"
+                  },
+                  "shape": {
+                    "$ref": "#/$defs/WireShape"
+                  },
+                  "type": {
+                    "const": "shape",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "shape",
+                  "rgba"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "WireShape": {
+            "description": "Geometry of a generated shape clip.",
+            "enum": [
+              "rectangle",
+              "ellipse"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Replace a generated clip's content (edit a title's text, recolor a\nshape). Rejected for media-backed clips. Replacing the text of a text\nclip keeps its current styling.",
+        "properties": {
+          "clip": {
+            "description": "The generated clip to modify.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "generator": {
+            "$ref": "#/$defs/WireGenerator"
+          }
+        },
+        "required": [
+          "clip",
+          "generator"
+        ],
+        "title": "SetGenerator",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Change a clip's placement on the canvas: position, scale, rotation, opacity. Omitted fields keep their current value. Not valid on audio tracks.",
+      "name": "set_clip_transform",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Change a clip's placement on the canvas. Omitted fields keep their\ncurrent value. Rejected for clips on audio tracks.",
+        "properties": {
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "opacity": {
+            "description": "Layer opacity, 0.0 (transparent) to 1.0 (opaque).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "position_x": {
+            "description": "Horizontal offset of the content center from the canvas center, as a\nfraction of canvas width (+ is right; 0.5 puts the center on the\nright edge).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "position_y": {
+            "description": "Vertical offset of the content center from the canvas center, as a\nfraction of canvas height (+ is down).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rotation": {
+            "description": "Clockwise rotation in degrees about the content center.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scale": {
+            "description": "Uniform scale; 1.0 fits the content inside the canvas (100%).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "clip"
+        ],
+        "title": "SetClipTransform",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Split a clip at a timeline position (seconds) into two abutting clips.",
+      "name": "split_clip",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Split a clip at a timeline position into two abutting clips.",
+        "properties": {
+          "at": {
+            "description": "Timeline position of the cut, in seconds. Must fall strictly inside\nthe clip.",
+            "format": "double",
+            "type": "number"
+          },
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clip",
+          "at"
+        ],
+        "title": "SplitClip",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Re-place / trim a clip to a new timeline start and duration in seconds. Trimming a media clip's head advances its source in-point.",
+      "name": "trim_clip",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Re-place / trim a clip to a new timeline range. Trimming the head of a\nmedia clip advances its source in-point to match (like dragging a trim\nhandle).",
+        "properties": {
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duration": {
+            "description": "New clip length, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "start": {
+            "description": "New timeline start of the clip, in seconds.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "clip",
+          "start",
+          "duration"
+        ],
+        "title": "TrimClip",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Move a clip to a track at a new start time (seconds), keeping its duration.",
+      "name": "move_clip",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Move a clip to a track at a new start time, keeping its duration.",
+        "properties": {
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "description": "New timeline start, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "to_track": {
+            "description": "Destination track id (may be the clip's current track).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clip",
+          "to_track",
+          "start"
+        ],
+        "title": "MoveClip",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Remove a clip, leaving a gap where it sat.",
+      "name": "remove_clip",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Remove a clip, leaving a gap where it sat.",
+        "properties": {
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clip"
+        ],
+        "title": "RemoveClip",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Remove a track and any clips still on it.",
+      "name": "remove_track",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Remove a track and any clips still on it.",
+        "properties": {
+          "track": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track"
+        ],
+        "title": "RemoveTrack",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Show or hide a visual track in the composite.",
+      "name": "set_track_enabled",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Toggle whether a visual track contributes to the composite.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "track": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "enabled"
+        ],
+        "title": "SetTrackEnabled",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Mute or unmute an audio track.",
+      "name": "set_track_muted",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Toggle whether an audio track is silenced.",
+        "properties": {
+          "muted": {
+            "type": "boolean"
+          },
+          "track": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "muted"
+        ],
+        "title": "SetTrackMuted",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Lock or unlock a track's clips against editing.",
+      "name": "set_track_locked",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Toggle whether a track's clips are editable (selection / move / trim).",
+        "properties": {
+          "locked": {
+            "type": "boolean"
+          },
+          "track": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "locked"
+        ],
+        "title": "SetTrackLocked",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Remove a clip and slide later clips on its track left to close the gap.",
+      "name": "ripple_delete",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Remove a clip and slide later clips on its track left to close the gap.",
+        "properties": {
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clip"
+        ],
+        "title": "RippleDelete",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Shift every clip on a track starting at/after a position by a signed number of seconds.",
+      "name": "shift_clips",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Shift every clip on a track that starts at or after `from` by `delta`\nseconds (negative shifts left). Rejected if a left shift would collide\nwith an earlier clip or push a clip before time 0.",
+        "properties": {
+          "delta": {
+            "description": "Signed shift amount in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "from": {
+            "description": "Clips starting at or after this timeline position (seconds) shift.",
+            "format": "double",
+            "type": "number"
+          },
+          "track": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "from",
+          "delta"
+        ],
+        "title": "ShiftClips",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Insert a trimmed range of media at a timeline position, shifting later clips right to make room. Times are in seconds.",
+      "name": "ripple_insert",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Insert a trimmed range of media at a timeline position, first shifting\nevery clip at or after that position right to make room.",
+        "properties": {
+          "at": {
+            "description": "Timeline position of the insert, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "media": {
+            "description": "Media pool id of the source file.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_duration": {
+            "description": "Length of the source range to use, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "source_start": {
+            "description": "In-point within the source media, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "track": {
+            "description": "Target track id (video or audio).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "media",
+          "source_start",
+          "source_duration",
+          "at"
+        ],
+        "title": "RippleInsert",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Link two or more clips so they select, move, and trim together (replaces their previous links).",
+      "name": "link_clips",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Put two or more clips into one link group: linked clips select, move,\nand trim together. Replaces any previous links on those clips.",
+        "properties": {
+          "clips": {
+            "description": "Ids of the clips to link (at least two).",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "clips"
+        ],
+        "title": "LinkClips",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Get the current state of the project: tracks, clips with ids and times in seconds, the media pool, and the user's selection and playhead. Call this whenever you are unsure about ids or timing.",
+      "name": "describe_project",
+      "parameters": {
+        "properties": {},
+        "type": "object"
+      }
+    }
+  ],
+  "version": 1
+}
