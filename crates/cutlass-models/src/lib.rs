@@ -13,6 +13,7 @@
 //! A [`Project`] owns one [`Timeline`] and a media pool of [`MediaSource`]s.
 
 mod clip;
+mod effects;
 mod error;
 mod ids;
 mod media;
@@ -34,6 +35,9 @@ pub use clip::{
     AnimatedTransform, Clip, ClipParam, ClipSource, ClipTransform, CropRect, Generator,
     MAX_CLIP_VOLUME, MIN_CROP_FRACTION, ParamValue, Shape, TextAlignH, TextAlignV, TextBackground,
     TextCase, TextShadow, TextStroke, TextStyle, audio_gain_at,
+};
+pub use effects::{
+    EffectInstance, EffectParamSpec, EffectSpec, effect_catalog, effect_spec,
 };
 pub use error::ModelError;
 pub use param::{Easing, Keyframe, Lerp, Param};

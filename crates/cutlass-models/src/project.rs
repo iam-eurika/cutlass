@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Map;
 use crate::clip::{Clip, ClipParam, ClipSource, ClipTransform, CropRect, Generator, ParamValue};
+use crate::effects::EffectInstance;
 use crate::error::ModelError;
 use crate::ids::{ClipId, MediaId, ProjectId, TrackId};
 use crate::media::MediaSource;
@@ -341,11 +342,17 @@ impl Project {
     ) -> Result<(), ModelError> {
         self.check_param_target(clip_id)?;
         let tick = self.keyframe_tick(clip_id, at)?;
-        self.timeline
+        let clip = self
+            .timeline
             .clip_mut(clip_id)
-            .ok_or(ModelError::UnknownClip(clip_id))?
-            .transform
-            .set_param_keyframe(param, tick, value, easing)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        match param {
+            ClipParam::Effect { effect, param } => {
+                let v = scalar_param(value)?;
+                effect_mut(clip, effect)?.set_param_keyframe(param as usize, tick, v, easing)
+            }
+            _ => clip.transform.set_param_keyframe(param, tick, value, easing),
+        }
     }
 
     /// Remove the keyframe at exactly `at` (absolute timeline position) on
@@ -358,11 +365,16 @@ impl Project {
     ) -> Result<(), ModelError> {
         self.check_param_target(clip_id)?;
         let tick = self.keyframe_tick(clip_id, at)?;
-        self.timeline
+        let clip = self
+            .timeline
             .clip_mut(clip_id)
-            .ok_or(ModelError::UnknownClip(clip_id))?
-            .transform
-            .remove_param_keyframe(param, tick)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        match param {
+            ClipParam::Effect { effect, param } => {
+                effect_mut(clip, effect)?.remove_param_keyframe(param as usize, tick)
+            }
+            _ => clip.transform.remove_param_keyframe(param, tick),
+        }
     }
 
     /// Replace one animatable property with a constant, dropping keyframes.
@@ -373,11 +385,64 @@ impl Project {
         value: ParamValue,
     ) -> Result<(), ModelError> {
         self.check_param_target(clip_id)?;
-        self.timeline
+        let clip = self
+            .timeline
             .clip_mut(clip_id)
-            .ok_or(ModelError::UnknownClip(clip_id))?
-            .transform
-            .set_param_constant(param, value)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        match param {
+            ClipParam::Effect { effect, param } => {
+                let v = scalar_param(value)?;
+                effect_mut(clip, effect)?.set_param_constant(param as usize, v)
+            }
+            _ => clip.transform.set_param_constant(param, value),
+        }
+    }
+
+    /// Append an effect (M4) to a visual clip's chain; the id must exist in
+    /// the catalog. Returns the new effect's index. Rejected on audio clips.
+    pub fn add_effect(&mut self, clip_id: ClipId, effect_id: &str) -> Result<usize, ModelError> {
+        let instance = EffectInstance::new(effect_id);
+        // Reject unknown ids up front (validate also covers an empty chain).
+        instance.validate()?;
+        self.check_param_target(clip_id)?;
+        let clip = self
+            .timeline
+            .clip_mut(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        clip.effects.push(instance);
+        Ok(clip.effects.len() - 1)
+    }
+
+    /// Remove the effect at `index` from a clip's chain.
+    pub fn remove_effect(&mut self, clip_id: ClipId, index: usize) -> Result<(), ModelError> {
+        let clip = self
+            .timeline
+            .clip_mut(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        if index >= clip.effects.len() {
+            return Err(ModelError::InvalidParam(format!(
+                "effect index {index} out of range"
+            )));
+        }
+        clip.effects.remove(index);
+        Ok(())
+    }
+
+    /// Set one effect parameter to a constant (the non-animated quick edit;
+    /// keyframes go through [`Self::set_param_keyframe`] with
+    /// [`ClipParam::Effect`]).
+    pub fn set_effect_param(
+        &mut self,
+        clip_id: ClipId,
+        index: usize,
+        param: usize,
+        value: f32,
+    ) -> Result<(), ModelError> {
+        let clip = self
+            .timeline
+            .clip_mut(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        effect_mut(clip, index as u32)?.set_param_constant(param, value)
     }
 
     /// Find a clip by ID anywhere on the timeline (O(1)).
@@ -456,6 +521,9 @@ impl Project {
         new_clip.crop = clip.crop;
         new_clip.flip_h = clip.flip_h;
         new_clip.flip_v = clip.flip_v;
+        // The effect chain copies to both halves (same as crop): each half is
+        // an independent clip that keeps the full chain.
+        new_clip.effects = clip.effects.clone();
 
         let track_id = self
             .timeline
@@ -870,6 +938,23 @@ fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => false,
+    }
+}
+
+/// The effect at `index` on a clip's chain, or an out-of-range error.
+fn effect_mut(clip: &mut Clip, index: u32) -> Result<&mut EffectInstance, ModelError> {
+    clip.effects
+        .get_mut(index as usize)
+        .ok_or_else(|| ModelError::InvalidParam(format!("effect index {index} out of range")))
+}
+
+/// Unwrap a scalar [`ParamValue`] (effect params are always scalar).
+fn scalar_param(value: ParamValue) -> Result<f32, ModelError> {
+    match value {
+        ParamValue::Scalar(v) => Ok(v),
+        ParamValue::Vec2(_) => Err(ModelError::InvalidParam(
+            "effect parameters take a scalar value".into(),
+        )),
     }
 }
 

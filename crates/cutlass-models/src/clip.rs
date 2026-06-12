@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::effects::EffectInstance;
 use crate::error::ModelError;
 use crate::ids::{ClipId, LinkId, MediaId};
 use crate::param::{Easing, Param};
@@ -412,6 +413,11 @@ pub enum ClipParam {
     Scale,
     Rotation,
     Opacity,
+    /// A scalar parameter of one of the clip's effects (M4): `effect` is the
+    /// index into [`Clip::effects`], `param` the catalog slot. Routed to the
+    /// effect's `Param<f32>` instead of the transform, so the same keyframe
+    /// commands drive effect curves. Always carries a [`ParamValue::Scalar`].
+    Effect { effect: u32, param: u32 },
 }
 
 /// A value for a [`ClipParam`]: scalar properties take `Scalar`, `position`
@@ -583,6 +589,7 @@ impl AnimatedTransform {
                 validate_opacity(v)?;
                 self.opacity.set_keyframe(tick, v, easing);
             }
+            ClipParam::Effect { .. } => return Err(not_a_transform_param()),
         }
         Ok(())
     }
@@ -595,6 +602,7 @@ impl AnimatedTransform {
             ClipParam::Scale => self.scale.remove_keyframe(tick),
             ClipParam::Rotation => self.rotation.remove_keyframe(tick),
             ClipParam::Opacity => self.opacity.remove_keyframe(tick),
+            ClipParam::Effect { .. } => return Err(not_a_transform_param()),
         };
         if removed {
             Ok(())
@@ -628,6 +636,7 @@ impl AnimatedTransform {
                 validate_opacity(v)?;
                 self.opacity.set_constant(v);
             }
+            ClipParam::Effect { .. } => return Err(not_a_transform_param()),
         }
         Ok(())
     }
@@ -647,6 +656,12 @@ impl AnimatedTransform {
         self.opacity.for_each_value(|v| validate_opacity(*v))?;
         Ok(())
     }
+}
+
+/// Effect params route through [`Clip::effects`], not the transform; the
+/// transform mutators reject them so a misrouted command fails loudly.
+fn not_a_transform_param() -> ModelError {
+    ModelError::InvalidParam("effect parameters are not transform properties".into())
 }
 
 fn validate_position(v: &[f32; 2]) -> Result<(), ModelError> {
@@ -765,6 +780,13 @@ pub struct Clip {
     /// false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flip_v: bool,
+    /// GPU effect chain (CapCut effects, M4): applied in order to the placed
+    /// layer before it composites. Each entry is `{effect_id, params}` with
+    /// parameters animatable per the catalog. Meaningful on visual clips;
+    /// empty (and absent from saves) when never touched, so old files load
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<EffectInstance>,
 }
 
 /// Upper bound for [`Clip::volume`] (CapCut's 1000% ceiling).
@@ -834,6 +856,7 @@ impl Clip {
             crop: CropRect::FULL,
             flip_h: false,
             flip_v: false,
+            effects: Vec::new(),
         }
     }
 
@@ -853,6 +876,7 @@ impl Clip {
             crop: CropRect::FULL,
             flip_h: false,
             flip_v: false,
+            effects: Vec::new(),
         }
     }
 
