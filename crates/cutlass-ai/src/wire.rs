@@ -274,6 +274,55 @@ pub enum WireCommand {
     LinkClips(LinkClips),
 }
 
+impl WireCommand {
+    /// Rewrite clip/track references through the given maps (ids absent
+    /// from a map pass through unchanged).
+    ///
+    /// This is what makes plan replay work: a plan is recorded against a
+    /// sandbox where `add_track`/`split_clip` allocated sandbox-local ids;
+    /// when the live engine replays the plan, each created entity gets a
+    /// fresh id, and later steps that referenced the sandbox id must be
+    /// remapped onto the real one.
+    pub fn remap_ids(
+        &mut self,
+        clip_map: &std::collections::HashMap<u64, u64>,
+        track_map: &std::collections::HashMap<u64, u64>,
+    ) {
+        let clip = |id: &mut u64| {
+            if let Some(mapped) = clip_map.get(id) {
+                *id = *mapped;
+            }
+        };
+        let track = |id: &mut u64| {
+            if let Some(mapped) = track_map.get(id) {
+                *id = *mapped;
+            }
+        };
+        match self {
+            WireCommand::AddTrack(_) => {}
+            WireCommand::AddClip(a) => track(&mut a.track),
+            WireCommand::AddGenerated(a) => track(&mut a.track),
+            WireCommand::SetGenerator(a) => clip(&mut a.clip),
+            WireCommand::SetClipTransform(a) => clip(&mut a.clip),
+            WireCommand::SplitClip(a) => clip(&mut a.clip),
+            WireCommand::TrimClip(a) => clip(&mut a.clip),
+            WireCommand::MoveClip(a) => {
+                clip(&mut a.clip);
+                track(&mut a.to_track);
+            }
+            WireCommand::RemoveClip(a) => clip(&mut a.clip),
+            WireCommand::RemoveTrack(a) => track(&mut a.track),
+            WireCommand::SetTrackEnabled(a) => track(&mut a.track),
+            WireCommand::SetTrackMuted(a) => track(&mut a.track),
+            WireCommand::SetTrackLocked(a) => track(&mut a.track),
+            WireCommand::RippleDelete(a) => clip(&mut a.clip),
+            WireCommand::ShiftClips(a) => track(&mut a.track),
+            WireCommand::RippleInsert(a) => track(&mut a.track),
+            WireCommand::LinkClips(a) => a.clips.iter_mut().for_each(clip),
+        }
+    }
+}
+
 /// One LLM tool: name, model-facing description, and a JSON Schema for its
 /// arguments.
 #[derive(Debug, Clone)]
@@ -445,6 +494,39 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&shape).unwrap(),
             serde_json::json!({ "type": "shape", "shape": "ellipse", "rgba": [255, 0, 0, 255] })
+        );
+    }
+
+    #[test]
+    fn remap_ids_rewrites_only_mapped_references() {
+        let clip_map = std::collections::HashMap::from([(10u64, 99u64)]);
+        let track_map = std::collections::HashMap::from([(2u64, 7u64)]);
+
+        let mut mv = WireCommand::MoveClip(MoveClip {
+            clip: 10,
+            to_track: 2,
+            start: 1.0,
+        });
+        mv.remap_ids(&clip_map, &track_map);
+        assert_eq!(
+            mv,
+            WireCommand::MoveClip(MoveClip {
+                clip: 99,
+                to_track: 7,
+                start: 1.0,
+            })
+        );
+
+        // Unmapped ids pass through; link lists remap element-wise.
+        let mut link = WireCommand::LinkClips(LinkClips {
+            clips: vec![10, 11],
+        });
+        link.remap_ids(&clip_map, &track_map);
+        assert_eq!(
+            link,
+            WireCommand::LinkClips(LinkClips {
+                clips: vec![99, 11],
+            })
         );
     }
 

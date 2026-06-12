@@ -17,9 +17,9 @@ use crate::describe::{EditorContext, ProjectSummary};
 use crate::provider::{ChatProvider, ChatRequest, FinishReason, Message, ProviderError};
 use crate::wire::{self, WireCommand};
 
-/// The loop's only view of the engine. The UI worker implements this over
-/// the live engine (validate + dispatch on the mutation lane); tests
-/// implement it over a plain `Engine`.
+/// The loop's only view of the engine. The UI implements this over a
+/// sandbox engine whose validated plan replays onto the live one
+/// (`cutlass-ui/src/agent.rs`); tests implement it over a plain `Engine`.
 pub trait EngineBridge {
     /// Fresh summary of the project as it stands.
     fn summary(&mut self) -> ProjectSummary;

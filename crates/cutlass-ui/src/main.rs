@@ -1,3 +1,4 @@
+mod agent;
 mod audio;
 mod autosave;
 mod inspector;
@@ -397,6 +398,64 @@ fn main() -> Result<(), slint::PlatformError> {
         tl_rate = ?session.tl_rate,
         "preview worker ready; import media to populate the timeline"
     );
+
+    // AI assistant (ai-agent roadmap Phase 4): a dedicated worker thread
+    // rehearses each prompt on a sandbox engine, then replays the validated
+    // plan through the preview worker as one undoable group. The transcript
+    // model is created here so the worker can mutate rows while streaming.
+    let agent_store = app.global::<AgentStore>();
+    agent_store.set_transcript(ModelRc::new(VecModel::<AgentEntry>::default()));
+    let agent_worker = agent::AgentWorker::spawn(preview_worker.handle(), agent_store.as_weak())
+        .map_err(slint::PlatformError::from)?;
+
+    // The send-time editor snapshot: this is how "the selected clip" and
+    // "at the playhead" resolve to ids and seconds for the model.
+    let agent_send = agent_worker.handle();
+    let agent_app = app.as_weak();
+    agent_store.on_send(move |prompt| {
+        let Some(app) = agent_app.upgrade() else {
+            return;
+        };
+        let timeline = app.global::<TimelineStore>();
+        let fps = app.global::<EditorStore>().get_project().sequence.fps;
+        let spf = if fps.num > 0 {
+            f64::from(fps.den) / f64::from(fps.num)
+        } else {
+            0.0
+        };
+        let to_seconds = |tick: i32| f64::from(tick) * spf;
+        let context = cutlass_ai::EditorContext {
+            selected_clips: timeline
+                .get_selected_ids()
+                .iter()
+                .filter_map(|id| id.parse().ok())
+                .collect(),
+            playhead_seconds: to_seconds(timeline.get_playhead_tick()),
+            in_point_seconds: (timeline.get_range_in_tick() >= 0)
+                .then(|| to_seconds(timeline.get_range_in_tick())),
+            out_point_seconds: (timeline.get_range_out_tick() >= 0)
+                .then(|| to_seconds(timeline.get_range_out_tick())),
+        };
+        let dry_run = app.global::<AgentStore>().get_dry_run();
+        agent_send.prompt(prompt.to_string(), context, dry_run);
+    });
+
+    let agent_cancel = agent_worker.handle();
+    agent_store.on_cancel(move || agent_cancel.cancel());
+
+    let agent_apply = agent_worker.handle();
+    agent_store.on_apply_plan(move || agent_apply.apply_plan());
+
+    let agent_discard = agent_worker.handle();
+    agent_store.on_discard_plan(move || agent_discard.discard_plan());
+
+    // Open / New / Restore replaced the project: a running prompt and any
+    // parked plan rehearsed against the old one. Cancel and discard.
+    let agent_session = agent_worker.handle();
+    agent_store.on_session_changed(move || {
+        agent_session.cancel();
+        agent_session.discard_plan();
+    });
 
     let editor = app.global::<EditorStore>();
 

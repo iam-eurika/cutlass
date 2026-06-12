@@ -4,12 +4,13 @@ import {
     VSplitGripTimeline,
 } from "components/index.slint";
 import {
+    AgentPanel,
     InspectorPanel,
     LibraryPanel,
     PreviewPanel,
     TimelinePanel,
 } from "panels/index.slint";
-import { AppStore, EditorStore, PreviewStore, TimelineStore, TimelineActions } from "store/index.slint";
+import { AgentStore, AppStore, EditorStore, PreviewStore, TimelineStore, TimelineActions } from "store/index.slint";
 import { AppState } from "state.slint";
 import { FullscreenPreview } from "fullscreen-preview.slint";
 import { TitleBar } from "shell/title-bar.slint";
@@ -23,7 +24,7 @@ import { PreviewBackend, PreviewDragResolution } from "lib/preview-backend.slint
 // language (Rust here) — transitive imports aren't enough.
 //   https://docs.slint.dev/latest/docs/slint/src/language/syntax/globals
 export { AppState }from "state.slint";
-export { EditorStore, RecentProject, TimelineStore, PreviewStore }from "store/index.slint";
+export { AgentStore, AgentEntry, EditorStore, RecentProject, TimelineStore, PreviewStore }from "store/index.slint";
 export { TimelineViewState }from "panels/timeline/index.slint";
 export { TimelineLib }from "lib/index.slint";
 export { RulerBackend, RulerTick }from "lib/ruler-backend.slint";
@@ -66,6 +67,7 @@ export component AppWindow inherits Window {
 
     in-out property <length> left-pane-width: 350px;
     in-out property <length> right-pane-width: 350px;
+    in-out property <length> agent-pane-width: 350px;
     in-out property <length> timeline-height: 400px;
 
     background: AppState.preview-maximized ? AppStore.theme.panel.background : AppStore.theme.surface.app-background;
@@ -104,6 +106,9 @@ export component AppWindow inherits Window {
         TimelineActions.clear-selection();
         TimelineActions.clear-range();
         TimelineActions.seek-start();
+        // A running prompt and any parked plan rehearsed against the old
+        // project; cancel/discard them (main.rs forwards to the agent).
+        AgentStore.session-changed();
     }
 
     // Transform commits are optimistic for a moment: keep the live gesture
@@ -357,6 +362,16 @@ export component AppWindow inherits Window {
 
                     InspectorPanel {
                         width: root.right-pane-width;
+                        vertical-stretch: 1;
+                    }
+
+                    if AppState.agent-panel-open: HSplitGripTrail {
+                        pane-width <=> root.agent-pane-width;
+                        vertical-stretch: 1;
+                    }
+
+                    if AppState.agent-panel-open: AgentPanel {
+                        width: root.agent-pane-width;
                         vertical-stretch: 1;
                     }
                 }

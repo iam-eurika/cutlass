@@ -187,6 +187,22 @@ export component TitleBar inherits Rectangle {
         VerticalLayout {
             alignment: center;
 
+            // AI assistant dock toggle (ai-agent roadmap Phase 4).
+            SubtleButton {
+                label: AppState.agent-panel-open ? "Hide Assistant" : "Assistant";
+                clicked => {
+                    AppState.agent-panel-open = !AppState.agent-panel-open;
+                }
+            }
+        }
+
+        Rectangle {
+            width: AppStore.theme.metrics.spacing.sm;
+        }
+
+        VerticalLayout {
+            alignment: center;
+
             // While a job runs the dialog may be reopened from here; the
             // label doubles as a compact progress readout (CapCut does the
             // same with its export chip).

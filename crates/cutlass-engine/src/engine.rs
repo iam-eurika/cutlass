@@ -219,6 +219,22 @@ impl Engine {
         self.saved_revision = self.revision;
     }
 
+    /// Replace the session with the given project (AI-agent sandbox: the
+    /// agent rehearses a prompt's edits against a snapshot clone before the
+    /// live engine replays the validated plan). Same teardown as
+    /// [`new_session`](Self::new_session): history, decoders, and gesture
+    /// overrides clear, no project path binds, the session rebaselines.
+    pub fn reset_project(&mut self, project: Project) {
+        self.project = project;
+        self.history.clear();
+        self.decoder_pool.clear();
+        self.transform_override = None;
+        self.generator_override = None;
+        self.project_path = None;
+        self.revision += 1;
+        self.saved_revision = self.revision;
+    }
+
     /// Replace the session from an autosave snapshot, binding it to the
     /// file it stands in for (crash recovery). Loads tolerantly (missing
     /// media entries are kept, like `Load`), points `project_path` at

@@ -194,10 +194,10 @@ step observable.
       `summary() -> ProjectSummary`, `apply(&WireCommand) ->
       Result<EditOutcome, String>` (validate + dispatch host-side,
       model-readable errors), `check` for dry-run, and the group
-      markers (`begin/end/rollback`). The UI worker implements it
-      over the live engine (Phase 4); tests implement it over a plain
-      `Engine`. The loop cannot name a file path, a socket, or a Slint
-      type.
+      markers (`begin/end/rollback`). The UI implements it over a
+      sandbox engine whose plan replays onto the live one (Phase 4);
+      tests implement it over a plain `Engine`. The loop cannot name a
+      file path, a socket, or a Slint type.
 - [x] **The loop** (`agent::run_prompt`): system prompt (vocabulary +
       house rules + current `describe_project`) → provider turn → for
       each tool call: validate → apply → feed the outcome (or the
@@ -245,37 +245,62 @@ undo entry, including the failure paths, against the stub provider.
 ran "cut the first 3 seconds of the selected clip" through local
 Ollama against a real engine and produced the frame-exact trim.
 
-## Phase 4 — Chat panel in `cutlass-ui`
+## Phase 4 — Chat panel in `cutlass-ui` ✅
 
-- [ ] **Worker integration**: the agent thread drives an `EngineBridge`
-      backed by `WorkerHandle` messages on the ordered mutation lane —
-      apply-batch + describe round-trips; `publish_projection` after
-      each applied command so the user *watches* the edit happen. The
-      UI snapshots the `EditorContext` at send time (selection from
-      `selection.rs`, playhead + in/out from the transport state).
-      Session-epoch rules: an open/new/restore while a prompt runs
-      cancels the prompt (the project it was reasoning about is gone).
-- [ ] **Chat panel** (`ui/panels/agent/`): dockable panel — prompt box,
-      transcript with streamed assistant text, per-prompt status
-      (thinking / acting / done / failed). Slint side stays a dumb
-      renderer of a transcript model, per house style; all state lives
-      in Rust.
-- [ ] **Action list per prompt**: applied commands rendered from the
-      Phase 3 action log, with **one-click Undo on the prompt entry**
-      (it's just `engine.undo()` — one group per prompt makes this
-      free).
-- [ ] **Dry-run preview card**: when dry-run is on (a panel toggle,
-      default *on* for the first alpha), the proposed action list
-      renders with Apply / Discard; Apply replays the validated plan in
-      one group. Bad plans become inspectable, not destructive.
-- [ ] **Not-configured state**: no `[ai]` config → the panel shows
-      setup instructions (config path, an Ollama one-liner, a
-      cloud-key example) instead of a dead prompt box. Zero phantom UI.
-- [ ] **Error surfaces**: provider/config errors land in the transcript
-      with the Phase 2 taxonomy's specificity; mid-prompt failures show
-      what was rolled back.
-- [ ] **Cancellation**: a stop button that aborts the provider stream
-      and rolls back the open group.
+- [x] **Worker integration** (`src/agent.rs`) — *landed as
+      sandbox-rehearse-then-replay rather than per-call worker
+      round-trips*: the engine's history groups don't nest, so holding a
+      group open on the live engine across network waits would swallow
+      any user edit made while the model thinks. Instead the agent
+      worker thread rehearses the prompt against a throwaway sandbox
+      `Engine` seeded with a project snapshot (one `SnapshotProject`
+      round-trip on the ordered mutation lane) — tool calls really
+      apply, so the model sees created clip/track ids and the world it
+      changed — and on completion the validated plan replays atomically
+      on the live engine (`WorkerMsg::AgentApplyPlan`): one history
+      group, re-validated step by step against the live project,
+      sandbox-allocated ids remapped onto live ones
+      (`WireCommand::remap_ids`), `publish_projection` after every step
+      so the user watches the plan land. Any replay failure (the
+      project changed mid-prompt) rolls the whole group back and says
+      so. `EditorContext` snapshots at send time in `main.rs`
+      (selection + playhead + in/out from `TimelineStore`, ticks →
+      seconds at the sequence rate). Session-epoch rules hold: the
+      `app.slint` epoch watcher fires `AgentStore.session-changed`,
+      which cancels the running prompt and discards any parked plan.
+      Covered by `agent::tests` (replay with id remapping + single
+      undo; stale-plan rollback) — ids are process-global atomics, so
+      the live engine always allocates different ids than the sandbox
+      and the tests genuinely exercise the remap.
+- [x] **Chat panel** (`ui/panels/agent/agent.slint`): docked at the far
+      right behind a title-bar "Assistant" toggle, resizable via the
+      house split grip. Prompt box (Enter or Send), transcript with
+      streamed assistant text, kind-styled entries (user bubble /
+      assistant text / accent-ticked action lines / status / applied /
+      error), "Thinking…" while running, auto-pinned scroll. Slint
+      stays a dumb renderer of `AgentStore.transcript`; the agent
+      worker mutates the model from Rust via the event loop.
+- [x] **Action list per prompt**: Phase 3 action-log lines stream in as
+      entries; the "Applied N edits as one undo step" entry carries a
+      one-click **Undo** chip (plain history undo — one group per
+      prompt makes it free), offered while it's the newest entry.
+- [x] **Dry-run preview card**: panel toggle ("Preview before
+      applying"), default **on**. The rehearsed plan parks in the agent
+      worker and the panel shows the planned-edit list with Apply /
+      Discard; Apply replays the validated plan in one group. A new
+      prompt or a session change discards a stale plan.
+- [x] **Not-configured state**: no `[ai]` table → the panel renders
+      setup instructions (config path + a config.toml example +
+      provider notes) instead of a dead prompt box; config re-reads on
+      every send, so fixing it needs no restart.
+- [x] **Error surfaces**: config errors, provider failures, cap trips,
+      and replay failures land in the transcript as error entries that
+      say what (didn't) happen — aborts always report "nothing was
+      applied".
+- [x] **Cancellation**: Stop button sets the shared cancel flag; the
+      provider aborts between stream chunks, the sandbox group rolls
+      back, and the transcript records the stop. Nothing ever reached
+      the live engine.
 
 Exit: "cut the first 3 seconds and add a title that says INTRO" works
 end-to-end against local Ollama — watched live, listed as actions,
