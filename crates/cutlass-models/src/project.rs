@@ -158,7 +158,12 @@ impl Project {
         if source.is_empty() {
             return Err(ModelError::InvalidRange);
         }
-        if source.start.value < 0 || source.end_tick() > media.duration.value {
+        // Stills have no real material bound: one frame repeats for any
+        // extent, and the pool duration is only the default placement
+        // length — so any window length is legal on image media.
+        if source.start.value < 0
+            || (!media.is_image && source.end_tick() > media.duration.value)
+        {
             return Err(ModelError::SourceOutOfBounds);
         }
 
@@ -516,14 +521,26 @@ impl Project {
                 } else {
                     source.start.value + head_delta
                 };
-                if new_src_start < 0 || new_src_start + new_src_dur > media.duration.value {
-                    return Err(ModelError::SourceOutOfBounds);
+                // Stills extend freely past the pool's default 5s window —
+                // the one frame repeats and decode ignores the window, so
+                // the source range is duration bookkeeping only. Clamp the
+                // start to 0 so extensions stay canonical.
+                if media.is_image {
+                    Some(TimeRange::at_rate(
+                        new_src_start.max(0),
+                        new_src_dur,
+                        media.frame_rate,
+                    ))
+                } else {
+                    if new_src_start < 0 || new_src_start + new_src_dur > media.duration.value {
+                        return Err(ModelError::SourceOutOfBounds);
+                    }
+                    Some(TimeRange::at_rate(
+                        new_src_start,
+                        new_src_dur,
+                        media.frame_rate,
+                    ))
                 }
-                Some(TimeRange::at_rate(
-                    new_src_start,
-                    new_src_dur,
-                    media.frame_rate,
-                ))
             }
             ClipSource::Generated(_) => None,
         };
@@ -1143,6 +1160,43 @@ mod tests {
         let trimmed = project.clip(clip).unwrap();
         assert_eq!(trimmed.timeline, tr(0, 60));
         assert_eq!(trimmed.source_range(), Some(tr(0, 60)));
+    }
+
+    #[test]
+    fn trim_extends_image_clips_past_the_default_window() {
+        let mut project = Project::new("stills", R24);
+        let media_id = project.add_media(MediaSource::image("/tmp/a.png", 800, 600));
+        let track = project.add_track(TrackKind::Video, "V1");
+        let full = project.media(media_id).unwrap().full_range();
+        let clip = project.add_clip(track, media_id, full, rt(0)).unwrap();
+        // The 5s default placement at 24 fps.
+        assert_eq!(project.clip(clip).unwrap().timeline, tr(0, 120));
+
+        // A still stretches to any length: 10s here, double its pool entry.
+        project.trim_clip(clip, tr(0, 240)).unwrap();
+        let stretched = project.clip(clip).unwrap();
+        assert_eq!(stretched.timeline, tr(0, 240));
+        let source = stretched.source_range().unwrap();
+        assert_eq!(source.start.value, 0);
+        assert!(source.duration.value > crate::media::STILL_DEFAULT_DURATION_TICKS);
+    }
+
+    #[test]
+    fn add_clip_allows_oversized_image_windows() {
+        let mut project = Project::new("stills", R24);
+        let media_id = project.add_media(MediaSource::image("/tmp/a.png", 800, 600));
+        let track = project.add_track(TrackKind::Video, "V1");
+        // Place a 20s clip from the 5s pool entry directly (agent add_clip).
+        let window = TimeRange::at_rate(0, 20_000, crate::media::STILL_TICK_RATE);
+        let clip = project.add_clip(track, media_id, window, rt(0)).unwrap();
+        assert_eq!(project.clip(clip).unwrap().timeline, tr(0, 480));
+
+        // Video media keeps its real material bound.
+        let video = project.add_media(sample_media(R24, 100));
+        assert!(matches!(
+            project.add_clip(track, video, tr(0, 101), rt(600)),
+            Err(ModelError::SourceOutOfBounds)
+        ));
     }
 
     #[test]

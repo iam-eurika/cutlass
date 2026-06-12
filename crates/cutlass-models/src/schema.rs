@@ -13,6 +13,20 @@ pub const PROJECT_SCHEMA_KIND: &str = "cutlass.project";
 ///   `{"kf": [...]}` keyframe curves instead of bare values. v2 readers
 ///   accept v1 files unchanged (constant params share the v1 shape); v1
 ///   builds refuse v2 files rather than half-parse keyframes.
+///
+/// Versioning policy (v1 roadmap M0 — the rules for changing the format):
+///
+/// - **Adding an optional field?** Don't bump. Ship it with
+///   `#[serde(default)]` + skip-if-default on save (e.g. `Clip::volume`,
+///   `MediaSource::is_image`). Same-version readers tolerate fields they
+///   don't know and drop them on resave.
+/// - **Changing a shape, renaming, or making a field required?** Bump this
+///   constant and add the matching `migrate_vN_to_vN1` step to
+///   `migrate_document` in `persist.rs` (a test fails if the step is
+///   missing).
+/// - **Files newer than this build are refused** on load with
+///   [`ModelError::UnsupportedProjectSchema`](crate::ModelError) — never
+///   guessed at.
 pub const PROJECT_SCHEMA_VERSION: u32 = 2;
 
 /// Identifies the serialized shape of a [`Project`](crate::Project).

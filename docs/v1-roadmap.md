@@ -336,11 +336,20 @@ Goal: nothing in the shipped app lies to users or loses their work.
       relative placement preserved, copied link groups re-link, one
       history entry); a toolbar Unlink button dissolves the selection's
       link groups undoably.
-- [ ] **README/CHANGELOG honesty pass**: fix the proxy claim, fix the
-      crate-responsibility table, state exactly what ships.
-- [ ] **Format versioning policy**: schema v2 = v1 + tolerated unknown
+- [x] **README/CHANGELOG honesty pass**: fix the proxy claim, fix the
+      crate-responsibility table, state exactly what ships. README status
+      section rewritten against the code (agent ships, proxy claim now
+      states the decoded-frame-cache truth, all eleven crates in the
+      table); CHANGELOG gained entries for everything landed since
+      `alpha-0.1.0`.
+- [x] **Format versioning policy**: schema v2 = v1 + tolerated unknown
       optional fields; write the migration scaffold + tests now, before
-      M1 starts adding fields.
+      M1 starts adding fields. Policy documented on
+      `PROJECT_SCHEMA_VERSION`; loads now read + validate the version,
+      run a per-version `migrate_document` chain on the raw JSON, then
+      strict-parse (newer files refused, never half-parsed). Tests pin
+      unknown-field tolerance, the resave-drops-them contract, and that
+      every supported version has a migration step.
 
 Exit: a user can edit for a week in Cutlass without losing a project or
 clicking a button that does nothing.
@@ -351,8 +360,9 @@ Goal: the everyday CapCut edit vocabulary, minus animation.
 
 - [x] **Image import**: PNG/JPEG/WebP stills as media (probe + decode +
       default 5s clips, transform/crop like video). Library thumbnails.
-      (Stills cap at the 5s pool duration for now — extending an image
-      clip past it needs source-bounds relaxation in trim, a follow-up.)
+      Stills now stretch to any length: trim/add source bounds are
+      relaxed for image media (the 5s pool duration is just the default
+      placement length) and the trim drag's headroom is unbounded.
 - [x] **Clip speed (constant + reverse)**: `speed: Rational` +
       `reversed: bool` on media clips; retime via `source_time_at` (so
       preview *and* export inherit it); speed-aware trim/split, timeline

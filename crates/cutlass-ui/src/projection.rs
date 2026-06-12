@@ -342,6 +342,12 @@ fn trim_rooms(project: &EngineProject, clip: &EngineClip) -> (i32, i32) {
             let Some(media) = project.media(*media) else {
                 return (0, 0);
             };
+            // Stills extend freely: the one frame repeats, and the pool
+            // duration is a default placement length, not material bounds
+            // (the engine relaxes `trim_clip` the same way).
+            if media.is_image {
+                return (UNBOUNDED_ROOM, UNBOUNDED_ROOM);
+            }
             let head_media = source.start.value;
             let tail_media = media.duration.value - source.end_tick();
             (
