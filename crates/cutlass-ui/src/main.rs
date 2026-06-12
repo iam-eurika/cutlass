@@ -841,7 +841,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // take exists only to re-trigger evaluation on delivery).
     let filmstrip_handle = strip_worker.handle();
     app.global::<StripBackend>().on_filmstrip_tiles(
-        move |media_id, source_in_s, duration, fps_num, fps_den, zoom, from_bucket, to_bucket, _generation| {
+        move |media_id, source_in_s, duration, fps_num, fps_den, speed, zoom, from_bucket, to_bucket, _generation| {
             strips::filmstrip_tiles(
                 &filmstrip_handle,
                 media_id.as_str(),
@@ -849,6 +849,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 duration,
                 fps_num,
                 fps_den,
+                speed,
                 zoom,
                 from_bucket,
                 to_bucket,
@@ -858,7 +859,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let waveform_handle = strip_worker.handle();
     app.global::<StripBackend>().on_waveform_tiles(
-        move |media_id, source_in_s, duration, fps_num, fps_den, zoom, from_bucket, to_bucket, _generation| {
+        move |media_id, source_in_s, duration, fps_num, fps_den, speed, zoom, from_bucket, to_bucket, _generation| {
             strips::waveform_tiles(
                 &waveform_handle,
                 media_id.as_str(),
@@ -866,6 +867,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 duration,
                 fps_num,
                 fps_den,
+                speed,
                 zoom,
                 from_bucket,
                 to_bucket,
@@ -1238,6 +1240,12 @@ fn main() -> Result<(), slint::PlatformError> {
     app.global::<KeyframeBackend>().on_remove_at(move |clip_id, tick| {
         kf_remove_at_handle.remove_keyframes_at(clip_id.to_string(), i64::from(tick));
     });
+    let set_speed_handle = preview_worker.handle();
+    app.global::<InspectorBackend>()
+        .on_set_clip_speed(move |clip_id, num, den, reversed| {
+            set_speed_handle.set_clip_speed(clip_id.to_string(), num, den, reversed);
+        });
+
     let set_text_handle = preview_worker.handle();
     app.global::<InspectorBackend>()
         .on_set_text_generator(move |_track_id, clip_id, content, style| {

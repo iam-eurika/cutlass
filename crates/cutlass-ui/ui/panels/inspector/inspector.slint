@@ -2,7 +2,10 @@ import {
     PanelBase,
     PanelHeader,
     CutlassScrollView,
+    CutlassDropdown,
+    CutlassText,
 } from "../../components/index.slint";
+import { AppState } from "../../state.slint";
 import { AppStore, EditorStore, TimelineStore } from "../../store/index.slint";
 import {
     InspectorBackend,
@@ -100,6 +103,126 @@ component MissingSelectionInspector inherits VerticalLayout {
     }
 }
 
+// Speed & reverse for media-backed clips (CapCut constant speed, M1).
+// Preset rates keep the engine's rational math exact; the engine re-derives
+// the clip's timeline footprint on commit and the projection republish
+// updates everything (duration label, retime badge, filmstrip density).
+// Audio of retimed clips is muted until varispeed lands (M8).
+component SpeedInspector inherits VerticalLayout {
+    in property <Clip> model;
+
+    spacing: AppStore.theme.metrics.spacing.sm;
+
+    function commit(num: int, den: int, reversed: bool) {
+        InspectorBackend.set-clip-speed(root.model.id, num, den, reversed);
+    }
+
+    // Current rational rate, recovered from the projected float. Presets
+    // are the only writers, so an exact match always exists; the fallback
+    // (×100) only fires for projects edited outside the UI.
+    function current-num() -> int {
+        return root.label-of(root.model.speed) == "" ? Math.round(root.model.speed * 100) : root.num-of(root.label-of(root.model.speed));
+    }
+    function current-den() -> int {
+        return root.label-of(root.model.speed) == "" ? 100 : root.den-of(root.label-of(root.model.speed));
+    }
+
+    function label-of(speed: float) -> string {
+        if (Math.abs(speed - 0.25) < 0.001) { return "0.25x"; }
+        if (Math.abs(speed - 0.5) < 0.001) { return "0.5x"; }
+        if (Math.abs(speed - 0.75) < 0.001) { return "0.75x"; }
+        if (Math.abs(speed - 1.0) < 0.001) { return "1x"; }
+        if (Math.abs(speed - 1.5) < 0.001) { return "1.5x"; }
+        if (Math.abs(speed - 2.0) < 0.001) { return "2x"; }
+        if (Math.abs(speed - 3.0) < 0.001) { return "3x"; }
+        if (Math.abs(speed - 4.0) < 0.001) { return "4x"; }
+        return "";
+    }
+    function num-of(label: string) -> int {
+        if (label == "0.25x") { return 1; }
+        if (label == "0.5x") { return 1; }
+        if (label == "0.75x") { return 3; }
+        if (label == "1.5x") { return 3; }
+        if (label == "2x") { return 2; }
+        if (label == "3x") { return 3; }
+        if (label == "4x") { return 4; }
+        return 1;
+    }
+    function den-of(label: string) -> int {
+        if (label == "0.25x") { return 4; }
+        if (label == "0.5x") { return 2; }
+        if (label == "0.75x") { return 4; }
+        if (label == "1.5x") { return 2; }
+        return 1;
+    }
+
+    CutlassText {
+        text: "Speed";
+        style: AppStore.theme.typography.heading-sm;
+        foreground: AppStore.theme.text.primary;
+    }
+
+    HorizontalLayout {
+        spacing: AppStore.theme.metrics.spacing.md;
+
+        CutlassText {
+            width: 64px;
+            vertical-alignment: center;
+            text: "Rate";
+            style: AppStore.theme.typography.label;
+            foreground: AppStore.theme.text.secondary;
+        }
+
+        CutlassDropdown {
+            items: ["0.25x", "0.5x", "0.75x", "1x", "1.5x", "2x", "3x", "4x"];
+            current: root.label-of(root.model.speed);
+            placeholder: "Custom";
+            selected(value) => {
+                root.commit(root.num-of(value), root.den-of(value), root.model.reversed);
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: AppStore.theme.metrics.spacing.md;
+
+        CutlassText {
+            width: 64px;
+            vertical-alignment: center;
+            text: "Reverse";
+            style: AppStore.theme.typography.label;
+            foreground: AppStore.theme.text.secondary;
+        }
+
+        Rectangle {
+            width: 14px;
+            height: 14px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: root.model.reversed ? #00E5C7 : #ffffff2f;
+            background: root.model.reversed ? #00E5C7 : #ffffff14;
+
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => {
+                    root.commit(root.current-num(), root.current-den(), !root.model.reversed);
+                    AppState.refocus-shortcuts();
+                }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    CutlassText {
+        text: "Audio is muted while a clip is retimed.";
+        style: AppStore.theme.typography.caption;
+        foreground: AppStore.theme.text.muted;
+        visible: root.model.speed-label != "";
+    }
+}
+
 component VisualClipInspector inherits VerticalLayout {
     in property <Clip> model;
 
@@ -131,6 +254,12 @@ component VisualClipInspector inherits VerticalLayout {
             TransformInspector {
                 model: root.model;
             }
+
+            // Speed needs a source to retime: media-backed clips only
+            // (generated text/solids have no footage behind them).
+            if root.model.media-id != "": SpeedInspector {
+                model: root.model;
+            }
         }
     }
 }
@@ -159,10 +288,10 @@ component AudioClipInspector inherits VerticalLayout {
                 color: AppStore.theme.text.primary;
             }
 
-            Text {
-                text: "No inspector for this clip type yet.";
-                color: AppStore.theme.text.muted;
-                font-size: AppStore.theme.typography.body.size;
+            // Same retime control as visual clips — the engine retimes the
+            // waveform window; playback stays muted until varispeed (M8).
+            if root.model.media-id != "": SpeedInspector {
+                model: root.model;
             }
         }
     }

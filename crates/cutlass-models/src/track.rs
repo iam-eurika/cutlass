@@ -265,6 +265,8 @@ mod tests {
             timeline: tr(20, 30),
             link: None,
             transform: ClipTransform::IDENTITY.into(),
+            speed: crate::time::Rational::new(1, 1),
+            reversed: false,
         };
         let displaced = track.insert_clip(replacement).unwrap();
         assert_eq!(displaced.timeline, tr(0, 10));
@@ -324,6 +326,8 @@ mod tests {
             timeline: tr(10, 5),
             link: None,
             transform: ClipTransform::IDENTITY.into(),
+            speed: crate::time::Rational::new(1, 1),
+            reversed: false,
         };
         let b = Clip {
             id: ClipId::from_raw(1),
@@ -331,6 +335,8 @@ mod tests {
             timeline: tr(10, 5),
             link: None,
             transform: ClipTransform::IDENTITY.into(),
+            speed: crate::time::Rational::new(1, 1),
+            reversed: false,
         };
         track.insert_clip(a);
         track.insert_clip(b);

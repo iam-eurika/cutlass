@@ -69,6 +69,12 @@ pub struct ClipSummary {
     /// Link group id; clips sharing one move/trim together.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<u64>,
+    /// Playback rate multiplier (set_clip_speed); absent when 1x.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
+    /// Playing backwards (set_clip_speed); absent when forward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversed: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,6 +203,10 @@ pub fn summarize(project: &Project) -> ProjectSummary {
                     duration_frames: clip.timeline.duration.value,
                     content: clip_content(project, &clip.content),
                     link: clip.link.map(|l| l.raw()),
+                    speed: (clip.speed.num != clip.speed.den).then(|| {
+                        f64::from(clip.speed.num) / f64::from(clip.speed.den)
+                    }),
+                    reversed: clip.reversed.then_some(true),
                 })
                 .collect(),
         })

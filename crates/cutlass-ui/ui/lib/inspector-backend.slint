@@ -72,6 +72,18 @@ export global InspectorBackend {
     // semantics). One undoable engine edit.
     callback remove-param-keyframe(clip-id: string, param: string, tick: int);
 
+    // Retime a media clip (CapCut speed, M1): positive rational `num/den`
+    // playback rate (2/1 = double speed) plus the reverse flag. The engine
+    // keeps the clip's timeline start and source window and re-derives the
+    // timeline duration; with linkage on the clip's link partners retime
+    // too. One undoable edit (the whole link group is one history entry).
+    callback set-clip-speed(
+        clip-id: string,
+        speed-num: int,
+        speed-den: int,
+        reversed: bool,
+    );
+
     // Replace a text clip's content and/or styling in one undoable edit. The
     // inspector always sends the full current style with the single changed
     // field, so the engine writes one coherent `Generator::Text`.

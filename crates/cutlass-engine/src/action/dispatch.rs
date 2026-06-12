@@ -106,6 +106,14 @@ fn dispatch_edit(
             let inverse = edit::set_param::set_constant(ctx, clip, param, value)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
         }
+        EditCommand::SetClipSpeed {
+            clip,
+            speed,
+            reversed,
+        } => {
+            let inverse = edit::set_speed::set_speed(ctx, clip, speed, reversed)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
         EditCommand::SplitClip { clip, at } => {
             let (id, inverse) = edit::split_clip::execute(ctx, clip, at)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Created(id)), Some(inverse)))

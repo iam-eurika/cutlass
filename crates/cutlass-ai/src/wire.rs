@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// 2: M2 keyframe commands (`set_param_keyframe`, `remove_param_keyframe`,
 ///    `set_param_constant`).
-pub const TOOL_SCHEMA_VERSION: u32 = 2;
+/// 3: M1 clip speed (`set_clip_speed`).
+pub const TOOL_SCHEMA_VERSION: u32 = 3;
 
 /// Track lane categories the agent may create or target.
 ///
@@ -218,6 +219,25 @@ pub struct SetParamConstant {
     pub position: Option<[f64; 2]>,
 }
 
+/// Change a media clip's constant playback speed and/or direction. The clip
+/// keeps its timeline start and source footage; its timeline length
+/// re-derives from the speed (a 2x clip takes half the time). Audio of
+/// retimed clips is muted. Not valid for generated clips (text/solid/shape).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SetClipSpeed {
+    /// The media clip to retime.
+    pub clip: u64,
+    /// Playback rate multiplier: 2.0 plays at double speed (half as long on
+    /// the timeline), 0.5 is half-speed slow motion. Allowed range 0.05 to
+    /// 100. Omit to keep the current speed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
+    /// Play the clip's footage backwards. Omit to keep the current
+    /// direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversed: Option<bool>,
+}
+
 /// Split a clip at a timeline position into two abutting clips.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SplitClip {
@@ -340,6 +360,7 @@ pub enum WireCommand {
     SetParamKeyframe(SetParamKeyframe),
     RemoveParamKeyframe(RemoveParamKeyframe),
     SetParamConstant(SetParamConstant),
+    SetClipSpeed(SetClipSpeed),
     SplitClip(SplitClip),
     TrimClip(TrimClip),
     MoveClip(MoveClip),
@@ -387,6 +408,7 @@ impl WireCommand {
             WireCommand::SetParamKeyframe(a) => clip(&mut a.clip),
             WireCommand::RemoveParamKeyframe(a) => clip(&mut a.clip),
             WireCommand::SetParamConstant(a) => clip(&mut a.clip),
+            WireCommand::SetClipSpeed(a) => clip(&mut a.clip),
             WireCommand::SplitClip(a) => clip(&mut a.clip),
             WireCommand::TrimClip(a) => clip(&mut a.clip),
             WireCommand::MoveClip(a) => {
@@ -495,6 +517,8 @@ tools! {
         "Remove the keyframe at a timeline position (seconds) on a clip property. Removing the last keyframe freezes the property at that value.";
     "set_param_constant" => SetParamConstant(SetParamConstant),
         "Set a clip property to a fixed value and remove all its keyframes (stops its animation).";
+    "set_clip_speed" => SetClipSpeed(SetClipSpeed),
+        "Change a media clip's playback speed (2.0 = double speed, 0.5 = slow motion) and/or play it in reverse. The clip's timeline length re-derives from the speed; its audio is muted while retimed. Not valid for generated clips.";
     "split_clip" => SplitClip(SplitClip),
         "Split a clip at a timeline position (seconds) into two abutting clips.";
     "trim_clip" => TrimClip(TrimClip),
@@ -622,7 +646,7 @@ mod tests {
     #[test]
     fn tool_specs_cover_every_command_with_object_schemas() {
         let specs = tool_specs();
-        assert_eq!(specs.len(), 20);
+        assert_eq!(specs.len(), 21);
         for spec in &specs {
             assert!(!spec.description.is_empty(), "{} missing description", spec.name);
             assert_eq!(

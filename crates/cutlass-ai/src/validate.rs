@@ -138,6 +138,26 @@ pub fn validate(command: &WireCommand, project: &Project) -> Result<Command, Rej
                 at,
             }
         }
+        WireCommand::SetClipSpeed(args) => {
+            let clip = clip_ref(project, args.clip)?;
+            if clip.is_generated() {
+                return Err(Rejection::new(format!(
+                    "clip {} is a generated clip; set_clip_speed only works on media \
+                     clips (footage with a source file)",
+                    args.clip
+                )));
+            }
+            // Omitted fields keep the clip's current retiming.
+            let speed = match args.speed {
+                Some(speed) => rational_speed(speed)?,
+                None => clip.speed,
+            };
+            EditCommand::SetClipSpeed {
+                clip: clip.id,
+                speed,
+                reversed: args.reversed.unwrap_or(clip.reversed),
+            }
+        }
         WireCommand::SetParamConstant(args) => {
             let clip = clip_ref(project, args.clip)?;
             let value = param_value(args.param, args.value, args.position)?;
@@ -415,6 +435,26 @@ fn generated_content(clip: &Clip) -> Option<&Generator> {
 
 fn timeline_rate(project: &Project) -> Rational {
     project.timeline().frame_rate
+}
+
+/// Lower a wire speed multiplier to the engine's exact rational, snapped to
+/// hundredths (2.0 → 2/1, 0.5 → 1/2, 0.333 → 33/100). CapCut's UI range.
+fn rational_speed(speed: f64) -> Result<Rational, Rejection> {
+    if !speed.is_finite() || !(0.05..=100.0).contains(&speed) {
+        return Err(Rejection::new(format!(
+            "speed must be between 0.05 and 100 (got {speed})"
+        )));
+    }
+    let num = (speed * 100.0).round() as i32;
+    let g = gcd(num, 100);
+    Ok(Rational::new(num / g, 100 / g))
+}
+
+fn gcd(mut a: i32, mut b: i32) -> i32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a.max(1)
 }
 
 fn clip_param(param: WireClipParam) -> ClipParam {
@@ -903,6 +943,71 @@ mod tests {
             }),
         );
         assert!(msg.contains("invalid transform"), "{msg}");
+    }
+
+    #[test]
+    fn clip_speed_lowers_to_exact_rationals() {
+        let (project, _, _, _, clip, title) = fixture();
+
+        let edit = lower(
+            &project,
+            WireCommand::SetClipSpeed(wire::SetClipSpeed {
+                clip,
+                speed: Some(2.0),
+                reversed: None,
+            }),
+        );
+        assert_eq!(
+            edit,
+            EditCommand::SetClipSpeed {
+                clip: ClipId::from_raw(clip),
+                speed: Rational::new(2, 1),
+                reversed: false,
+            }
+        );
+
+        // Hundredth snapping: 0.5 → 1/2, 0.75 → 3/4, 0.333 → 33/100.
+        assert_eq!(rational_speed(0.5).unwrap(), Rational::new(1, 2));
+        assert_eq!(rational_speed(0.75).unwrap(), Rational::new(3, 4));
+        assert_eq!(rational_speed(0.333).unwrap(), Rational::new(33, 100));
+
+        // Omitted fields keep the clip's current retiming (reverse-only).
+        let edit = lower(
+            &project,
+            WireCommand::SetClipSpeed(wire::SetClipSpeed {
+                clip,
+                speed: None,
+                reversed: Some(true),
+            }),
+        );
+        assert_eq!(
+            edit,
+            EditCommand::SetClipSpeed {
+                clip: ClipId::from_raw(clip),
+                speed: Rational::new(1, 1),
+                reversed: true,
+            }
+        );
+
+        // Out-of-range speeds and generated clips are rejected with names.
+        let msg = reject(
+            &project,
+            WireCommand::SetClipSpeed(wire::SetClipSpeed {
+                clip,
+                speed: Some(0.0),
+                reversed: None,
+            }),
+        );
+        assert!(msg.contains("between 0.05 and 100"), "{msg}");
+        let msg = reject(
+            &project,
+            WireCommand::SetClipSpeed(wire::SetClipSpeed {
+                clip: title,
+                speed: Some(2.0),
+                reversed: None,
+            }),
+        );
+        assert!(msg.contains("generated clip"), "{msg}");
     }
 
     #[test]

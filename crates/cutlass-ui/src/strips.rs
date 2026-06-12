@@ -140,6 +140,9 @@ fn interval_us_for(k: i32) -> i64 {
 /// * `duration_ticks` — clip length in sequence ticks; with `zoom` (px/tick)
 ///   this bounds the clip-local pixel range.
 /// * `fps_*` — sequence tick rate (ticks per second = num/den).
+/// * `speed` — clip playback rate (M1): a 2× clip squeezes two source
+///   seconds into each timeline second, so px-per-source-second halves.
+///   Degenerate values fall back to 1×.
 /// * `from_bucket..=to_bucket` — visible window in `VIEW_BUCKET_PX` units of
 ///   clip-local x (from `ClipView`; may extend past the clip).
 ///
@@ -150,6 +153,7 @@ fn plan_tiles(
     duration_ticks: i32,
     fps_num: i32,
     fps_den: i32,
+    speed: f64,
     zoom: f64,
     from_bucket: i32,
     to_bucket: i32,
@@ -158,8 +162,9 @@ fn plan_tiles(
     if duration_ticks <= 0 || fps_num <= 0 || fps_den <= 0 || zoom <= 0.0 || zoom.is_nan() {
         return None;
     }
+    let speed = if speed.is_finite() && speed > 0.0 { speed } else { 1.0 };
     let ticks_per_s = f64::from(fps_num) / f64::from(fps_den);
-    let px_per_s = zoom * ticks_per_s;
+    let px_per_s = zoom * ticks_per_s / speed;
     if px_per_s <= 0.0 || !px_per_s.is_finite() {
         return None;
     }
@@ -260,6 +265,7 @@ pub fn filmstrip_tiles(
     duration_ticks: i32,
     fps_num: i32,
     fps_den: i32,
+    speed: f32,
     zoom: f32,
     from_bucket: i32,
     to_bucket: i32,
@@ -272,6 +278,7 @@ pub fn filmstrip_tiles(
         duration_ticks,
         fps_num,
         fps_den,
+        f64::from(speed),
         f64::from(zoom),
         from_bucket,
         to_bucket,
@@ -327,6 +334,7 @@ pub fn waveform_tiles(
     duration_ticks: i32,
     fps_num: i32,
     fps_den: i32,
+    speed: f32,
     zoom: f32,
     from_bucket: i32,
     to_bucket: i32,
@@ -339,6 +347,7 @@ pub fn waveform_tiles(
         duration_ticks,
         fps_num,
         fps_den,
+        f64::from(speed),
         f64::from(zoom),
         from_bucket,
         to_bucket,
@@ -769,7 +778,7 @@ mod tests {
     fn plan_covers_the_visible_window() {
         // 30fps, zoom 2px/tick → 60 px/s → k=0 (1s tiles, 60px each... < 64).
         // Actually 60 < 64 → k=1: 2s tiles, 120px.
-        let grid = plan_tiles(0.0, 3000, 30, 1, 2.0, 0, 3, 64.0).expect("grid");
+        let grid = plan_tiles(0.0, 3000, 30, 1, 1.0, 2.0, 0, 3, 64.0).expect("grid");
         assert_eq!(grid.k, 1);
         assert_eq!(grid.i0, 0);
         // Window: 0..1024px (+1 tile pad) of a 6000px clip → ~9 tiles.
@@ -781,9 +790,9 @@ mod tests {
     #[test]
     fn plan_clamps_to_the_clip_extent() {
         // Visible window far past the clip's end → nothing.
-        assert_eq!(plan_tiles(0.0, 100, 30, 1, 1.0, 10, 20, 64.0), None);
+        assert_eq!(plan_tiles(0.0, 100, 30, 1, 1.0, 1.0, 10, 20, 64.0), None);
         // Window before the clip (negative buckets) → nothing.
-        assert_eq!(plan_tiles(0.0, 100, 30, 1, 1.0, -20, -10, 64.0), None);
+        assert_eq!(plan_tiles(0.0, 100, 30, 1, 1.0, 1.0, -20, -10, 64.0), None);
     }
 
     #[test]
@@ -791,7 +800,7 @@ mod tests {
         // A clip trimmed 3.5s into its source at k=1 (2s tiles): the first
         // visible tile is the grid tile containing 3.5s (i=1 → 2s), drawn
         // 1.5s-worth of px to the left of the clip edge.
-        let grid = plan_tiles(3.5, 3000, 30, 1, 2.0, 0, 3, 64.0).expect("grid");
+        let grid = plan_tiles(3.5, 3000, 30, 1, 1.0, 2.0, 0, 3, 64.0).expect("grid");
         assert_eq!(grid.k, 1);
         assert_eq!(grid.i0, 1);
         assert_eq!(grid.key_us(grid.i0), 2_000_000);
@@ -800,15 +809,28 @@ mod tests {
 
     #[test]
     fn plan_rejects_degenerate_inputs() {
-        assert_eq!(plan_tiles(0.0, 0, 30, 1, 1.0, 0, 3, 64.0), None);
-        assert_eq!(plan_tiles(0.0, 100, 0, 1, 1.0, 0, 3, 64.0), None);
-        assert_eq!(plan_tiles(0.0, 100, 30, 1, 0.0, 0, 3, 64.0), None);
+        assert_eq!(plan_tiles(0.0, 0, 30, 1, 1.0, 1.0, 0, 3, 64.0), None);
+        assert_eq!(plan_tiles(0.0, 100, 0, 1, 1.0, 1.0, 0, 3, 64.0), None);
+        assert_eq!(plan_tiles(0.0, 100, 30, 1, 1.0, 0.0, 0, 3, 64.0), None);
+    }
+
+    #[test]
+    fn plan_scales_px_per_source_second_by_speed() {
+        // Same zoom, 2× speed: each source second occupies half the px, so
+        // the source window covered by the same clip width doubles.
+        let normal = plan_tiles(0.0, 3000, 30, 1, 1.0, 2.0, 0, 3, 64.0).expect("grid");
+        let double = plan_tiles(0.0, 3000, 30, 1, 2.0, 2.0, 0, 3, 64.0).expect("grid");
+        assert!((normal.px_per_s - 60.0).abs() < 1e-9);
+        assert!((double.px_per_s - 30.0).abs() < 1e-9);
+        // Degenerate speeds fall back to 1×.
+        let fallback = plan_tiles(0.0, 3000, 30, 1, 0.0, 2.0, 0, 3, 64.0).expect("grid");
+        assert!((fallback.px_per_s - 60.0).abs() < 1e-9);
     }
 
     #[test]
     fn plan_caps_the_tile_count() {
         // Absurd window: tile count stays bounded.
-        let grid = plan_tiles(0.0, i32::MAX, 1000, 1, 100.0, 0, i32::MAX / 256, 64.0)
+        let grid = plan_tiles(0.0, i32::MAX, 1000, 1, 1.0, 100.0, 0, i32::MAX / 256, 64.0)
             .expect("grid");
         assert!(grid.i1 - grid.i0 + 1 <= MAX_TILES);
     }

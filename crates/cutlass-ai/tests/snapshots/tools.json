@@ -634,6 +634,42 @@
       }
     },
     {
+      "description": "Change a media clip's playback speed (2.0 = double speed, 0.5 = slow motion) and/or play it in reverse. The clip's timeline length re-derives from the speed; its audio is muted while retimed. Not valid for generated clips.",
+      "name": "set_clip_speed",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Change a media clip's constant playback speed and/or direction. The clip\nkeeps its timeline start and source footage; its timeline length\nre-derives from the speed (a 2x clip takes half the time). Audio of\nretimed clips is muted. Not valid for generated clips (text/solid/shape).",
+        "properties": {
+          "clip": {
+            "description": "The media clip to retime.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reversed": {
+            "description": "Play the clip's footage backwards. Omit to keep the current\ndirection.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "speed": {
+            "description": "Playback rate multiplier: 2.0 plays at double speed (half as long on\nthe timeline), 0.5 is half-speed slow motion. Allowed range 0.05 to\n100. Omit to keep the current speed.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "clip"
+        ],
+        "title": "SetClipSpeed",
+        "type": "object"
+      }
+    },
+    {
       "description": "Split a clip at a timeline position (seconds) into two abutting clips.",
       "name": "split_clip",
       "parameters": {
@@ -967,5 +1003,5 @@
       }
     }
   ],
-  "version": 2
+  "version": 3
 }

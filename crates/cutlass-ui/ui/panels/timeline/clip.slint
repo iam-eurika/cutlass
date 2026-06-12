@@ -103,6 +103,7 @@ export component ClipView inherits Rectangle {
             model.source-range.duration.value,
             EditorStore.project.sequence.fps.num,
             EditorStore.project.sequence.fps.den,
+            model.speed,
             root.zoom,
             root.vis-from-bucket,
             root.vis-to-bucket,
@@ -127,6 +128,7 @@ export component ClipView inherits Rectangle {
             model.source-range.duration.value,
             EditorStore.project.sequence.fps.num,
             EditorStore.project.sequence.fps.den,
+            model.speed,
             root.zoom,
             root.vis-from-bucket,
             root.vis-to-bucket,
@@ -269,8 +271,8 @@ export component ClipView inherits Rectangle {
             opacity: dimmed ? 0.35 : 1.0;
         }
 
-        // Duration badge (speed/volume markers join it once they exist in
-        // the model).
+        // Duration badge (volume markers join it once they exist in the
+        // model).
         if root.width > 90px: Text {
             x: parent.width - self.preferred-width - 4px;
             height: parent.height;
@@ -279,6 +281,25 @@ export component ClipView inherits Rectangle {
             font-size: 9px;
             color: AppStore.theme.text.primary.with-alpha(0.75);
             opacity: dimmed ? 0.35 : 1.0;
+        }
+
+        // Retime badge ("2x", "0.5x R", …), CapCut-style accent chip next
+        // to the duration. Only present on retimed clips.
+        if model.speed-label != "" && root.width > 50px: Rectangle {
+            x: parent.width - self.width - (root.width > 90px ? 40px : 4px);
+            y: (parent.height - self.height) / 2;
+            width: badge-text.preferred-width + 6px;
+            height: parent.height - 4px;
+            border-radius: 2px;
+            background: dimmed ? #00E5C733 : #00E5C755;
+
+            badge-text := Text {
+                text: model.speed-label;
+                font-size: 8px;
+                font-weight: 700;
+                color: AppStore.theme.text.primary;
+                opacity: dimmed ? 0.35 : 1.0;
+            }
         }
     }
 

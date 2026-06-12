@@ -155,8 +155,8 @@ Research base: the CapCut desktop 2025–2026 feature set (editor + AI toolkit).
 | --- | --- | --- |
 | Cut / split / trim / ripple | ✅ except ripple-trim | M0 finishes ripple trim |
 | Multi-track, linked A/V, magnet | ✅ | — |
-| Keyframes (position/scale/rotation/opacity/volume/effects) | ❌ | **M2** — the keystone |
-| Speed: constant, reverse | ❌ | M1 |
+| Keyframes (position/scale/rotation/opacity/volume/effects) | ✅ transform + opacity (volume/effects ride M1/M4 fields) | **M2** — the keystone |
+| Speed: constant, reverse | ✅ (audio mutes until M8 varispeed) | M1 |
 | Speed: curves / velocity ramps | ❌ | M2 (rides keyframes) |
 | Crop / flip / non-uniform scale | ❌ | M1 |
 | Image (stills) import | ❌ | M1 |
@@ -341,9 +341,11 @@ Goal: the everyday CapCut edit vocabulary, minus animation.
 
 - [ ] **Image import**: PNG/JPEG/WebP stills as media (probe + decode +
       default 5s clips, transform/crop like video). Library thumbnails.
-- [ ] **Clip speed (constant + reverse)**: `speed: Rational` +
-      `reversed: bool` on media clips; retime in `resolve_layers` and
-      export; timeline duration math, badges (`2x`), inspector control.
+- [x] **Clip speed (constant + reverse)**: `speed: Rational` +
+      `reversed: bool` on media clips; retime via `source_time_at` (so
+      preview *and* export inherit it); speed-aware trim/split, timeline
+      duration math, badges (`2x R`), inspector preset dropdown + reverse
+      toggle, filmstrip stretch, `set_clip_speed` agent tool.
       Audio of retimed clips mutes until M8 varispeed.
 - [ ] **Clip volume + fade in/out fields** on the model + inspector +
       export mixer + playback mixer (constant volume now; envelopes in
@@ -394,7 +396,7 @@ Detailed plan: `keyframes-roadmap.md`.
       delete — each one undoable history group, CapCut behavior).
 - [ ] **Speed curves**: retime `speed` as a keyframable param →
       velocity-edit ramps; presets (montage, hero moment) as data.
-      *Blocked on M1's speed field.*
+      *Unblocked: M1's constant speed + reverse landed.*
 - [ ] **Tick model audit**: keyframes make long/dense timelines likelier —
       resolve the Slint `i32` vs engine `i64` clamp now.
 
@@ -440,8 +442,8 @@ Detailed plan: `ai-agent-roadmap.md`.
 
 Exit: "cut the first 3 seconds, add a title that says INTRO, speed up the
 middle clip 2x" works against a local model — undoable, auditable.
-*(Shipped minus the speed change: clip speed isn't an engine command yet —
-it joins the vocabulary via the Phase 5 checklist when M2 lands it.)*
+*(Shipped in full: `set_clip_speed` joined the vocabulary when M1 landed
+the speed field.)*
 
 ### M4 — Effect engine & transitions
 

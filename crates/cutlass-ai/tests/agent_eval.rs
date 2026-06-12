@@ -710,6 +710,58 @@ fn fade_in_with_opacity_keyframes() {
 }
 
 #[test]
+fn speed_up_and_reverse_clip() {
+    let (mut host, _, _, clip) = fixture();
+    let provider = ScriptedProvider::new(vec![
+        tool_turn(vec![(
+            "call_1",
+            "set_clip_speed",
+            serde_json::json!({ "clip": clip, "speed": 2.0, "reversed": true }),
+        )]),
+        text_turn("Doubled the speed and reversed it."),
+    ]);
+
+    let (outcome, _) = run(
+        &provider,
+        &mut host,
+        &EditorContext::default(),
+        "play the clip backwards at double speed",
+        &AgentConfig::default(),
+    );
+
+    assert_eq!(outcome.status, PromptStatus::Completed);
+    assert_eq!(outcome.actions.len(), 1);
+    assert_eq!(
+        outcome.actions[0].description,
+        format!("set clip {clip} speed 2x, reversed")
+    );
+
+    // 10 s of source at 2x occupies 5 s of timeline (120 ticks @ 24 fps),
+    // and the retiming shows up in the next describe() the model sees.
+    let placed = host
+        .engine
+        .project()
+        .clip(cutlass_models::ClipId::from_raw(clip))
+        .unwrap();
+    assert_eq!(placed.timeline.duration.value, 120);
+    assert!(placed.reversed);
+    let summary = summarize(host.engine.project());
+    let described = &summary.tracks[0].clips[0];
+    assert_eq!(described.speed, Some(2.0));
+    assert_eq!(described.reversed, Some(true));
+
+    // One undo restores the original 1x forward placement.
+    assert!(host.engine.undo());
+    let restored = host
+        .engine
+        .project()
+        .clip(cutlass_models::ClipId::from_raw(clip))
+        .unwrap();
+    assert_eq!(restored.timeline.duration.value, 240);
+    assert!(!restored.is_retimed());
+}
+
+#[test]
 fn keyframe_outside_clip_is_rejected_with_extent() {
     let (mut host, _, _, clip) = fixture();
     // First call misses the clip (it ends at 10 s); the model corrects.

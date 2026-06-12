@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::ModelError;
 use crate::ids::{ClipId, LinkId, MediaId};
 use crate::param::{Easing, Param};
-use crate::time::{RationalTime, TimeRange, resample, time_add, time_sub};
+use crate::time::{Rational, RationalTime, TimeRange, resample, time_sub};
 
 /// What a clip draws. Either a trimmed range of imported media, or synthetic
 /// content rendered by the engine (text, shapes, solids, ...).
@@ -650,6 +650,33 @@ pub struct Clip {
     /// exactly like the pre-M2 plain [`ClipTransform`].
     #[serde(default)]
     pub transform: AnimatedTransform,
+    /// Playback rate (CapCut speed, M1): source time advances `speed`× per
+    /// unit of timeline time — `2/1` plays double speed (the clip occupies
+    /// half its source duration on the timeline), `1/2` is 50% slow motion.
+    /// Always positive; direction is the separate `reversed` flag. Stored
+    /// as an exact rational so source-tick math never drifts. Meaningful on
+    /// media clips only; `1/1` (and absent from saves) when never retimed,
+    /// so old files load unchanged and untouched projects keep their shape.
+    #[serde(default = "unit_speed", skip_serializing_if = "is_unit_speed")]
+    pub speed: Rational,
+    /// Play the source window backwards (timeline forward ⇒ source
+    /// backward). Media clips only; absent from saves while false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reversed: bool,
+}
+
+fn unit_speed() -> Rational {
+    Rational::new(1, 1)
+}
+
+fn is_unit_speed(speed: &Rational) -> bool {
+    speed.num == speed.den
+}
+
+// `&bool` is the signature `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Clip {
@@ -661,6 +688,8 @@ impl Clip {
             timeline,
             link: None,
             transform: AnimatedTransform::identity(),
+            speed: unit_speed(),
+            reversed: false,
         }
     }
 
@@ -672,7 +701,28 @@ impl Clip {
             timeline,
             link: None,
             transform: AnimatedTransform::identity(),
+            speed: unit_speed(),
+            reversed: false,
         }
+    }
+
+    /// True iff the clip plays at anything but forward 1× — the audio
+    /// mixers mute retimed clips until varispeed lands (M8), and the UI
+    /// badges them.
+    pub fn is_retimed(&self) -> bool {
+        !is_unit_speed(&self.speed) || self.reversed
+    }
+
+    /// Source ticks consumed by `tl_ticks` timeline ticks at this clip's
+    /// speed (both in the same rate; exact rational scale, truncating).
+    pub fn scale_by_speed(&self, tl_ticks: i64) -> i64 {
+        tl_ticks * i64::from(self.speed.num) / i64::from(self.speed.den)
+    }
+
+    /// Timeline ticks covered by `src_ticks` source ticks at this clip's
+    /// speed (the inverse of [`Self::scale_by_speed`], truncating).
+    pub fn unscale_by_speed(&self, src_ticks: i64) -> i64 {
+        src_ticks * i64::from(self.speed.den) / i64::from(self.speed.num)
     }
 
     /// Clip-relative animation tick for an absolute timeline position: the
@@ -714,7 +764,11 @@ impl Clip {
         matches!(self.content, ClipSource::Generated(_))
     }
 
-    /// Map a timeline position to the corresponding source time, for media clips.
+    /// Map a timeline position to the corresponding source time, for media
+    /// clips. Honors the clip's retiming: the timeline offset scales by
+    /// `speed` (exact rational math), and `reversed` walks the source
+    /// window backward from its end. The result clamps into the source
+    /// window so duration rounding can never read past an edge.
     pub fn source_time_at(&self, timeline_pos: RationalTime) -> Result<Option<RationalTime>, ModelError> {
         if !self.timeline.contains(timeline_pos)? {
             return Ok(None);
@@ -722,8 +776,19 @@ impl Clip {
         match &self.content {
             ClipSource::Media { source, .. } => {
                 let offset_tl = time_sub(&timeline_pos, &self.timeline.start)?;
-                let offset_src = resample(offset_tl, source.start.rate);
-                Ok(Some(time_add(&source.start, &offset_src)?))
+                let scaled = RationalTime::new(self.scale_by_speed(offset_tl.value), offset_tl.rate);
+                let offset_src = resample(scaled, source.start.rate);
+                let first = source.start.value;
+                let last = first + (source.duration.value - 1).max(0);
+                let tick = if self.reversed {
+                    last - offset_src.value
+                } else {
+                    first + offset_src.value
+                };
+                Ok(Some(RationalTime::new(
+                    tick.clamp(first, last),
+                    source.start.rate,
+                )))
             }
             ClipSource::Generated(_) => Ok(None),
         }
@@ -962,6 +1027,92 @@ mod tests {
         // 40 timeline ticks @ 24fps -> 50 source ticks @ 30fps from in-point.
         let mid = clip.source_time_at(rt(40, R24)).unwrap().unwrap();
         assert_eq!(mid, rt(250, R30));
+    }
+
+    // --- source_time_at: speed & reverse (M1) -----------------------------
+
+    #[test]
+    fn source_time_at_scales_by_speed() {
+        // 2× speed: source [100, 200) occupies timeline [0, 50).
+        let mut clip = media_clip(MediaId::from_raw(1), tr(100, 100, R24), tr(0, 50, R24));
+        clip.speed = Rational::new(2, 1);
+        assert!(clip.is_retimed());
+        assert_eq!(clip.source_time_at(rt(0, R24)).unwrap(), Some(rt(100, R24)));
+        assert_eq!(clip.source_time_at(rt(20, R24)).unwrap(), Some(rt(140, R24)));
+        assert_eq!(clip.source_time_at(rt(49, R24)).unwrap(), Some(rt(198, R24)));
+    }
+
+    #[test]
+    fn source_time_at_half_speed_holds_frames() {
+        // ½ speed: source [0, 50) stretches over timeline [0, 100); each
+        // source frame holds for two timeline ticks.
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 50, R24), tr(0, 100, R24));
+        clip.speed = Rational::new(1, 2);
+        assert_eq!(clip.source_time_at(rt(0, R24)).unwrap(), Some(rt(0, R24)));
+        assert_eq!(clip.source_time_at(rt(50, R24)).unwrap(), Some(rt(25, R24)));
+        assert_eq!(clip.source_time_at(rt(51, R24)).unwrap(), Some(rt(25, R24)));
+        assert_eq!(clip.source_time_at(rt(99, R24)).unwrap(), Some(rt(49, R24)));
+    }
+
+    #[test]
+    fn source_time_at_reversed_walks_backward() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(100, 50, R24), tr(0, 50, R24));
+        clip.reversed = true;
+        assert!(clip.is_retimed());
+        assert_eq!(clip.source_time_at(rt(0, R24)).unwrap(), Some(rt(149, R24)));
+        assert_eq!(clip.source_time_at(rt(25, R24)).unwrap(), Some(rt(124, R24)));
+        assert_eq!(clip.source_time_at(rt(49, R24)).unwrap(), Some(rt(100, R24)));
+    }
+
+    #[test]
+    fn source_time_at_reversed_double_speed() {
+        // 2× + reverse: timeline [0, 25) covers source [100, 150) backward.
+        let mut clip = media_clip(MediaId::from_raw(1), tr(100, 50, R24), tr(0, 25, R24));
+        clip.speed = Rational::new(2, 1);
+        clip.reversed = true;
+        assert_eq!(clip.source_time_at(rt(0, R24)).unwrap(), Some(rt(149, R24)));
+        assert_eq!(clip.source_time_at(rt(10, R24)).unwrap(), Some(rt(129, R24)));
+        assert_eq!(clip.source_time_at(rt(24, R24)).unwrap(), Some(rt(101, R24)));
+    }
+
+    #[test]
+    fn source_time_at_clamps_rounding_into_the_window() {
+        // src dur 3 ÷ (2/3 speed) = 4.5 → 4 timeline ticks (truncating);
+        // every timeline tick must still land inside the source window.
+        let mut clip = media_clip(MediaId::from_raw(1), tr(10, 3, R24), tr(0, 4, R24));
+        clip.speed = Rational::new(2, 3);
+        for t in 0..4 {
+            let src = clip.source_time_at(rt(t, R24)).unwrap().unwrap().value;
+            assert!((10..13).contains(&src), "tick {t} mapped to {src}");
+        }
+    }
+
+    // --- speed serde shape --------------------------------------------------
+
+    #[test]
+    fn never_retimed_clips_serialize_without_speed_fields() {
+        let clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 10, R24));
+        let value = serde_json::to_value(&clip).expect("serialize");
+        let map = value.as_object().expect("clip serializes to a map");
+        assert!(!map.contains_key("speed"), "1× speed must stay absent");
+        assert!(!map.contains_key("reversed"), "forward must stay absent");
+
+        // And a pre-speed save (no fields) loads as forward 1×.
+        let loaded: Clip = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(loaded.speed, Rational::new(1, 1));
+        assert!(!loaded.reversed);
+        assert!(!loaded.is_retimed());
+    }
+
+    #[test]
+    fn retimed_clip_roundtrips_speed_through_serde() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 5, R24));
+        clip.speed = Rational::new(2, 1);
+        clip.reversed = true;
+        let json = serde_json::to_string(&clip).expect("serialize");
+        let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(loaded.speed, Rational::new(2, 1));
+        assert!(loaded.reversed);
     }
 
     // --- transform ----------------------------------------------------------

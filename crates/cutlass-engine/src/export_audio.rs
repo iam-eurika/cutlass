@@ -56,6 +56,11 @@ impl ExportAudioMixer {
                 continue;
             }
             for clip in track.clips_ordered() {
+                // Retimed clips (speed ≠ 1× or reversed) are silent until
+                // varispeed lands (M8) — same as CapCut's pre-pitch days.
+                if clip.is_retimed() {
+                    continue;
+                }
                 let Some(media_id) = clip.media() else {
                     continue;
                 };
@@ -212,6 +217,35 @@ mod tests {
     fn silent_project_has_no_mixer() {
         let project = Project::new("test", Rational::FPS_24);
         assert!(ExportAudioMixer::for_project(&project).is_none());
+    }
+
+    #[test]
+    fn retimed_clips_are_muted_until_varispeed() {
+        let mut project = Project::new("test", Rational::FPS_24);
+        let media = project.add_media(MediaSource::new(
+            "/tmp/clip.mp4",
+            640,
+            480,
+            Rational::FPS_24,
+            100,
+            true,
+        ));
+        let lane = project.add_track(TrackKind::Audio, "A1");
+        let clip = project
+            .add_clip(
+                lane,
+                media,
+                TimeRange::at_rate(0, 48, Rational::FPS_24),
+                RationalTime::new(0, Rational::FPS_24),
+            )
+            .unwrap();
+        project
+            .set_clip_speed(clip, Rational::new(2, 1), false)
+            .unwrap();
+        assert!(
+            ExportAudioMixer::for_project(&project).is_none(),
+            "a 2× clip contributes no audio"
+        );
     }
 
     #[test]

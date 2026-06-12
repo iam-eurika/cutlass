@@ -96,6 +96,15 @@ enum WorkerMsg {
     /// Replace a generated clip's content (raw id) — e.g. an inspector title
     /// edit. One undoable history entry per committed edit.
     SetGenerator { clip: String, generator: Generator },
+    /// Retime a media clip (CapCut speed, M1): positive rational `num/den`
+    /// playback rate plus the reverse flag. The engine re-derives the
+    /// timeline duration; one undoable history entry.
+    SetClipSpeed {
+        clip: String,
+        num: i32,
+        den: i32,
+        reversed: bool,
+    },
     /// Live drag override (preview roadmap Phase 3): render `tick` with
     /// `clip`'s transform replaced — session state on the engine, no history
     /// entry, no projection republish. Bursts coalesce to the newest value
@@ -391,6 +400,15 @@ impl WorkerHandle {
 
     pub fn set_generator(&self, clip: String, generator: Generator) {
         let _ = self.tx.send(WorkerMsg::SetGenerator { clip, generator });
+    }
+
+    pub fn set_clip_speed(&self, clip: String, num: i32, den: i32, reversed: bool) {
+        let _ = self.tx.send(WorkerMsg::SetClipSpeed {
+            clip,
+            num,
+            den,
+            reversed,
+        });
     }
 
     pub fn transform_override(&self, clip: String, transform: ClipTransform, tick: i64) {
@@ -733,6 +751,12 @@ fn worker_loop(
             WorkerMsg::SetGenerator { clip, generator } => {
                 set_generator_and_publish(engine, &clip, generator, &ui)
             }
+            WorkerMsg::SetClipSpeed {
+                clip,
+                num,
+                den,
+                reversed,
+            } => set_clip_speed_and_publish(engine, &clip, num, den, reversed, *linkage, &ui),
             WorkerMsg::ClearTransformOverride { tick } => {
                 engine.set_transform_override(None);
                 render_frame(engine, tl_rate, &preview_weak, tick);
@@ -976,6 +1000,7 @@ fn mutation_redraws_preview(msg: &WorkerMsg) -> bool {
             | WorkerMsg::TrimClip { .. }
             | WorkerMsg::RemoveClips { .. }
             | WorkerMsg::SetGenerator { .. }
+            | WorkerMsg::SetClipSpeed { .. }
             | WorkerMsg::SetParamKeyframe { .. }
             | WorkerMsg::RemoveParamKeyframe { .. }
             | WorkerMsg::RetimeKeyframes { .. }
@@ -1693,6 +1718,50 @@ fn add_generated_and_publish(
             publish_projection(engine, ui);
         }
     }
+}
+
+/// Retime a media clip (CapCut speed, M1). The engine validates (positive
+/// speed, media-backed clip, no neighbor overlap) and re-derives the
+/// timeline duration; one undoable history entry. With linkage on, the
+/// clip's link partners (the video+audio pair from one media drop) retime
+/// together in one history group, so the pair stays in sync and one undo
+/// restores both. Audio of retimed clips is muted by the snapshot builder,
+/// so the republish silences it immediately.
+fn set_clip_speed_and_publish(
+    engine: &mut Engine,
+    clip: &str,
+    num: i32,
+    den: i32,
+    reversed: bool,
+    linkage: bool,
+    ui: &UiSink,
+) {
+    let Some(clip_id) = parse_raw_id(clip).map(ClipId::from_raw) else {
+        error!(clip, "set-clip-speed ignored: unparsable clip id");
+        return;
+    };
+    let targets = if linkage {
+        link_group_ids(engine, clip_id)
+    } else {
+        vec![clip_id]
+    };
+
+    engine.begin_group();
+    for target in &targets {
+        if let Err(e) = engine.apply(Command::Edit(EditCommand::SetClipSpeed {
+            clip: *target,
+            speed: Rational::new(num, den),
+            reversed,
+        })) {
+            error!(clip_id = %target, "set clip speed failed: {e}");
+            engine.rollback_group();
+            publish_projection(engine, ui);
+            return;
+        }
+    }
+    engine.commit_group();
+    info!(%clip_id, num, den, reversed, clips = targets.len(), "retimed clip");
+    publish_projection(engine, ui);
 }
 
 /// Replace a generated clip's content (inspector title edit). One history
@@ -3075,6 +3144,12 @@ fn audio_snapshot(engine: &Engine) -> AudioSnapshot {
             continue;
         }
         for clip in track.clips_ordered() {
+            // Retimed clips (speed ≠ 1× or reversed) play silent until
+            // varispeed lands (M8) — the export mixer mutes them the same
+            // way, so what you hear is what you ship.
+            if clip.is_retimed() {
+                continue;
+            }
             let Some(media_id) = clip.media() else {
                 continue;
             };

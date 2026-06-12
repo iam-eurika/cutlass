@@ -200,6 +200,9 @@ fn clip_to_slint(
         media_id: media_id.into(),
         source_in_s,
         duration_label: clip_duration_label(clip.timeline.duration).into(),
+        speed: speed_factor(clip.speed),
+        reversed: clip.reversed,
+        speed_label: speed_label(clip).into(),
         text_content: text_content.into(),
         text_style: clip_text_style(clip),
         generator_kind: generator_kind.into(),
@@ -256,6 +259,40 @@ fn keyframes_to_slint<T: Lerp>(
         })
         .collect();
     model(rows)
+}
+
+/// The clip's speed as a display/scale float (1.0 for degenerate rationals,
+/// which the model rejects anyway).
+fn speed_factor(speed: EngineRational) -> f32 {
+    if speed.num <= 0 || speed.den <= 0 {
+        return 1.0;
+    }
+    speed.num as f32 / speed.den as f32
+}
+
+/// Retime badge for the timeline card: `2x` / `0.5x` (trailing zeros
+/// trimmed), with ` R` appended when reversed — a reversed 1× clip shows
+/// just `R`. Empty ⇔ forward 1× (no badge).
+fn speed_label(clip: &EngineClip) -> String {
+    if !clip.is_retimed() {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let factor = speed_factor(clip.speed);
+    if (factor - 1.0).abs() > f32::EPSILON {
+        let mut s = format!("{factor:.2}");
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+        parts.push(format!("{s}x"));
+    }
+    if clip.reversed {
+        parts.push("R".into());
+    }
+    parts.join(" ")
 }
 
 /// `time` as seconds, exact rational division in floating point.
@@ -575,6 +612,29 @@ mod tests {
         assert_eq!(time_to_seconds(t(48, 24, 1)), 2.0);
         assert_eq!(time_to_seconds(t(500, 1000, 1)), 0.5);
         assert_eq!(time_to_seconds(t(1, 0, 1)), 0.0, "degenerate rate is safe");
+    }
+
+    #[test]
+    fn speed_label_formats_retimes() {
+        use cutlass_models::{Clip as MClip, MediaId, TimeRange};
+        let mut clip = MClip::from_media(
+            MediaId::from_raw(1),
+            TimeRange::at_rate(0, 48, EngineRational::FPS_24),
+            TimeRange::at_rate(0, 48, EngineRational::FPS_24),
+        );
+        assert_eq!(speed_label(&clip), "", "1× forward has no badge");
+
+        clip.speed = EngineRational::new(2, 1);
+        assert_eq!(speed_label(&clip), "2x");
+        clip.speed = EngineRational::new(1, 2);
+        assert_eq!(speed_label(&clip), "0.5x");
+        clip.speed = EngineRational::new(3, 4);
+        assert_eq!(speed_label(&clip), "0.75x");
+
+        clip.reversed = true;
+        assert_eq!(speed_label(&clip), "0.75x R");
+        clip.speed = EngineRational::new(1, 1);
+        assert_eq!(speed_label(&clip), "R");
     }
 
     #[test]

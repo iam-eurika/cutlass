@@ -405,16 +405,33 @@ impl Project {
                 if source.duration.value < 2 {
                     return Err(ModelError::InvalidRange);
                 }
-                let left_src_dur = resample(left_tl.duration, media_fps)
-                    .value
+                // Source consumed by the left half scales with the clip's
+                // speed (1:1 for never-retimed clips).
+                let left_src_dur = clip
+                    .scale_by_speed(resample(left_tl.duration, media_fps).value)
                     .clamp(1, source.duration.value - 1);
-                let left_source = TimeRange::at_rate(source.start.value, left_src_dur, media_fps);
+                // A reversed clip plays its window backward: the timeline's
+                // left half shows the source window's TOP, so the split
+                // hands the window bottom to the right clip.
+                let (left_src_start, right_src_start) = if clip.reversed {
+                    (
+                        source.start.value + source.duration.value - left_src_dur,
+                        source.start.value,
+                    )
+                } else {
+                    (source.start.value, source.start.value + left_src_dur)
+                };
+                let left_source = TimeRange::at_rate(left_src_start, left_src_dur, media_fps);
                 let right_source = TimeRange::at_rate(
-                    source.start.value + left_src_dur,
+                    right_src_start,
                     source.duration.value - left_src_dur,
                     media_fps,
                 );
-                (Some(left_source), Clip::from_media(media, right_source, right_tl))
+                let mut right = Clip::from_media(media, right_source, right_tl);
+                // The retiming rides along on both halves.
+                right.speed = clip.speed;
+                right.reversed = clip.reversed;
+                (Some(left_source), right)
             }
             ClipSource::Generated(generator) => (None, Clip::generated(generator, right_tl)),
         };
@@ -472,16 +489,27 @@ impl Project {
         let new_source = match clip.content.clone() {
             ClipSource::Media { media, source } => {
                 let media = self.media.get(&media).ok_or(ModelError::UnknownMedia(media))?;
-                let head_delta =
+                // Source ticks consumed per timeline tick scale with the
+                // clip's speed (1:1 for never-retimed clips).
+                let head_delta = clip.scale_by_speed(
                     resample(
                         RationalTime::new(new_timeline.start.value - old_tl.start.value, tl_rate),
                         media.frame_rate,
                     )
-                    .value;
-                let new_src_start = source.start.value + head_delta;
-                let new_src_dur = resample(new_timeline.duration, media.frame_rate)
-                    .value
+                    .value,
+                );
+                let new_src_dur = clip
+                    .scale_by_speed(resample(new_timeline.duration, media.frame_rate).value)
                     .max(1);
+                // A reversed clip plays its window backward, so the
+                // timeline head shows the window's END: a head trim drops
+                // source from the top, a tail trim from the bottom —
+                // mirror-image of the forward case.
+                let new_src_start = if clip.reversed {
+                    source.start.value + source.duration.value - new_src_dur - head_delta
+                } else {
+                    source.start.value + head_delta
+                };
                 if new_src_start < 0 || new_src_start + new_src_dur > media.duration.value {
                     return Err(ModelError::SourceOutOfBounds);
                 }
@@ -502,6 +530,58 @@ impl Project {
         if let (Some(src), ClipSource::Media { source, .. }) = (new_source, &mut clip.content) {
             *source = src;
         }
+        Ok(())
+    }
+
+    /// Retime a media clip (CapCut speed, M1): keep its timeline start and
+    /// source window, set `speed`/`reversed`, and re-derive the timeline
+    /// duration (source duration ÷ speed — faster clips occupy less
+    /// timeline). Rejected on generated clips (no source to retime), on
+    /// non-positive speeds, and when the retimed extent would overlap a
+    /// neighbor.
+    pub fn set_clip_speed(
+        &mut self,
+        clip_id: ClipId,
+        speed: Rational,
+        reversed: bool,
+    ) -> Result<(), ModelError> {
+        if speed.num <= 0 || speed.den <= 0 {
+            return Err(ModelError::InvalidParam("speed must be positive".into()));
+        }
+        let track_id = self
+            .timeline
+            .track_of(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        let clip = self
+            .timeline
+            .clip(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        let Some(source) = clip.source_range() else {
+            return Err(ModelError::InvalidParam(
+                "speed requires a media-backed clip".into(),
+            ));
+        };
+        let tl_rate = self.timeline.frame_rate;
+        let src_dur_tl = resample(source.duration, tl_rate).value;
+        let new_dur = (src_dur_tl * i64::from(speed.den) / i64::from(speed.num)).max(1);
+        let new_timeline = TimeRange::at_rate(clip.timeline.start.value, new_dur, tl_rate);
+
+        if self
+            .timeline
+            .track(track_id)
+            .expect("clip is on a track")
+            .has_overlap(new_timeline, Some(clip_id))?
+        {
+            return Err(ModelError::Overlap(track_id));
+        }
+
+        let clip = self
+            .timeline
+            .clip_mut(clip_id)
+            .expect("clip existence checked above");
+        clip.speed = speed;
+        clip.reversed = reversed;
+        clip.timeline = new_timeline;
         Ok(())
     }
 
@@ -1018,6 +1098,152 @@ mod tests {
         let trimmed = project.clip(clip).unwrap();
         assert_eq!(trimmed.timeline, tr(20, 50));
         assert_eq!(trimmed.source_range(), None);
+    }
+
+    // --- set_clip_speed (M1) -----------------------------------------------
+
+    #[test]
+    fn set_clip_speed_rescales_timeline_duration() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        // 2× halves the footprint; the source window is untouched.
+        project.set_clip_speed(clip, Rational::new(2, 1), false).unwrap();
+        let c = project.clip(clip).unwrap();
+        assert_eq!(c.timeline, tr(0, 50));
+        assert_eq!(c.source_range(), Some(tr(0, 100)));
+        assert_eq!(c.speed, Rational::new(2, 1));
+
+        // Back to 1× restores the original footprint.
+        project.set_clip_speed(clip, Rational::new(1, 1), false).unwrap();
+        assert_eq!(project.clip(clip).unwrap().timeline, tr(0, 100));
+
+        // Slow motion stretches it.
+        project.set_clip_speed(clip, Rational::new(1, 2), false).unwrap();
+        assert_eq!(project.clip(clip).unwrap().timeline, tr(0, 200));
+    }
+
+    #[test]
+    fn set_clip_speed_reverse_keeps_duration() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        project.set_clip_speed(clip, Rational::new(1, 1), true).unwrap();
+        let c = project.clip(clip).unwrap();
+        assert_eq!(c.timeline, tr(0, 100));
+        assert!(c.reversed && c.is_retimed());
+    }
+
+    #[test]
+    fn set_clip_speed_rejects_invalid_targets() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        assert!(matches!(
+            project.set_clip_speed(clip, Rational::new(0, 1), false),
+            Err(ModelError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            project.set_clip_speed(clip, Rational::new(-2, 1), false),
+            Err(ModelError::InvalidParam(_))
+        ));
+
+        let fx = project.add_track(TrackKind::Adjustment, "FX");
+        let generated = project
+            .add_generated(fx, Generator::Adjustment, tr(0, 100))
+            .unwrap();
+        assert!(matches!(
+            project.set_clip_speed(generated, Rational::new(2, 1), false),
+            Err(ModelError::InvalidParam(_))
+        ));
+
+        assert_eq!(
+            project.set_clip_speed(ClipId::from_raw(404), Rational::new(2, 1), false),
+            Err(ModelError::UnknownClip(ClipId::from_raw(404)))
+        );
+    }
+
+    #[test]
+    fn set_clip_speed_rejects_overlap_with_neighbor() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+        // Neighbor right behind the clip: slowing to ½× (200 ticks) collides.
+        project.add_clip(track, media_id, tr(0, 50), rt(100)).unwrap();
+
+        assert_eq!(
+            project.set_clip_speed(clip, Rational::new(1, 2), false),
+            Err(ModelError::Overlap(track))
+        );
+        // The clip is untouched after the rejection.
+        let c = project.clip(clip).unwrap();
+        assert_eq!(c.timeline, tr(0, 100));
+        assert_eq!(c.speed, Rational::new(1, 1));
+    }
+
+    #[test]
+    fn trim_scales_source_consumption_by_speed() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(100, 100), rt(0)).unwrap();
+        project.set_clip_speed(clip, Rational::new(2, 1), false).unwrap();
+        // Now timeline [0, 50) over source [100, 200).
+
+        // Head trim by 10 timeline ticks eats 20 source ticks.
+        project.trim_clip(clip, tr(10, 40)).unwrap();
+        let c = project.clip(clip).unwrap();
+        assert_eq!(c.source_range(), Some(tr(120, 80)));
+
+        // Tail trim to 20 timeline ticks keeps 40 source ticks.
+        project.trim_clip(clip, tr(10, 20)).unwrap();
+        assert_eq!(project.clip(clip).unwrap().source_range(), Some(tr(120, 40)));
+    }
+
+    #[test]
+    fn trim_reversed_clip_mirrors_source_window() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(100, 100), rt(0)).unwrap();
+        project.set_clip_speed(clip, Rational::new(1, 1), true).unwrap();
+
+        // The timeline head shows the source END: a head trim by 10 drops
+        // the top 10 source ticks, keeping the bottom.
+        project.trim_clip(clip, tr(10, 90)).unwrap();
+        assert_eq!(project.clip(clip).unwrap().source_range(), Some(tr(100, 90)));
+
+        // A tail trim drops the source BOTTOM.
+        project.trim_clip(clip, tr(10, 80)).unwrap();
+        assert_eq!(project.clip(clip).unwrap().source_range(), Some(tr(110, 80)));
+    }
+
+    #[test]
+    fn split_retimed_clip_inherits_speed_and_partitions_source() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+        project.set_clip_speed(clip, Rational::new(2, 1), false).unwrap();
+        // Timeline [0, 50) over source [0, 100).
+
+        let right = project.split_clip(clip, rt(20)).unwrap();
+        let left = project.clip(clip).unwrap();
+        let right = project.clip(right).unwrap();
+        assert_eq!(left.timeline, tr(0, 20));
+        assert_eq!(left.source_range(), Some(tr(0, 40)));
+        assert_eq!(right.timeline, tr(20, 30));
+        assert_eq!(right.source_range(), Some(tr(40, 60)));
+        assert_eq!(right.speed, Rational::new(2, 1));
+    }
+
+    #[test]
+    fn split_reversed_clip_hands_window_top_to_the_left() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(100, 100), rt(0)).unwrap();
+        project.set_clip_speed(clip, Rational::new(1, 1), true).unwrap();
+
+        let right = project.split_clip(clip, rt(30)).unwrap();
+        let left = project.clip(clip).unwrap();
+        let right = project.clip(right).unwrap();
+        // Left timeline half plays the source top backward; right half the
+        // bottom.
+        assert_eq!(left.source_range(), Some(tr(170, 30)));
+        assert_eq!(right.source_range(), Some(tr(100, 70)));
+        assert!(right.reversed);
     }
 
     // --- move_clip --------------------------------------------------------

@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use cutlass_models::{
-    ClipId, ClipParam, ClipTransform, Easing, Generator, MediaId, ParamValue, RationalTime,
-    TimeRange, TrackId, TrackKind,
+    ClipId, ClipParam, ClipTransform, Easing, Generator, MediaId, ParamValue, Rational,
+    RationalTime, TimeRange, TrackId, TrackKind,
 };
 
 /// A project-level action (media pool, not timeline placement).
@@ -91,6 +91,17 @@ pub enum EditCommand {
         clip: ClipId,
         param: ClipParam,
         value: ParamValue,
+    },
+    /// Retime a media clip (CapCut speed, M1): `speed` is the positive
+    /// playback-rate multiplier (2/1 = double speed), `reversed` plays the
+    /// source window backward. Keeps the clip's timeline start and source
+    /// window; the timeline duration re-derives (source ÷ speed). Rejected
+    /// on generated clips and when the new extent would overlap a
+    /// neighbor. The inverse restores the previous clip state.
+    SetClipSpeed {
+        clip: ClipId,
+        speed: Rational,
+        reversed: bool,
     },
     /// Split a clip at a timeline position into two abutting clips.
     SplitClip { clip: ClipId, at: RationalTime },

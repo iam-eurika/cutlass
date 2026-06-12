@@ -32,17 +32,21 @@ export global StripBackend {
     // Visible tiles for one clip, in clip-local coordinates.
     //
     // Arguments (positional — Slint callbacks don't support named args):
-    //   1. media-id     — Clip.media-id (raw media-pool id)
-    //   2. source-in-s  — Clip.source-in-s (media seconds at the left edge)
-    //   3. duration     — Clip.source-range.duration.value (sequence ticks)
-    //   4. fps-num      — sequence tick rate numerator
-    //   5. fps-den      — sequence tick rate denominator
-    //   6. zoom         — TimelineStore.zoom; px per sequence tick
-    //   7. from-bucket  — first visible 256px bucket of clip-local x
-    //   8. to-bucket    — last visible 256px bucket of clip-local x
-    //   9. generation   — StripBackend.generation (reactivity only)
+    //   1.  media-id     — Clip.media-id (raw media-pool id)
+    //   2.  source-in-s  — Clip.source-in-s (media seconds at the left edge)
+    //   3.  duration     — Clip.source-range.duration.value (sequence ticks)
+    //   4.  fps-num      — sequence tick rate numerator
+    //   5.  fps-den      — sequence tick rate denominator
+    //   6.  speed        — Clip.speed; a 2× clip squeezes 2 source seconds
+    //                      into each timeline second, so the tile grid
+    //                      compresses by the same factor (reversed clips
+    //                      keep forward tile order — same content window)
+    //   7.  zoom         — TimelineStore.zoom; px per sequence tick
+    //   8.  from-bucket  — first visible 256px bucket of clip-local x
+    //   9.  to-bucket    — last visible 256px bucket of clip-local x
+    //   10. generation   — StripBackend.generation (reactivity only)
     //
     // The handlers are installed from Rust in `src/main.rs`.
-    pure callback filmstrip-tiles(string, float, int, int, int, float, int, int, int) -> [StripTile];
-    pure callback waveform-tiles(string, float, int, int, int, float, int, int, int) -> [StripTile];
+    pure callback filmstrip-tiles(string, float, int, int, int, float, float, int, int, int) -> [StripTile];
+    pure callback waveform-tiles(string, float, int, int, int, float, float, int, int, int) -> [StripTile];
 }

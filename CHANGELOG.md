@@ -32,6 +32,19 @@
   keyframes under it, right-click to delete them — either way one undo
   restores everything.
 
+### Clip speed & reverse (M1)
+
+- Media clips can play at any constant speed (0.05×–100×) and in
+  reverse: `speed`/`reversed` on the clip retime preview, export, trim,
+  and split alike; the timeline length re-derives from the speed.
+- Inspector "Speed" section on video and audio clips: preset dropdown
+  (0.25×–4×) plus a Reverse toggle; retimed clips wear a `2x` / `0.5x R`
+  badge on the timeline and their filmstrips stretch to match.
+- The AI agent can retime: `set_clip_speed` joined the tool vocabulary
+  (schema v3) — e.g. "play the middle clip backwards at double speed".
+- Audio of retimed clips is muted (playback and export) until varispeed
+  lands in M8, so what you hear is what you ship.
+
 ## [alpha-0.1.0] — 2026-06-11
 
 First public alpha of the Cutlass desktop editor. Expect rough edges, missing

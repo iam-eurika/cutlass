@@ -400,6 +400,19 @@ pub fn describe_action(command: &WireCommand, outcome: Option<&EditOutcome>) -> 
             param_name(a.param),
             param_value_phrase(a.param, a.value, a.position),
         ),
+        WireCommand::SetClipSpeed(a) => {
+            let mut parts = Vec::new();
+            if let Some(s) = a.speed {
+                parts.push(format!("speed {s}x"));
+            }
+            if let Some(r) = a.reversed {
+                parts.push(if r { "reversed".into() } else { "forward".to_string() });
+            }
+            if parts.is_empty() {
+                parts.push("retiming unchanged".into());
+            }
+            format!("set clip {} {}", a.clip, parts.join(", "))
+        }
         WireCommand::SplitClip(a) => format!("split clip {} at {}", a.clip, secs(a.at)),
         WireCommand::TrimClip(a) => format!(
             "trimmed clip {} to {}–{}",

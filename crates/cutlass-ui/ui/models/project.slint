@@ -127,6 +127,15 @@ export struct Clip {
     source-in-s: float,
     // Timeline length as "3.4s" / "M:SS", for the clip badge.
     duration-label: string,
+    // Playback rate (CapCut speed, M1): 1.0 ⇔ normal. The exact value lives
+    // in the engine as a rational; this float is for display and for
+    // scaling the filmstrip/waveform tile grids (px per source second).
+    speed: float,
+    // Source window plays backward (timeline forward ⇒ source backward).
+    reversed: bool,
+    // Retime badge: "2x", "0.5x", "2x R", "R", … — "" when the clip plays
+    // forward at 1× (no badge). Built in src/projection.rs.
+    speed-label: string,
     // Text / title generator content. Empty on non-text clips.
     text-content: string,
     // Full visual treatment for text/title clips (font, color, stroke, …).

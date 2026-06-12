@@ -123,10 +123,11 @@ the feature-area plan for `v1-roadmap.md` § M2.
 - [x] **Right-click delete** on a diamond: removes every property's
       keyframe at that tick, also one history group.
 
-## Phase 3 — Speed curves (blocked on M1)
+## Phase 3 — Speed curves (unblocked: M1 constant speed landed)
 
-- [ ] `speed` lands in M1 as a constant; retiming it as a
-      `Param<f32>` gives velocity ramps. Needs source-time integration
+- [ ] `speed` landed in M1 as a constant (`Rational` + `reversed` on
+      `Clip`); retiming it as a `Param<f32>` gives velocity ramps. Needs
+      source-time integration
       (speed is a *rate*: source position is the integral of the curve),
       so it is deliberately after the basic system proves out.
 - [ ] Presets (montage, hero moment) as data over the same curves.

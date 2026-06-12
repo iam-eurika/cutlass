@@ -568,6 +568,67 @@ fn set_param_keyframe_undo_redo_roundtrip() {
 }
 
 #[test]
+fn set_clip_speed_undo_redo_roundtrip() {
+    let Some(path) = small_video_asset() else {
+        return;
+    };
+    let (_dir, mut engine) = temp_engine();
+    let media_id = import_asset(&mut engine, &path);
+    let track = common::add_track(&mut engine, TrackKind::Video, "V1");
+    let clip_id = created(
+        engine
+            .apply(Command::Edit(EditCommand::AddClip {
+                track,
+                media: media_id,
+                source: tr(0, 48),
+                start: rt(0),
+            }))
+            .expect("add"),
+    );
+
+    engine
+        .apply(Command::Edit(EditCommand::SetClipSpeed {
+            clip: clip_id,
+            speed: cutlass_models::Rational::new(2, 1),
+            reversed: true,
+        }))
+        .expect("retime");
+    let clip = |engine: &cutlass_engine::Engine| engine.project().clip(clip_id).unwrap().clone();
+    assert_eq!(clip(&engine).timeline.duration.value, 24);
+    assert!(clip(&engine).reversed);
+
+    // One undo restores speed, direction, AND the re-derived duration.
+    assert!(engine.undo());
+    let restored = clip(&engine);
+    assert_eq!(restored.timeline.duration.value, 48);
+    assert_eq!(restored.speed, cutlass_models::Rational::new(1, 1));
+    assert!(!restored.reversed && !restored.is_retimed());
+
+    assert!(engine.redo());
+    assert_eq!(clip(&engine).timeline.duration.value, 24);
+    assert!(clip(&engine).is_retimed());
+}
+
+#[test]
+fn set_clip_speed_rejects_generated_clips() {
+    let (_dir, mut engine) = temp_engine();
+    let clip_id = text_clip(&mut engine);
+    let before = engine.project().clip(clip_id).unwrap().clone();
+
+    assert!(
+        engine
+            .apply(Command::Edit(EditCommand::SetClipSpeed {
+                clip: clip_id,
+                speed: cutlass_models::Rational::new(2, 1),
+                reversed: false,
+            }))
+            .is_err()
+    );
+    // The rejection left the clip untouched.
+    assert_eq!(engine.project().clip(clip_id).unwrap(), &before);
+}
+
+#[test]
 fn remove_param_keyframe_undo_restores_curve() {
     let (_dir, mut engine) = temp_engine();
     let clip_id = text_clip(&mut engine);
