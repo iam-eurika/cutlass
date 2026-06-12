@@ -132,6 +132,22 @@ pub enum EditCommand {
         fade_in: RationalTime,
         fade_out: RationalTime,
     },
+    /// Append a GPU effect (M4) to a visual clip's chain. `effect_id` must
+    /// exist in the effect catalog. The inverse removes it (clip snapshot).
+    AddEffect { clip: ClipId, effect_id: String },
+    /// Remove the effect at `index` from a clip's chain. The inverse restores
+    /// it (clip snapshot).
+    RemoveEffect { clip: ClipId, index: usize },
+    /// Set one effect parameter to a constant (the non-animated quick edit;
+    /// animated edits go through `SetParamKeyframe` with `ClipParam::Effect`).
+    /// `param` is the catalog slot index. The inverse restores the previous
+    /// clip state.
+    SetEffectParam {
+        clip: ClipId,
+        index: usize,
+        param: usize,
+        value: f32,
+    },
     /// Split a clip at a timeline position into two abutting clips.
     SplitClip { clip: ClipId, at: RationalTime },
     /// Re-place / trim a clip to occupy `timeline`.
