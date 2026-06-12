@@ -1313,6 +1313,7 @@ version = "0.2.0-alpha.0"
 dependencies = [
  "bytemuck",
  "criterion",
+ "image",
  "pollster",
  "thiserror 2.0.18",
  "tracing",

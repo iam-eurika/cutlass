@@ -15,6 +15,9 @@ pollster.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 pollster.workspace = true
+# Golden-frame fixtures are stored/compared as PNG; only the PNG codec is
+# needed (the full image crate is otherwise a Slint-only transitive dep).
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[bench]]
 name = "composite"
