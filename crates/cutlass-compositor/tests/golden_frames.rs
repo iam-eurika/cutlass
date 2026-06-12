@@ -346,6 +346,58 @@ fn every_starter_effect_changes_the_frame() {
 }
 
 #[test]
+fn adjustment_layer_filters_below_but_not_above() {
+    // CapCut adjustment-layer semantics: a vignette adjustment darkens the
+    // canvas stacked under it, while a clip drawn above the adjustment is
+    // untouched.
+    let Some(gpu) = try_gpu() else {
+        eprintln!("skipping adjustment_layer_filters_below_but_not_above: no GPU adapter");
+        return;
+    };
+    let mut compositor = Compositor::new(&gpu).expect("compositor");
+    let config = CompositorConfig::new(W, H);
+
+    // A red square covering the top-left 16×16 corner, drawn above the
+    // adjustment.
+    let top = CompositeLayer::solid(
+        [255, 0, 0, 255],
+        LayerPlacement {
+            center: [8.0, 8.0],
+            size: [16.0, 16.0],
+            rotation: 0.0,
+            opacity: 1.0,
+        },
+    );
+    let bottom = CompositeLayer::solid([255, 255, 255, 255], LayerPlacement::full_canvas(&config));
+    let adjustment =
+        CompositeLayer::adjustment(vec![LayerEffect::new("vignette").with_param(0, 0.9)], 1.0);
+
+    let out = compositor
+        .composite(&gpu, &config, &[bottom, adjustment, top])
+        .expect("composite");
+
+    // The red square sits above the adjustment: untouched.
+    let covered = pixel(&out, 1, 1);
+    assert!(
+        covered[0] > 250 && covered[1] < 5 && covered[2] < 5,
+        "clip above the adjustment is unaffected (got {covered:?})"
+    );
+    // The far corner is white-below-vignette: darkened well under 255.
+    let corner = pixel(&out, W - 2, H - 2);
+    assert!(
+        corner[0] < 200,
+        "the canvas below the adjustment is darkened at the corner (got {corner:?})"
+    );
+    // The center barely changes: vignette leaves it near white.
+    let center = pixel(&out, W / 2, H / 2);
+    assert!(
+        center[0] > 230,
+        "the adjustment leaves the center near white (got {center:?})"
+    );
+    assert_golden("adjustment_stack", &out);
+}
+
+#[test]
 fn unknown_effect_is_skipped() {
     // An effect id the registry doesn't know must be a no-op, not a panic:
     // the model layer validates ids, but the compositor stays defensive.
