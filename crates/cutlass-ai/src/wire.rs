@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 /// 4: M1 clip audio mix (`set_clip_audio`).
 /// 5: M1 timeline markers (`add_marker`, `remove_marker`, `set_marker`).
 /// 6: M1 crop + flip (`set_clip_crop`).
-pub const TOOL_SCHEMA_VERSION: u32 = 6;
+/// 7: subschemas inlined (no `$defs`/`$ref`) + `generator` field examples,
+///    so small local models stop guessing nested argument shapes.
+pub const TOOL_SCHEMA_VERSION: u32 = 7;
 
 /// Track lane categories the agent may create or target.
 ///
@@ -106,6 +108,10 @@ pub struct AddGenerated {
     /// Target track id. Text goes on text tracks; solids and shapes go on
     /// sticker (overlay) tracks.
     pub track: u64,
+    /// The content to generate, as a tagged object — e.g.
+    /// `{"type": "text", "content": "Hello"}`,
+    /// `{"type": "solid", "rgba": [0, 0, 0, 255]}`, or
+    /// `{"type": "shape", "shape": "ellipse", "rgba": [255, 0, 0, 255]}`.
     pub generator: WireGenerator,
     /// Where the clip begins on the timeline, in seconds.
     pub start: f64,
@@ -120,6 +126,10 @@ pub struct AddGenerated {
 pub struct SetGenerator {
     /// The generated clip to modify.
     pub clip: u64,
+    /// The replacement content, as a tagged object — e.g.
+    /// `{"type": "text", "content": "Hello"}`,
+    /// `{"type": "solid", "rgba": [0, 0, 0, 255]}`, or
+    /// `{"type": "shape", "shape": "ellipse", "rgba": [255, 0, 0, 255]}`.
     pub generator: WireGenerator,
 }
 
@@ -561,12 +571,34 @@ pub struct ToolSpec {
 }
 
 fn spec<T: JsonSchema>(name: &'static str, description: &'static str) -> ToolSpec {
-    let parameters = serde_json::to_value(schemars::schema_for!(T))
-        .expect("tool argument schemas are plain data and always serialize");
+    // Subschemas are inlined (no `$defs` / `$ref`): small local models
+    // routinely fail to follow reference indirection and then guess the
+    // argument shape (e.g. passing a bare string where the tagged
+    // `WireGenerator` object is required).
+    let mut settings = schemars::generate::SchemaSettings::draft2020_12();
+    settings.inline_subschemas = true;
+    let parameters =
+        serde_json::to_value(settings.into_generator().into_root_schema_for::<T>())
+            .expect("tool argument schemas are plain data and always serialize");
     ToolSpec {
         name,
         description,
         parameters,
+    }
+}
+
+/// A corrective example appended to argument-decode rejections, for the
+/// tools whose nested shapes models most often get wrong. The model reads
+/// this and retries; without it, weak models tend to give up and ask the
+/// user instead.
+fn argument_hint(tool: &str) -> Option<&'static str> {
+    match tool {
+        "add_generated" | "set_generator" => Some(
+            "'generator' must be a tagged object: {\"type\": \"text\", \"content\": \"Hello\"} \
+             or {\"type\": \"solid\", \"rgba\": [0, 0, 0, 255]} \
+             or {\"type\": \"shape\", \"shape\": \"ellipse\", \"rgba\": [255, 0, 0, 255]}",
+        ),
+        _ => None,
     }
 }
 
@@ -611,7 +643,12 @@ macro_rules! tools {
                     $(
                         $name => serde_json::from_value::<$args>(arguments)
                             .map(WireCommand::$variant)
-                            .map_err(|e| format!("invalid arguments for {name}: {e}")),
+                            .map_err(|e| {
+                                let hint = argument_hint(name)
+                                    .map(|h| format!(" ({h})"))
+                                    .unwrap_or_default();
+                                format!("invalid arguments for {name}: {e}{hint}")
+                            }),
                     )+
                     other => Err(format!(
                         "unknown tool '{other}'; available tools: {}",
@@ -729,6 +766,38 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("invalid arguments for trim_clip"));
+    }
+
+    #[test]
+    fn generator_decode_rejection_carries_a_corrective_example() {
+        // The historical failure mode: a model passes the title text as a
+        // bare string instead of the tagged object.
+        let err = WireCommand::from_tool_call(
+            "add_generated",
+            serde_json::json!({
+                "track": 2,
+                "generator": "Hello world",
+                "start": 0.0,
+                "duration": 3.0,
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("invalid arguments for add_generated"), "{err}");
+        assert!(err.contains("{\"type\": \"text\", \"content\": \"Hello\"}"), "{err}");
+    }
+
+    #[test]
+    fn tool_schemas_are_fully_inlined() {
+        // No `$ref` indirection anywhere: weak local models read schemas
+        // literally and guess when the shape is behind a reference.
+        for spec in tool_specs() {
+            let rendered = spec.parameters.to_string();
+            assert!(
+                !rendered.contains("$ref") && !rendered.contains("$defs"),
+                "{} schema is not self-contained: {rendered}",
+                spec.name
+            );
+        }
     }
 
     #[test]

@@ -4,8 +4,19 @@
       "description": "Add a track to the timeline stack (video, audio, text, or sticker overlay lane).",
       "name": "add_track",
       "parameters": {
-        "$defs": {
-          "WireTrackKind": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Add a track to the timeline stack.",
+        "properties": {
+          "index": {
+            "description": "Stack position (0 = bottom layer, composited first). Omit to add on\ntop of the stack.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
             "description": "Track lane categories the agent may create or target.\n\nThe engine has more kinds (effect / filter / adjustment lanes); they are\nplaceholders that render nothing today, so the agent cannot create them.",
             "oneOf": [
               {
@@ -29,22 +40,6 @@
                 "type": "string"
               }
             ]
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "Add a track to the timeline stack.",
-        "properties": {
-          "index": {
-            "description": "Stack position (0 = bottom layer, composited first). Omit to add on\ntop of the stack.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "kind": {
-            "$ref": "#/$defs/WireTrackKind"
           },
           "name": {
             "description": "Display name, e.g. \"V2\" or \"Music\".",
@@ -109,9 +104,16 @@
       "description": "Place a generated clip (text title, solid color, or shape) on a matching track. Times are in seconds.",
       "name": "add_generated",
       "parameters": {
-        "$defs": {
-          "WireGenerator": {
-            "description": "Synthetic clip content the agent may create.",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Place a generated clip (text, solid color, shape) on a matching track.",
+        "properties": {
+          "duration": {
+            "description": "Clip length on the timeline, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "generator": {
+            "description": "The content to generate, as a tagged object — e.g.\n`{\"type\": \"text\", \"content\": \"Hello\"}`,\n`{\"type\": \"solid\", \"rgba\": [0, 0, 0, 255]}`, or\n`{\"type\": \"shape\", \"shape\": \"ellipse\", \"rgba\": [255, 0, 0, 255]}`.",
             "oneOf": [
               {
                 "description": "A title / text layer (rendered with the default style; styling is\npreserved when replacing the text of an existing text clip).",
@@ -173,7 +175,12 @@
                     "type": "array"
                   },
                   "shape": {
-                    "$ref": "#/$defs/WireShape"
+                    "description": "Geometry of a generated shape clip.",
+                    "enum": [
+                      "rectangle",
+                      "ellipse"
+                    ],
+                    "type": "string"
                   },
                   "type": {
                     "const": "shape",
@@ -188,26 +195,6 @@
                 "type": "object"
               }
             ]
-          },
-          "WireShape": {
-            "description": "Geometry of a generated shape clip.",
-            "enum": [
-              "rectangle",
-              "ellipse"
-            ],
-            "type": "string"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "Place a generated clip (text, solid color, shape) on a matching track.",
-        "properties": {
-          "duration": {
-            "description": "Clip length on the timeline, in seconds.",
-            "format": "double",
-            "type": "number"
-          },
-          "generator": {
-            "$ref": "#/$defs/WireGenerator"
           },
           "start": {
             "description": "Where the clip begins on the timeline, in seconds.",
@@ -235,9 +222,17 @@
       "description": "Replace a generated clip's content: change a title's text (styling preserved) or recolor a solid/shape. Not valid for media clips.",
       "name": "set_generator",
       "parameters": {
-        "$defs": {
-          "WireGenerator": {
-            "description": "Synthetic clip content the agent may create.",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Replace a generated clip's content (edit a title's text, recolor a\nshape). Rejected for media-backed clips. Replacing the text of a text\nclip keeps its current styling.",
+        "properties": {
+          "clip": {
+            "description": "The generated clip to modify.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "generator": {
+            "description": "The replacement content, as a tagged object — e.g.\n`{\"type\": \"text\", \"content\": \"Hello\"}`,\n`{\"type\": \"solid\", \"rgba\": [0, 0, 0, 255]}`, or\n`{\"type\": \"shape\", \"shape\": \"ellipse\", \"rgba\": [255, 0, 0, 255]}`.",
             "oneOf": [
               {
                 "description": "A title / text layer (rendered with the default style; styling is\npreserved when replacing the text of an existing text clip).",
@@ -299,7 +294,12 @@
                     "type": "array"
                   },
                   "shape": {
-                    "$ref": "#/$defs/WireShape"
+                    "description": "Geometry of a generated shape clip.",
+                    "enum": [
+                      "rectangle",
+                      "ellipse"
+                    ],
+                    "type": "string"
                   },
                   "type": {
                     "const": "shape",
@@ -314,27 +314,6 @@
                 "type": "object"
               }
             ]
-          },
-          "WireShape": {
-            "description": "Geometry of a generated shape clip.",
-            "enum": [
-              "rectangle",
-              "ellipse"
-            ],
-            "type": "string"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "Replace a generated clip's content (edit a title's text, recolor a\nshape). Rejected for media-backed clips. Replacing the text of a text\nclip keeps its current styling.",
-        "properties": {
-          "clip": {
-            "description": "The generated clip to modify.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "generator": {
-            "$ref": "#/$defs/WireGenerator"
           }
         },
         "required": [
@@ -475,8 +454,34 @@
       "description": "Add or replace a keyframe on a clip property (position, scale, rotation, opacity) at a timeline position in seconds, animating it over time. Use 'value' for scalar params, 'position' for position.",
       "name": "set_param_keyframe",
       "parameters": {
-        "$defs": {
-          "WireClipParam": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Add or replace a keyframe on one animatable clip property, making the\nproperty animate over time. The first keyframe on a property turns its\nfixed value into a curve.",
+        "properties": {
+          "at": {
+            "description": "Timeline position of the keyframe, in seconds. Must fall inside the\nclip.",
+            "format": "double",
+            "type": "number"
+          },
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "easing": {
+            "description": "Interpolation toward the next keyframe. Defaults to linear.",
+            "enum": [
+              "linear",
+              "ease_in",
+              "ease_out",
+              "ease_in_out",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "param": {
             "description": "An animatable clip property the keyframe commands can address.",
             "oneOf": [
               {
@@ -500,44 +505,6 @@
                 "type": "string"
               }
             ]
-          },
-          "WireEasing": {
-            "description": "Interpolation toward the next keyframe. (Custom bezier curves exist in\nthe engine but are inspector-only; the agent surface stays simple.)",
-            "enum": [
-              "linear",
-              "ease_in",
-              "ease_out",
-              "ease_in_out"
-            ],
-            "type": "string"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "Add or replace a keyframe on one animatable clip property, making the\nproperty animate over time. The first keyframe on a property turns its\nfixed value into a curve.",
-        "properties": {
-          "at": {
-            "description": "Timeline position of the keyframe, in seconds. Must fall inside the\nclip.",
-            "format": "double",
-            "type": "number"
-          },
-          "clip": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "easing": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/WireEasing"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Interpolation toward the next keyframe. Defaults to linear."
-          },
-          "param": {
-            "$ref": "#/$defs/WireClipParam"
           },
           "position": {
             "description": "New `[x, y]` for `position` (fractions of canvas size from center,\n+x right, +y down). Ignored for scalar params.",
@@ -574,8 +541,20 @@
       "description": "Remove the keyframe at a timeline position (seconds) on a clip property. Removing the last keyframe freezes the property at that value.",
       "name": "remove_param_keyframe",
       "parameters": {
-        "$defs": {
-          "WireClipParam": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Remove the keyframe at exactly a timeline position on one property.\nRemoving the last keyframe freezes the property at that value.",
+        "properties": {
+          "at": {
+            "description": "Timeline position of the keyframe to remove, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "param": {
             "description": "An animatable clip property the keyframe commands can address.",
             "oneOf": [
               {
@@ -599,23 +578,6 @@
                 "type": "string"
               }
             ]
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "Remove the keyframe at exactly a timeline position on one property.\nRemoving the last keyframe freezes the property at that value.",
-        "properties": {
-          "at": {
-            "description": "Timeline position of the keyframe to remove, in seconds.",
-            "format": "double",
-            "type": "number"
-          },
-          "clip": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "param": {
-            "$ref": "#/$defs/WireClipParam"
           }
         },
         "required": [
@@ -631,8 +593,15 @@
       "description": "Set a clip property to a fixed value and remove all its keyframes (stops its animation).",
       "name": "set_param_constant",
       "parameters": {
-        "$defs": {
-          "WireClipParam": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Set one animatable property to a fixed value, removing all its\nkeyframes (stops the animation).",
+        "properties": {
+          "clip": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "param": {
             "description": "An animatable clip property the keyframe commands can address.",
             "oneOf": [
               {
@@ -656,18 +625,6 @@
                 "type": "string"
               }
             ]
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "Set one animatable property to a fixed value, removing all its\nkeyframes (stops the animation).",
-        "properties": {
-          "clip": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "param": {
-            "$ref": "#/$defs/WireClipParam"
           },
           "position": {
             "description": "New `[x, y]` for `position`. Ignored for scalar params.",
@@ -1109,22 +1066,6 @@
       "description": "Drop a named, colored marker on the timeline ruler at a position in seconds. Omit color to cycle the palette.",
       "name": "add_marker",
       "parameters": {
-        "$defs": {
-          "WireMarkerColor": {
-            "description": "Marker flag colors (the editor's fixed palette).",
-            "enum": [
-              "teal",
-              "blue",
-              "purple",
-              "pink",
-              "red",
-              "orange",
-              "yellow",
-              "green"
-            ],
-            "type": "string"
-          }
-        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "Drop a named, colored marker on the timeline ruler — an anchor for\nnavigation and for aligning edits (\"cut at the marker\", beat sync).",
         "properties": {
@@ -1134,15 +1075,22 @@
             "type": "number"
           },
           "color": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/WireMarkerColor"
-              },
-              {
-                "type": "null"
-              }
+            "description": "Flag color. Omit to cycle the palette automatically.",
+            "enum": [
+              "teal",
+              "blue",
+              "purple",
+              "pink",
+              "red",
+              "orange",
+              "yellow",
+              "green",
+              null
             ],
-            "description": "Flag color. Omit to cycle the palette automatically."
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "name": {
             "description": "Short label shown beside the flag (e.g. \"Drop\", \"Beat 1\"). Omit for\nan unnamed marker.",
@@ -1184,22 +1132,6 @@
       "description": "Move, rename, or recolor a ruler marker. Omitted fields keep their current value.",
       "name": "set_marker",
       "parameters": {
-        "$defs": {
-          "WireMarkerColor": {
-            "description": "Marker flag colors (the editor's fixed palette).",
-            "enum": [
-              "teal",
-              "blue",
-              "purple",
-              "pink",
-              "red",
-              "orange",
-              "yellow",
-              "green"
-            ],
-            "type": "string"
-          }
-        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "Move, rename, or recolor an existing timeline marker. Omitted fields\nkeep their current value.",
         "properties": {
@@ -1212,15 +1144,22 @@
             ]
           },
           "color": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/WireMarkerColor"
-              },
-              {
-                "type": "null"
-              }
+            "description": "New flag color. Omit to keep the color.",
+            "enum": [
+              "teal",
+              "blue",
+              "purple",
+              "pink",
+              "red",
+              "orange",
+              "yellow",
+              "green",
+              null
             ],
-            "description": "New flag color. Omit to keep the color."
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "marker": {
             "description": "The marker to change.",
@@ -1252,5 +1191,5 @@
       }
     }
   ],
-  "version": 6
+  "version": 7
 }
