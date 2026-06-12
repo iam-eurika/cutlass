@@ -103,6 +103,32 @@ export component MediaTile inherits Rectangle {
             }
         }
     }
+
+    // Missing badge (v1 roadmap M0): the source file is gone — clips stay
+    // but can't decode. Clicking the badge opens the relink picker, the
+    // same flow as the relink dialog's "Locate…" (worker re-probes, swaps
+    // the path, republishes; the badge clears with the next projection).
+    if media.is-missing: Rectangle {
+        x: 4px;
+        y: 4px;
+        width: missing-text.preferred-width + 8px;
+        height: missing-text.preferred-height + 4px;
+        background: #C83A3AE0;
+        border-radius: 3px;
+
+        missing-text := CutlassText {
+            x: 4px;
+            y: 2px;
+            text: "Missing";
+            style: AppStore.theme.typography.label;
+        }
+
+        TouchArea {
+            clicked => {
+                EditorStore.on-relink-media-requested(media.id);
+            }
+        }
+    }
 }
 
 // One draggable generator tile (text title, solid, shape). The payload

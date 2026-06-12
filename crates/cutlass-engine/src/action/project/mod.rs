@@ -11,6 +11,7 @@ use crate::error::EngineError;
 pub mod import;
 pub mod load;
 pub mod open;
+pub mod relink;
 pub mod save;
 
 pub(crate) fn load_session(

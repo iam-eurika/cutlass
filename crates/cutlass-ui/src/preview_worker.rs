@@ -236,13 +236,25 @@ enum WorkerMsg {
     /// Either way `save-finished(ok)` fires so a pending guarded transition
     /// (open/new/close waiting on "Save") can continue or abort.
     SaveProject { path: Option<PathBuf> },
-    /// Replace the session from a `.cutlass` file (strict: every media path
-    /// must exist). Success re-registers pool media with the thumbnail and
-    /// strip workers, republishes everything, and bumps the session epoch
-    /// so the UI resets its session state (playhead, selection, range).
-    /// Failure publishes `session-error`. The unsaved-changes guard ran
-    /// UI-side before this message was sent.
+    /// Replace the session from a `.cutlass` file (tolerant: entries whose
+    /// media file is gone are kept and surface through the relink flow —
+    /// the projection republish carries the missing set, and app.slint
+    /// raises the relink dialog on the epoch bump). Success re-registers
+    /// still-present pool media with the thumbnail and strip workers,
+    /// republishes everything, and bumps the session epoch so the UI
+    /// resets its session state (playhead, selection, range). Failure
+    /// publishes `session-error`. The unsaved-changes guard ran UI-side
+    /// before this message was sent.
     OpenProject { path: PathBuf },
+    /// Re-point a media-pool entry (raw id) at a new file (missing-media
+    /// relink, M0): the engine re-probes the file and swaps the entry's
+    /// path/metadata in place (id and clips untouched), the tile workers
+    /// re-register, and the projection republish drops the entry from the
+    /// missing set. Not undoable — state repair, not an edit.
+    RelinkMedia { media: String, path: PathBuf },
+    /// Try `folder/<filename>` for every missing pool entry (locate-folder
+    /// gesture in the relink dialog).
+    RelinkFolder { folder: PathBuf },
     /// Replace the session with a fresh, empty, unsaved project (File →
     /// New). Same epoch bump as `OpenProject`; guard ran UI-side.
     NewProject,
@@ -359,6 +371,14 @@ impl WorkerHandle {
 
     pub fn restore_autosave(&self, autosave: PathBuf, source: Option<PathBuf>) {
         let _ = self.tx.send(WorkerMsg::RestoreAutosave { autosave, source });
+    }
+
+    pub fn relink_media(&self, media: String, path: PathBuf) {
+        let _ = self.tx.send(WorkerMsg::RelinkMedia { media, path });
+    }
+
+    pub fn relink_folder(&self, folder: PathBuf) {
+        let _ = self.tx.send(WorkerMsg::RelinkFolder { folder });
     }
 
     pub fn add_clip(
@@ -938,6 +958,12 @@ fn worker_loop(
             WorkerMsg::OpenProject { path } => {
                 open_project_and_publish(engine, path, &ui, &thumbs, &strips)
             }
+            WorkerMsg::RelinkMedia { media, path } => {
+                relink_media_and_publish(engine, &media, &path, &ui, &thumbs, &strips)
+            }
+            WorkerMsg::RelinkFolder { folder } => {
+                relink_folder_and_publish(engine, folder, &ui, &thumbs, &strips)
+            }
             WorkerMsg::NewProject => new_project_and_publish(engine, &ui),
             WorkerMsg::Autosave => autosave_sweep(engine, autosave_slot),
             WorkerMsg::RestoreAutosave { autosave, source } => restore_autosave_and_publish(
@@ -1092,6 +1118,9 @@ fn mutation_redraws_preview(msg: &WorkerMsg) -> bool {
             | WorkerMsg::OpenProject { .. }
             | WorkerMsg::NewProject
             | WorkerMsg::RestoreAutosave { .. }
+            // Relinked media decodes again — refresh the stale composite.
+            | WorkerMsg::RelinkMedia { .. }
+            | WorkerMsg::RelinkFolder { .. }
     )
 }
 
@@ -1442,13 +1471,17 @@ fn save_project_and_publish(engine: &mut Engine, path: Option<PathBuf>, ui: &UiS
     }
 }
 
-/// Replace the session from a `.cutlass` file (strict open: every media
-/// path must exist). On success every pool media re-registers with the
-/// thumbnail and strip workers — the same bookkeeping an import does — the
-/// projection republish swaps the UI over, and the session epoch bump
-/// resets UI session state (playhead, selection, in/out range). On failure
-/// the current session is untouched (the engine rejects before replacing)
-/// and `session-error` names the offending path.
+/// Replace the session from a `.cutlass` file. Tolerant (`Load`, not the
+/// strict `Open`): entries whose media file is gone are kept so the user
+/// can relink them instead of being locked out of the project — the
+/// projection republish carries the missing set (count + per-tile badges)
+/// and app.slint raises the relink dialog on the epoch bump. On success
+/// every still-present pool media re-registers with the thumbnail and
+/// strip workers — the same bookkeeping an import does — the projection
+/// republish swaps the UI over, and the session epoch bump resets UI
+/// session state (playhead, selection, in/out range). On failure the
+/// current session is untouched (the engine rejects before replacing) and
+/// `session-error` names the offending path.
 fn open_project_and_publish(
     engine: &mut Engine,
     path: PathBuf,
@@ -1456,15 +1489,17 @@ fn open_project_and_publish(
     thumbs: &ThumbnailHandle,
     strips: &StripHandle,
 ) {
-    match engine.apply(Command::Project(ProjectCommand::Open { path: path.clone() })) {
-        Ok(ApplyOutcome::Opened) => {
+    match engine.apply(Command::Project(ProjectCommand::Load { path: path.clone() })) {
+        Ok(ApplyOutcome::Loaded) => {
             info!(
                 path = %path.display(),
                 pool = engine.project().media_count(),
                 "opened project"
             );
             for media in engine.project().media_iter() {
-                register_media_with_workers(media, thumbs, strips);
+                if media.path().exists() {
+                    register_media_with_workers(media, thumbs, strips);
+                }
             }
             note_recent_project(&path, ui);
             publish_projection(engine, ui);
@@ -1475,6 +1510,103 @@ fn open_project_and_publish(
             error!(path = %path.display(), "open failed: {e}");
             publish_session_error(ui, format!("Couldn't open {}: {e}", path.display()));
         }
+    }
+}
+
+/// Re-point a pool entry at a user-picked file (missing-media relink, M0).
+/// The engine re-probes and swaps the entry's path/metadata in place (same
+/// id — clips recover without being touched); the tile workers re-register
+/// so the thumbnail and filmstrips regenerate from the new file; the
+/// projection republish clears the entry's missing badge and decrements
+/// the dialog's count. Failures (unreadable file, probe error) surface
+/// through `session-error` and leave the entry untouched.
+fn relink_media_and_publish(
+    engine: &mut Engine,
+    media: &str,
+    path: &Path,
+    ui: &UiSink,
+    thumbs: &ThumbnailHandle,
+    strips: &StripHandle,
+) {
+    let Some(media_id) = parse_raw_id(media).map(MediaId::from_raw) else {
+        error!(media, "relink ignored: unparsable media id");
+        return;
+    };
+    match engine.apply(Command::Project(ProjectCommand::RelinkMedia {
+        media: media_id,
+        path: path.to_path_buf(),
+    })) {
+        Ok(ApplyOutcome::Relinked { media }) => {
+            info!(?media, path = %path.display(), "relinked media");
+            if let Some(source) = engine.project().media(media) {
+                register_media_with_workers(source, thumbs, strips);
+            }
+            publish_projection(engine, ui);
+        }
+        Ok(other) => error!(path = %path.display(), "unexpected relink outcome: {other:?}"),
+        Err(e) => {
+            error!(path = %path.display(), "relink failed: {e}");
+            publish_session_error(
+                ui,
+                format!("Couldn't relink to {}: {e}", path.display()),
+            );
+        }
+    }
+}
+
+/// Try `folder/<filename>` for every missing pool entry; relink each match.
+fn relink_folder_and_publish(
+    engine: &mut Engine,
+    folder: PathBuf,
+    ui: &UiSink,
+    thumbs: &ThumbnailHandle,
+    strips: &StripHandle,
+) {
+    let candidates: Vec<(MediaId, PathBuf)> = engine
+        .project()
+        .media_iter()
+        .filter(|media| !media.path().exists())
+        .filter_map(|media| {
+            media
+                .path()
+                .file_name()
+                .map(|name| (media.id, folder.join(name)))
+        })
+        .filter(|(_, candidate)| candidate.exists())
+        .collect();
+
+    if candidates.is_empty() {
+        publish_session_error(
+            ui,
+            format!(
+                "No missing media files were found in {}. \
+                 Pick individual files or choose a folder that contains them.",
+                folder.display()
+            ),
+        );
+        return;
+    }
+
+    let mut relinked = 0usize;
+    for (media_id, path) in candidates {
+        match engine.apply(Command::Project(ProjectCommand::RelinkMedia {
+            media: media_id,
+            path: path.clone(),
+        })) {
+            Ok(ApplyOutcome::Relinked { media }) => {
+                relinked += 1;
+                if let Some(source) = engine.project().media(media) {
+                    register_media_with_workers(source, thumbs, strips);
+                }
+            }
+            Ok(other) => error!(path = %path.display(), "unexpected relink outcome: {other:?}"),
+            Err(e) => error!(path = %path.display(), "folder relink failed: {e}"),
+        }
+    }
+
+    if relinked > 0 {
+        info!(count = relinked, folder = %folder.display(), "relinked media from folder");
+        publish_projection(engine, ui);
     }
 }
 
@@ -3435,6 +3567,16 @@ fn publish_projection(engine: &mut Engine, ui: &UiSink) {
     ui.audio.publish_snapshot(audio_snapshot(engine));
 
     let generator_sizes = generator_content_sizes(engine);
+    // Pool entries whose backing file is gone (raw ids) — drives the relink
+    // dialog count and the library tiles' missing badges. Computed here on
+    // the worker thread so the UI thread never stats the filesystem (a dead
+    // network mount must not hitch painting).
+    let missing_media: std::collections::HashSet<u64> = engine
+        .project()
+        .media_iter()
+        .filter(|m| !m.path().exists())
+        .map(|m| m.id.raw())
+        .collect();
     let project = engine.project().clone();
     let can_undo = engine.can_undo();
     let can_redo = engine.can_redo();
@@ -3456,7 +3598,12 @@ fn publish_projection(engine: &mut Engine, ui: &UiSink) {
     let editor_weak = ui.editor.clone();
     if let Err(e) = slint::invoke_from_event_loop(move || {
         if let Some(store) = editor_weak.upgrade() {
-            store.set_project(crate::projection::project_to_slint(&project, &generator_sizes));
+            store.set_project(crate::projection::project_to_slint(
+                &project,
+                &generator_sizes,
+                &missing_media,
+            ));
+            store.set_missing_media_count(missing_media.len() as i32);
             store.set_can_undo(can_undo);
             store.set_can_redo(can_redo);
             store.set_projection_revision(store.get_projection_revision().saturating_add(1));

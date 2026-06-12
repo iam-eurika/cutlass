@@ -76,6 +76,14 @@ impl Project {
         self.media.get(&id)
     }
 
+    /// Mutable pool access for state repair (missing-media relink, M0):
+    /// re-pointing an entry at a re-probed file in place, keeping its id so
+    /// clips stay attached. Editing flows must not mutate sources behind the
+    /// timeline's back — placement math reads pool metadata.
+    pub fn media_mut(&mut self, id: MediaId) -> Option<&mut MediaSource> {
+        self.media.get_mut(&id)
+    }
+
     pub fn media_iter(&self) -> impl Iterator<Item = &MediaSource> {
         self.media.values()
     }

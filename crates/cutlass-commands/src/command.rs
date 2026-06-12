@@ -21,6 +21,12 @@ pub enum ProjectCommand {
     Open { path: PathBuf },
     /// Replace the session from a project file; missing media paths are kept but not relinked.
     Load { path: PathBuf },
+    /// Re-point a media-pool entry at a new file (missing-media relink):
+    /// re-probe `path` and refresh the entry's metadata in place, keeping
+    /// its id so clips stay attached. Not undoable by design — it repairs
+    /// project state to match the disk, and undoing back to a dead path is
+    /// never what the user wants.
+    RelinkMedia { media: MediaId, path: PathBuf },
     /// Render the timeline to an H.264 MP4 at the project frame rate.
     Export { path: PathBuf },
 }

@@ -10,7 +10,7 @@
 //! defaulted here; everything structural — tracks, clips, placement, fps,
 //! canvas size — is read straight from the engine.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use cutlass_models::{
@@ -39,9 +39,15 @@ const DEFAULT_CANVAS_H: f32 = 1080.0;
 /// drawn-content size in canvas px (computed on the engine thread, where the
 /// raster cache lives) — the preview's selection geometry needs it because
 /// generators raster at full canvas size.
+///
+/// `missing_media` holds raw ids of pool entries whose backing file is gone
+/// (computed worker-side — stat'ing here would block the UI thread on a dead
+/// network mount). Flags the library tiles' missing badges and the relink
+/// dialog rows.
 pub fn project_to_slint(
     project: &EngineProject,
     generator_sizes: &HashMap<u64, (i32, i32)>,
+    missing_media: &HashSet<u64>,
 ) -> Project {
     let timeline = project.timeline();
     let (width, height) = canvas_size(project);
@@ -58,7 +64,7 @@ pub fn project_to_slint(
 
     let id = project.id.raw().to_string();
 
-    let pool = media_pool(project);
+    let pool = media_pool(project, missing_media);
     // Audio-only subset for the library's Audio > Local section — projected
     // here because Slint's `for` can't filter a model. `Media` clones are
     // cheap (the thumbnail is a refcounted image handle).
@@ -90,20 +96,22 @@ pub fn project_to_slint(
 
 /// The media pool as Library bin entries, ordered by id (the engine's pool is a
 /// hash map, so a stable sort keeps tile order from jumping between imports).
-fn media_pool(project: &EngineProject) -> Vec<Media> {
+fn media_pool(project: &EngineProject, missing_media: &HashSet<u64>) -> Vec<Media> {
     let tl_rate = project.timeline().frame_rate;
     let mut sources: Vec<&MediaSource> = project.media_iter().collect();
     sources.sort_by_key(|media| media.id.raw());
     sources
         .into_iter()
-        .map(|media| media_to_slint(media, tl_rate))
+        .map(|media| media_to_slint(media, tl_rate, missing_media.contains(&media.id.raw())))
         .collect()
 }
 
-fn media_to_slint(media: &MediaSource, tl_rate: cutlass_models::Rational) -> Media {
+fn media_to_slint(media: &MediaSource, tl_rate: cutlass_models::Rational, is_missing: bool) -> Media {
     Media {
         id: media.id.raw().to_string().into(),
         name: media_name(media).into(),
+        path: media.path().display().to_string().into(),
+        is_missing,
         width: media.width as i32,
         height: media.height as i32,
         has_audio: media.has_audio,
@@ -690,7 +698,7 @@ mod tests {
         project.add_track(cutlass_models::TrackKind::Adjustment, "ADJ1");
         project.add_track(cutlass_models::TrackKind::Sticker, "ST1");
 
-        let projected = project_to_slint(&project, &HashMap::new());
+        let projected = project_to_slint(&project, &HashMap::new(), &HashSet::new());
         let tracks = &projected.sequence.tracks;
         // Top-first: the sticker lane (real) above the video lane; the
         // effect / filter / adjustment lanes stay model-only (M0 "hide
@@ -698,6 +706,28 @@ mod tests {
         assert_eq!(tracks.row_count(), 2);
         assert_eq!(tracks.row_data(0).unwrap().kind, TrackKind::Sticker);
         assert_eq!(tracks.row_data(1).unwrap().kind, TrackKind::Video);
+    }
+
+    #[test]
+    fn media_pool_flags_missing_entries() {
+        use cutlass_models::MediaSource;
+        use slint::Model;
+
+        let mut project = EngineProject::new("test", EngineRational::FPS_24);
+        let here = project.add_media(MediaSource::new("/tmp/a.mp4", 1920, 1080, EngineRational::FPS_24, 48, true));
+        let gone = project.add_media(MediaSource::new("/tmp/b.mp4", 1920, 1080, EngineRational::FPS_24, 48, true));
+
+        let missing: HashSet<u64> = [gone.raw()].into();
+        let projected = project_to_slint(&project, &HashMap::new(), &missing);
+        let media = &projected.media;
+        assert_eq!(media.row_count(), 2);
+        // The pool is sorted by raw id, so rows follow insertion here.
+        let first = media.row_data(0).unwrap();
+        let second = media.row_data(1).unwrap();
+        assert_eq!(first.id.as_str(), here.raw().to_string());
+        assert!(!first.is_missing);
+        assert!(second.is_missing);
+        assert_eq!(second.path.as_str(), "/tmp/b.mp4", "dialog shows where the file used to be");
     }
 
     #[test]

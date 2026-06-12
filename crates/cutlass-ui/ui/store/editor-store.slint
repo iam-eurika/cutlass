@@ -125,6 +125,20 @@ export global EditorStore {
     // transition (open/new/close) that chose "Save" first.
     callback save-finished(ok: bool);
 
+    // --- missing-media relink (v1 roadmap M0) ------------------------------
+    // "Locate…" was clicked for a pool entry whose file is gone (relink
+    // dialog row or library tile badge). main.rs opens the async file
+    // picker and forwards the choice to the worker, which re-probes, swaps
+    // the entry's path in place, and republishes.
+    callback on-relink-media-requested(media-id: string);
+    // Folder picker: worker tries `folder/<filename>` for each miss.
+    callback on-relink-folder-requested();
+    // How many pool entries currently point at a file that no longer
+    // exists. Republished by the worker with every projection; drives the
+    // relink dialog (raised by app.slint's session-epoch watcher) and its
+    // self-close when the last entry relinks.
+    in-out property <int> missing-media-count: 0;
+
     // Session save state, republished by the worker with every projection
     // (engine facts, not UI bookkeeping): whether unsaved edits exist (the
     // title bar dot), whether the session has a file yet, and that file's

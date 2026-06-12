@@ -316,8 +316,13 @@ Goal: nothing in the shipped app lies to users or loses their work.
 - [x] **Autosave + crash recovery**: periodic snapshot to
       `~/.cutlass/autosave/`, offer restore on next launch
       (`project-lifecycle-roadmap.md` Phase 4 — done).
-- [ ] **Missing-media relink** flow on open (engine `Load` already keeps
-      placeholder entries; UI needs the relink dialog).
+- [x] **Missing-media relink** flow on open (engine `Load` already keeps
+      placeholder entries; UI needs the relink dialog). Shipped: UI open is
+      now tolerant (`Load`), a relink dialog lists missing entries after
+      open/restore with per-row "Locate…" + batch "Locate folder",
+      `ProjectCommand::RelinkMedia` re-probes and swaps the path in place
+      (same id, not undoable — state repair), library tiles badge missing
+      media (badge click relinks too).
 - [x] **Hide phantom kinds**: sticker/effect/filter/adjustment generators
       and lanes removed from the UI surface until their milestones land
       (model keeps them; users stop seeing dead features). Library tabs

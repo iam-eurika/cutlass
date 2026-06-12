@@ -289,7 +289,10 @@ impl Engine {
                 self.saved_revision = self.revision;
             }
             ApplyOutcome::Saved => self.saved_revision = self.revision,
-            ApplyOutcome::Imported { .. } | ApplyOutcome::Edited(_) => self.revision += 1,
+            // Relink dirties the session: the repaired path needs saving.
+            ApplyOutcome::Imported { .. }
+            | ApplyOutcome::Edited(_)
+            | ApplyOutcome::Relinked { .. } => self.revision += 1,
             // Export is handled by the early return above.
             ApplyOutcome::Exported { .. } => {}
         }

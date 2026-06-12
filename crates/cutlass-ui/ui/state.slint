@@ -13,6 +13,12 @@ export global AppState {
     // Export settings dialog (modal overlay; see shell/export-dialog.slint).
     in-out property <bool> export-dialog-open: false;
 
+    // Missing-media relink dialog (modal overlay; see
+    // shell/relink-dialog.slint). Raised by app.slint when a freshly
+    // opened/restored session has pool entries whose file is gone;
+    // dismissable — the library tiles keep their missing badges.
+    in-out property <bool> relink-dialog-open: false;
+
     // Bumped to pull keyboard focus back to the window's shortcut
     // FocusScope (app.slint watches it). Text inputs legitimately take
     // focus while editing; timeline interactions (clip grab, lane

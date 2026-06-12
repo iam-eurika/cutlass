@@ -16,6 +16,7 @@ import { FullscreenPreview } from "fullscreen-preview.slint";
 import { TitleBar } from "shell/title-bar.slint";
 import { ExportDialog } from "shell/export-dialog.slint";
 import { MessageDialog } from "shell/message-dialog.slint";
+import { RelinkDialog } from "shell/relink-dialog.slint";
 import { ExportBackend } from "lib/export-backend.slint";
 import { PreviewBackend, PreviewDragResolution } from "lib/preview-backend.slint";
 
@@ -110,6 +111,11 @@ export component AppWindow inherits Window {
         // A running prompt and any parked plan rehearsed against the old
         // project; cancel/discard them (main.rs forwards to the agent).
         AgentStore.session-changed();
+        // The opened/restored project has media whose file is gone: offer
+        // the relink dialog (the projection publish that set the count is
+        // ordered before this epoch bump). Mid-session disappearances only
+        // badge the library tiles — no surprise modal while editing.
+        AppState.relink-dialog-open = EditorStore.missing-media-count > 0;
     }
 
     // Transform commits are optimistic for a moment: keep the live gesture
@@ -179,6 +185,13 @@ export component AppWindow inherits Window {
             if (EditorStore.session-error != "") {
                 if (event.text == Key.Escape || event.text == Key.Return) {
                     EditorStore.session-error = "";
+                }
+                return accept;
+            }
+            // Missing-media relink dialog: Escape/Enter dismiss like Later.
+            if (AppState.relink-dialog-open) {
+                if (event.text == Key.Escape || event.text == Key.Return) {
+                    AppState.relink-dialog-open = false;
                 }
                 return accept;
             }
@@ -417,6 +430,14 @@ export component AppWindow inherits Window {
     // Export settings dialog — declared last so the modal paints above
     // every panel and the title bar.
     if AppState.export-dialog-open: ExportDialog {
+        width: root.width;
+        height: root.height;
+    }
+
+    // Missing-media relink dialog (v1 roadmap M0) — raised after an open /
+    // restore that found dead media paths; above the export dialog, below
+    // the error dialog.
+    if AppState.relink-dialog-open: RelinkDialog {
         width: root.width;
         height: root.height;
     }

@@ -13,6 +13,7 @@ pub enum ApplyOutcome {
     Saved,
     Opened,
     Loaded,
+    Relinked { media: cutlass_models::MediaId },
     Exported { stats: cutlass_encoder::ExportStats },
     Edited(EditOutcome),
 }
@@ -47,6 +48,10 @@ fn dispatch_project(
         ProjectCommand::Load { path } => {
             project::load::execute(ctx, path)?;
             Ok((ApplyOutcome::Loaded, None))
+        }
+        ProjectCommand::RelinkMedia { media, path } => {
+            project::relink::execute(ctx, media, &path)?;
+            Ok((ApplyOutcome::Relinked { media }, None))
         }
         ProjectCommand::Export { .. } => Err(EngineError::Export(
             "export is handled by Engine::apply, not dispatch".into(),

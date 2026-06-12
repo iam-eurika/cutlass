@@ -270,6 +270,13 @@ export struct Sequence {
 export struct Media {
     id: string,
     name: string,
+    // Full path of the source file — the relink dialog shows where a
+    // missing file used to live.
+    path: string,
+    // The backing file is gone (moved/deleted since the project was saved).
+    // Computed worker-side per projection publish; drives the tile badge
+    // and the relink dialog rows (v1 roadmap M0 missing-media relink).
+    is-missing: bool,
     width: int,
     height: int,
     has-audio: bool,

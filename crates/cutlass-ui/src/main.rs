@@ -137,6 +137,30 @@ async fn pick_open_path() -> Option<std::path::PathBuf> {
         .map(|file| file.path().to_path_buf())
 }
 
+async fn pick_relink_path() -> Option<std::path::PathBuf> {
+    rfd::AsyncFileDialog::new()
+        .add_filter(
+            "Media",
+            &[
+                "mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac", "flac", "ogg",
+                "png", "jpg", "jpeg", "webp",
+            ],
+        )
+        .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
+        .add_filter("Audio", &["mp3", "wav", "m4a", "aac", "flac", "ogg"])
+        .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+        .pick_file()
+        .await
+        .map(|file| file.path().to_path_buf())
+}
+
+async fn pick_relink_folder() -> Option<std::path::PathBuf> {
+    rfd::AsyncFileDialog::new()
+        .pick_folder()
+        .await
+        .map(|file| file.path().to_path_buf())
+}
+
 // --- session transitions & the unsaved-changes guard (Phase 2) -----------
 //
 // Open, New, and window close all destroy the current session, so they all
@@ -532,6 +556,36 @@ fn main() -> Result<(), slint::PlatformError> {
         });
         if let Err(e) = task {
             tracing::error!("failed to open import dialog: {e}");
+        }
+    });
+
+    // Missing-media relink (v1 roadmap M0): "Locate…" in the relink dialog
+    // or on a tile's missing badge. Same media picker as import; the worker
+    // re-probes the chosen file and swaps the entry's path in place.
+    let relink_handle = preview_worker.handle();
+    editor.on_on_relink_media_requested(move |media_id| {
+        let relink_handle = relink_handle.clone();
+        let media_id = media_id.to_string();
+        let task = slint::spawn_local(async move {
+            if let Some(path) = pick_relink_path().await {
+                relink_handle.relink_media(media_id, path);
+            }
+        });
+        if let Err(e) = task {
+            tracing::error!("failed to open relink dialog: {e}");
+        }
+    });
+
+    let relink_folder_handle = preview_worker.handle();
+    editor.on_on_relink_folder_requested(move || {
+        let handle = relink_folder_handle.clone();
+        let task = slint::spawn_local(async move {
+            if let Some(folder) = pick_relink_folder().await {
+                handle.relink_folder(folder);
+            }
+        });
+        if let Err(e) = task {
+            tracing::error!("failed to open relink folder dialog: {e}");
         }
     });
 
