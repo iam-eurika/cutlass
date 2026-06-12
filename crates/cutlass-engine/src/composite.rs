@@ -19,8 +19,11 @@ use crate::generator_raster::GeneratorRaster;
 const DEFAULT_WIDTH: u32 = 1920;
 const DEFAULT_HEIGHT: u32 = 1080;
 
-/// Output canvas size: max media dimensions on the timeline, or 1920×1080 fallback.
-/// Width and height are forced even for downstream H.264 export.
+/// Output canvas size: max *video* media dimensions on the timeline, or
+/// 1920×1080 fallback. Width and height are forced even for downstream H.264
+/// export. Stills don't vote: a 12MP photo must not balloon the canvas (and
+/// the encode) past what the footage calls for — it aspect-fits like any
+/// other layer.
 pub fn composite_canvas_size(project: &Project) -> (u32, u32) {
     let mut max_w = 0u32;
     let mut max_h = 0u32;
@@ -32,6 +35,7 @@ pub fn composite_canvas_size(project: &Project) -> (u32, u32) {
         for clip in track.clips() {
             if let Some(media_id) = clip.media()
                 && let Some(media) = project.media(media_id)
+                && !media.is_image
             {
                 max_w = max_w.max(media.width);
                 max_h = max_h.max(media.height);
@@ -123,6 +127,18 @@ pub fn resolve_layers(
         let transform = &transform;
         match &clip.content {
             cutlass_models::ClipSource::Media { .. } => {
+                // Still images bypass the decode/cache pipeline entirely:
+                // one cached RGBA upload, identical for every tick the clip
+                // covers (and for both color-convert paths).
+                if let Some(media_id) = clip.media()
+                    && let Some(media) = project.media(media_id)
+                    && media.is_image
+                {
+                    let (bytes, width, height) = pool.still(media_id, media.path())?;
+                    let placement = layer_placement(transform, width, height, canvas);
+                    layers.push(CompositeLayer::rgba(bytes, width, height, placement));
+                    continue;
+                }
                 let layer = match color_convert {
                     ColorConvertPath::Gpu => {
                         let decoded = decode_media_frame(project, cache, pool, clip, time)?;
@@ -405,6 +421,78 @@ mod tests {
         assert_eq!(opacity_at(&mut pool, &mut raster, 36), 1.0);
         // Past the last keyframe the value holds.
         assert_eq!(opacity_at(&mut pool, &mut raster, 50), 1.0);
+    }
+
+    fn png_asset() -> Option<std::path::PathBuf> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/texture.png");
+        path.exists().then_some(path)
+    }
+
+    #[test]
+    fn resolve_image_still_yields_cached_rgba_layer() {
+        use cutlass_models::MediaSource;
+        let Some(path) = png_asset() else {
+            return;
+        };
+        let rate = cutlass_models::Rational::FPS_24;
+        let mut project = Project::new("t", rate);
+        let media_id = project.add_media(MediaSource::image(&path, 0, 0));
+        let source = project.media(media_id).unwrap().full_range();
+        let track = project.add_track(TrackKind::Video, "V1");
+        project
+            .add_clip(track, media_id, source, RationalTime::new(0, rate))
+            .unwrap();
+
+        let mut pool = DecoderPool::new();
+        let mut raster = GeneratorRaster::new();
+        let canvas = CompositorConfig::new(320, 240);
+        let resolve = |pool: &mut DecoderPool, raster: &mut GeneratorRaster, tick: i64| {
+            resolve_layers(
+                &project,
+                None,
+                pool,
+                raster,
+                RationalTime::new(tick, rate),
+                &canvas,
+                ColorConvertPath::Gpu,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+
+        // 5s at 24fps = 120 ticks; the still covers all of them.
+        let first = resolve(&mut pool, &mut raster, 0);
+        assert_eq!(first.len(), 1);
+        let bytes = rgba_layer(&first[0]);
+        assert!(!bytes.is_empty());
+
+        // Same Arc on a later tick: decoded once, reused per frame.
+        let later = resolve(&mut pool, &mut raster, 119);
+        assert!(std::sync::Arc::ptr_eq(rgba_layer(&first[0]), rgba_layer(&later[0])));
+
+        // Past the clip: gap, no layers.
+        assert!(resolve(&mut pool, &mut raster, 120).is_empty());
+    }
+
+    #[test]
+    fn canvas_size_ignores_image_media() {
+        use cutlass_models::{MediaSource, TimeRange};
+        let rate = cutlass_models::Rational::FPS_24;
+        let mut project = Project::new("t", rate);
+        // A 12MP still on the timeline must not balloon the canvas.
+        let media_id = project.add_media(MediaSource::image("/photos/p.png", 4000, 3000));
+        let track = project.add_track(TrackKind::Video, "V1");
+        project
+            .add_clip(
+                track,
+                media_id,
+                TimeRange::at_rate(0, 5_000, cutlass_models::STILL_TICK_RATE),
+                RationalTime::new(0, rate),
+            )
+            .unwrap();
+        assert_eq!(composite_canvas_size(&project), (1920, 1080));
     }
 
     #[test]

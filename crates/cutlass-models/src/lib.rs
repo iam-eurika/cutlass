@@ -38,7 +38,7 @@ pub use clip::{
 pub use error::ModelError;
 pub use param::{Easing, Keyframe, Lerp, Param};
 pub use ids::{ClipId, LinkId, MediaId, ProjectId, TrackId};
-pub use media::MediaSource;
+pub use media::{MediaKind, MediaSource, STILL_DEFAULT_DURATION_TICKS, STILL_TICK_RATE};
 pub use metadata::ProjectMetadata;
 pub use persist::{PROJECT_FILE_EXTENSION, PROJECT_FILE_VERSION};
 pub use project::Project;

@@ -5,10 +5,12 @@
 
 pub mod audio;
 mod error;
+pub mod image;
 pub mod video;
 
 pub use audio::{AUDIO_CHANNELS, AudioPeaks, AudioReader, audio_peaks, audio_peaks_per_second};
 pub use error::DecodeError;
+pub use image::{STILL_MAX_DIM, decode_image};
 pub use video::{
     DecodeOptions, DecodedFrame, Decoder, HwAccel, KeyframeIndex, PixelFormat, Plane, SourceInfo,
     ThumbnailImage, attach_hwaccel, duration_to_ticks, ffmpeg_version, hw_accel_from_env,

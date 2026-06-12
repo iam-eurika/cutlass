@@ -31,6 +31,11 @@ pub fn small_video_asset() -> Option<PathBuf> {
         .find(|p| p.extension().is_some_and(|ext| ext == "mp4"))
 }
 
+pub fn image_asset() -> Option<PathBuf> {
+    let path = assets_dir().join("texture.png");
+    path.exists().then_some(path)
+}
+
 pub fn temp_engine() -> (tempfile::TempDir, Engine) {
     let dir = tempfile::tempdir().expect("tempdir");
     let config = EngineConfig {

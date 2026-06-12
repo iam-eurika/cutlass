@@ -10,7 +10,7 @@ mod probe;
 
 pub use error::ProbeError;
 pub use media::MediaProbe;
-pub use probe::{duration_ticks_from_micros, probe};
+pub use probe::{duration_ticks_from_micros, is_image_path, probe};
 
 use tracing::info;
 

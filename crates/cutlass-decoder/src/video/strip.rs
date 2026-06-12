@@ -83,6 +83,9 @@ pub fn video_strip(
 
     let mut frame = Video::empty();
     let mut have_frame = false;
+    // Whether `frame` ever held a decoded picture. A seek resets `have_frame`
+    // but not the buffer, so this gates the stale-frame fallback below.
+    let mut ever_decoded = false;
     let mut demuxer_done = false;
 
     for &(index, target) in &order {
@@ -117,6 +120,7 @@ pub fn video_strip(
             }
             if next_frame(&mut input, &mut decoder, stream_index, &mut demuxer_done, &mut frame)? {
                 have_frame = true;
+                ever_decoded = true;
                 steps += 1;
             } else {
                 break; // end of stream: keep the last decoded frame
@@ -124,6 +128,14 @@ pub fn video_strip(
         }
 
         if have_frame {
+            on_frame(index, scale_to_rgba(&frame, max_w, max_h)?);
+        } else if ever_decoded {
+            // A seek reset the decoder and the stream had nothing left —
+            // single-picture sources (PNG/JPEG/WebP stills) and corrupt
+            // tails land here. Deliver the last decodable frame, keeping
+            // the documented "targets past the end resolve to the last
+            // frame" promise.
+            debug!(path = %path.display(), target, "strip target reuses last decodable frame");
             on_frame(index, scale_to_rgba(&frame, max_w, max_h)?);
         } else {
             debug!(path = %path.display(), target, "strip target produced no frame");
@@ -138,7 +150,10 @@ fn frame_time_s(frame: &Video, tb: f64) -> Option<f64> {
 }
 
 /// Pump packets until the decoder yields one frame into `frame`.
-/// `Ok(false)` means the stream is exhausted.
+/// `Ok(false)` means the stream is exhausted — and leaves `frame` untouched:
+/// `avcodec_receive_frame` unrefs its output before failing, so decoding
+/// into `frame` directly would wipe the last good picture exactly when the
+/// caller needs it (targets past the end, single-picture stills).
 fn next_frame(
     input: &mut format::context::Input,
     decoder: &mut codec::decoder::Video,
@@ -146,9 +161,13 @@ fn next_frame(
     demuxer_done: &mut bool,
     frame: &mut Video,
 ) -> Result<bool, DecodeError> {
+    let mut fresh = Video::empty();
     loop {
-        match decoder.receive_frame(frame) {
-            Ok(()) => return Ok(true),
+        match decoder.receive_frame(&mut fresh) {
+            Ok(()) => {
+                *frame = fresh;
+                return Ok(true);
+            }
             Err(FfmpegError::Eof) => return Ok(false),
             Err(FfmpegError::Other { errno }) if errno == EAGAIN => {
                 if *demuxer_done {
@@ -187,6 +206,27 @@ mod tests {
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .find(|p| p.extension().is_some_and(|e| e == "mp4"))
+    }
+
+    #[test]
+    fn strip_on_still_image_repeats_the_picture_for_every_target() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/texture.png");
+        if !path.exists() {
+            return;
+        }
+        // Spans the default 5s still placement, including targets past the
+        // forward-roll window that force (failing) seeks on a one-frame source.
+        let times = [0.0, 1.0, 2.5, 4.0, 5.0];
+        let mut seen: Vec<usize> = Vec::new();
+        video_strip(&path, &times, 128, 128, &mut |i, img| {
+            assert!(img.width > 0 && img.height > 0);
+            assert_eq!(img.rgba.len(), (img.width * img.height * 4) as usize);
+            seen.push(i);
+        })
+        .expect("strip on still");
+
+        seen.sort_unstable();
+        assert_eq!(seen, vec![0, 1, 2, 3, 4], "every tile shows the still");
     }
 
     #[test]

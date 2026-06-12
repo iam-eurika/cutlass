@@ -1530,12 +1530,14 @@ fn register_media_with_workers(
     thumbs: &ThumbnailHandle,
     strips: &StripHandle,
 ) {
-    let kind = if media.is_audio_only() {
-        ThumbKind::Audio
-    } else {
-        ThumbKind::Video
+    let kind = match media.kind() {
+        cutlass_models::MediaKind::Audio => ThumbKind::Audio,
+        cutlass_models::MediaKind::Image => ThumbKind::Image,
+        cutlass_models::MediaKind::Video => ThumbKind::Video,
     };
     thumbs.request(media.id.raw(), media.path().to_path_buf(), kind);
+    // Stills register too: the strip sampler repeats the one picture across
+    // the clip's filmstrip tiles.
     strips.register_media(media.id.raw(), media.path().to_path_buf());
 }
 

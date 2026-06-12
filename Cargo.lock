@@ -1324,6 +1324,7 @@ name = "cutlass-decoder"
 version = "0.1.0-alpha.0"
 dependencies = [
  "ffmpeg-next",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]

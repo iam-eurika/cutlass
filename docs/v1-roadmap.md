@@ -339,8 +339,10 @@ clicking a button that does nothing.
 
 Goal: the everyday CapCut edit vocabulary, minus animation.
 
-- [ ] **Image import**: PNG/JPEG/WebP stills as media (probe + decode +
+- [x] **Image import**: PNG/JPEG/WebP stills as media (probe + decode +
       default 5s clips, transform/crop like video). Library thumbnails.
+      (Stills cap at the 5s pool duration for now — extending an image
+      clip past it needs source-bounds relaxation in trim, a follow-up.)
 - [x] **Clip speed (constant + reverse)**: `speed: Rational` +
       `reversed: bool` on media clips; retime via `source_time_at` (so
       preview *and* export inherit it); speed-aware trim/split, timeline

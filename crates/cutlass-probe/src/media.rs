@@ -6,6 +6,10 @@ use cutlass_models::{MediaSource, Rational, RationalTime};
 ///
 /// Audio-only sources have `width == 0 && height == 0`, a millisecond
 /// `frame_rate` (1000/1), and `video_codec == "none"`.
+///
+/// Still images probe with `is_image == true`, a millisecond `frame_rate`,
+/// and the default 5s placement duration (see
+/// [`cutlass_models::STILL_DEFAULT_DURATION_TICKS`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaProbe {
     pub width: u32,
@@ -17,6 +21,8 @@ pub struct MediaProbe {
     pub has_audio: bool,
     /// FFmpeg codec name for the selected video stream (e.g. `h264`).
     pub video_codec: String,
+    /// Source is a still image (PNG/JPEG/WebP), not a video stream.
+    pub is_image: bool,
 }
 
 impl MediaProbe {
@@ -26,6 +32,9 @@ impl MediaProbe {
 
     /// Build a [`MediaSource`] for the project media pool.
     pub fn into_media_source(self, path: impl Into<PathBuf>) -> MediaSource {
+        if self.is_image {
+            return MediaSource::image(path, self.width, self.height);
+        }
         MediaSource::new(
             path,
             self.width,
@@ -38,6 +47,9 @@ impl MediaProbe {
 
     /// Same as [`into_media_source`](Self::into_media_source) but keeps the path borrow.
     pub fn to_media_source(&self, path: &Path) -> MediaSource {
+        if self.is_image {
+            return MediaSource::image(path, self.width, self.height);
+        }
         MediaSource::new(
             path,
             self.width,

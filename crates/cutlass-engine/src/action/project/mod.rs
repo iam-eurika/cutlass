@@ -40,6 +40,11 @@ pub(crate) fn relink_media_cache(
             }
             continue;
         }
+        // Stills never enter the YUV scrub cache; they decode once into the
+        // in-memory RGBA cache (see `DecoderPool::still`).
+        if media.is_image {
+            continue;
+        }
         let fingerprint = SourceFingerprint::from_path(media.path())?;
         let spec = CacheSpec {
             width: media.width,

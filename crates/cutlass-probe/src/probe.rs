@@ -27,15 +27,34 @@ pub(crate) fn ensure_ffmpeg_init() -> Result<(), ProbeError> {
 /// Millisecond ticks keep durations sample-accurate enough for timeline math.
 const AUDIO_TICK_RATE: Rational = Rational::new(1000, 1);
 
+/// Still-image extensions recognized at import (M1 scope: PNG/JPEG/WebP).
+const IMAGE_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
+
+/// Whether `path` looks like a still image we import as such (by extension;
+/// [`probe`] verifies the content decodes).
+pub fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| IMAGE_EXTENSIONS.iter().any(|i| ext.eq_ignore_ascii_case(i)))
+}
+
 /// Inspect `path` for container and stream metadata (ffprobe-style).
 ///
 /// Audio-only files (no real video stream — embedded cover art doesn't count)
 /// probe with `width == 0 && height == 0` and a millisecond tick rate.
+///
+/// Still images (recognized by extension) probe with `is_image == true` and
+/// the default 5s placement duration; FFmpeg demuxes them as single-frame
+/// video streams, which is where the dimensions come from.
 pub fn probe(path: &Path) -> Result<MediaProbe, ProbeError> {
     ensure_ffmpeg_init()?;
 
     let path_str = path.to_str().ok_or(ProbeError::InvalidPath)?;
     let input = format::input(path_str).map_err(ProbeError::Open)?;
+
+    if is_image_path(path) {
+        return probe_image(&input);
+    }
 
     let has_audio = input.streams().any(|s| s.parameters().medium() == Type::Audio);
 
@@ -58,6 +77,7 @@ pub fn probe(path: &Path) -> Result<MediaProbe, ProbeError> {
             duration_ticks: duration_ticks_from_micros(AUDIO_TICK_RATE, micros.max(0) as u64),
             has_audio: true,
             video_codec: "none".into(),
+            is_image: false,
         });
     };
 
@@ -93,6 +113,45 @@ pub fn probe(path: &Path) -> Result<MediaProbe, ProbeError> {
         duration_ticks,
         has_audio,
         video_codec,
+        is_image: false,
+    })
+}
+
+/// Probe a still image: FFmpeg's image demuxers (`png_pipe`, `jpeg_pipe`,
+/// `webp_pipe`, …) expose one video stream whose codec parameters carry the
+/// pixel dimensions. Duration is the editor's default placement length, not
+/// a property of the file.
+fn probe_image(input: &format::context::Input) -> Result<MediaProbe, ProbeError> {
+    let stream = input
+        .streams()
+        .best(Type::Video)
+        .ok_or_else(|| ProbeError::unsupported("image file has no decodable picture"))?;
+
+    let par = stream.parameters();
+    let codec_id = par.id();
+    let video = Context::from_parameters(par)
+        .map_err(ProbeError::Open)?
+        .decoder()
+        .video()
+        .map_err(ProbeError::Open)?;
+    let width = video.width();
+    let height = video.height();
+    if width == 0 || height == 0 {
+        return Err(ProbeError::unsupported("zero image dimensions"));
+    }
+
+    let video_codec = ffmpeg_next::codec::decoder::find(codec_id)
+        .map(|c| c.name().to_string())
+        .unwrap_or_else(|| "unknown".into());
+
+    Ok(MediaProbe {
+        width,
+        height,
+        frame_rate: cutlass_models::STILL_TICK_RATE,
+        duration_ticks: cutlass_models::STILL_DEFAULT_DURATION_TICKS,
+        has_audio: false,
+        video_codec,
+        is_image: true,
     })
 }
 
@@ -138,6 +197,41 @@ mod tests {
             normalize_frame_rate(FfRational::new(0, 1)),
             Rational::FPS_24
         );
+    }
+
+    #[test]
+    fn is_image_path_recognizes_still_extensions() {
+        use std::path::Path;
+        for good in ["a.png", "b.jpg", "c.JPEG", "d.WebP", "/x/y/e.PNG"] {
+            assert!(is_image_path(Path::new(good)), "{good}");
+        }
+        for bad in ["clip.mp4", "song.mp3", "noext", "tricky.png.mov", "g.gif"] {
+            assert!(!is_image_path(Path::new(bad)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn image_file_probes_with_default_still_duration() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/texture.png");
+        if !path.exists() {
+            return;
+        }
+        let probed = probe(&path).expect("probe png");
+        assert!(probed.is_image);
+        assert!(probed.width > 0 && probed.height > 0);
+        assert!(!probed.has_audio);
+        assert_eq!(probed.frame_rate, cutlass_models::STILL_TICK_RATE);
+        assert_eq!(
+            probed.duration_ticks,
+            cutlass_models::STILL_DEFAULT_DURATION_TICKS
+        );
+        assert_eq!(probed.video_codec, "png");
+
+        let media = probed.to_media_source(&path);
+        assert!(media.is_image);
+        assert_eq!(media.kind(), cutlass_models::MediaKind::Image);
+        assert_eq!(media.duration.value, cutlass_models::STILL_DEFAULT_DURATION_TICKS);
     }
 
     #[test]

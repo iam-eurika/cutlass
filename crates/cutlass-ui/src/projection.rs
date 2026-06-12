@@ -100,6 +100,7 @@ fn media_to_slint(media: &MediaSource, tl_rate: cutlass_models::Rational) -> Med
         has_audio: media.has_audio,
         duration_ticks: clamp_i32(resample(media.duration, tl_rate).value),
         is_audio: media.is_audio_only(),
+        is_image: media.is_image,
         duration_label: duration_label(media.duration).into(),
         // Generated asynchronously after import; until then the tile shows
         // its placeholder card (see src/thumbnails.rs).

@@ -65,7 +65,9 @@ export component MediaTile inherits Rectangle {
         }
     }
 
-    // Duration badge, top-right like CapCut.
+    // Duration badge, top-right like CapCut. Stills badge their kind
+    // instead: the 5s pool duration is a default placement length, not a
+    // property of the file.
     Rectangle {
         x: parent.width - self.width - 4px;
         y: 4px;
@@ -73,12 +75,12 @@ export component MediaTile inherits Rectangle {
         height: duration-text.preferred-height + 4px;
         background: #000000a0;
         border-radius: 3px;
-        visible: media.duration-label != "";
+        visible: media.is-image || media.duration-label != "";
 
         duration-text := CutlassText {
             x: 4px;
             y: 2px;
-            text: media.duration-label;
+            text: media.is-image ? "IMG" : media.duration-label;
             style: AppStore.theme.typography.label;
         }
     }

@@ -68,7 +68,9 @@ pub fn video_thumbnail(path: &Path, max_w: u32, max_h: u32) -> Result<ThumbnailI
     scale_to_rgba(&frame, max_w, max_h)
 }
 
-fn decode_first_frame(
+/// Pump packets until the decoder yields its first frame. Shared with the
+/// still-image path (`crate::image`), which is this minus the seek.
+pub(crate) fn decode_first_frame(
     input: &mut format::context::Input,
     decoder: &mut codec::decoder::Video,
     stream_index: usize,

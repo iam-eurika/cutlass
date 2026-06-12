@@ -11,12 +11,13 @@ use crate::error::EngineError;
 
 /// Probe a media file and register it with the frame cache.
 ///
-/// Audio-only sources (probe reports zero dimensions) skip cache
-/// registration: the frame cache stores video YUV for scrubbing.
+/// Audio-only sources (probe reports zero dimensions) and still images skip
+/// cache registration: the frame cache stores video YUV for scrubbing, while
+/// stills decode once into the in-memory RGBA cache (see `DecoderPool`).
 pub fn import_media(path: &Path, cache: &FrameCache) -> Result<MediaSource, EngineError> {
     let probed = probe(path)?;
 
-    if probed.width > 0 {
+    if probed.width > 0 && !probed.is_image {
         let fingerprint = SourceFingerprint::from_path(path)?;
         let spec = CacheSpec {
             width: probed.width,
@@ -36,6 +37,7 @@ pub fn import_media(path: &Path, cache: &FrameCache) -> Result<MediaSource, Engi
         height = media.height,
         duration_ticks = media.duration.value,
         has_audio = media.has_audio,
+        is_image = media.is_image,
         codec = %probed.video_codec,
         "imported media"
     );

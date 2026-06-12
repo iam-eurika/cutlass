@@ -6,8 +6,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::{
-    add_generated, add_media_clip, add_track, export_to, import_asset, load_project, open_project,
-    rt, save_project, small_video_asset, temp_engine, tr, video_assets,
+    add_generated, add_media_clip, add_track, export_to, image_asset, import_asset, load_project,
+    open_project, rt, save_project, small_video_asset, temp_engine, tr, video_assets,
 };
 use cutlass_commands::{Command, EditCommand, ProjectCommand};
 use cutlass_decoder::{DecodeOptions, Decoder, HwAccel};
@@ -127,6 +127,51 @@ fn e2e_media_import_edit_save_open_export() {
     assert_eq!(stats.width, w);
     assert_eq!(stats.height, h);
     assert_mp4_playable(&out, 24);
+}
+
+#[test]
+fn e2e_image_still_import_preview_save_reopen_export() {
+    let Some(png) = image_asset() else {
+        return;
+    };
+    let (dir, mut engine) = temp_engine();
+
+    let media_id = import_asset(&mut engine, &png);
+    let (source, is_image, duration_ticks) = {
+        let media = engine.project().media(media_id).expect("media");
+        (media.full_range(), media.is_image, media.duration.value)
+    };
+    assert!(is_image, "png imports as a still");
+    assert_eq!(duration_ticks, 5_000, "default 5s placement at 1000/1 ticks");
+
+    let track = add_track(&mut engine, TrackKind::Video, "V1");
+    add_media_clip(&mut engine, track, media_id, source, rt(0));
+    // 5s resampled to the 24fps timeline.
+    assert_eq!(engine.project().timeline().duration().value, 120);
+
+    // Stills aspect-fit the canvas; they don't drive its size.
+    let frame = engine.get_frame(rt(60)).expect("mid-still preview");
+    assert_eq!((frame.width, frame.height), (1920, 1080));
+    assert!(
+        frame.bytes.chunks_exact(4).any(|p| p[0] != 0 || p[1] != 0 || p[2] != 0),
+        "still renders visible pixels"
+    );
+
+    // The image flag survives a save/reopen roundtrip.
+    let project_file = dir.path().join("still.cutlass");
+    save_project(&mut engine, &project_file);
+    let (_dir2, mut reopened) = temp_engine();
+    open_project(&mut reopened, &project_file);
+    let media = reopened.project().media_iter().next().expect("media");
+    assert!(media.is_image);
+    reopened.get_frame(rt(0)).expect("preview after reopen");
+
+    // Export composites the still for every frame of the clip's extent.
+    let out = dir.path().join("still_export.mp4");
+    let stats = export_to(&mut engine, &out);
+    assert_eq!(stats.frames, 120);
+    assert_eq!((stats.width, stats.height), (1920, 1080));
+    assert_mp4_playable(&out, 120);
 }
 
 #[test]

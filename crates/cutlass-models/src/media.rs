@@ -5,6 +5,23 @@ use serde::{Deserialize, Serialize};
 use crate::ids::MediaId;
 use crate::time::{Rational, RationalTime, TimeRange};
 
+/// Tick rate for still images, which have no frame cadence of their own.
+/// Millisecond ticks (like audio-only sources) keep duration math exact.
+pub const STILL_TICK_RATE: Rational = Rational::new(1000, 1);
+
+/// Default pool duration for still images: 5 seconds at
+/// [`STILL_TICK_RATE`], so a library drop places a CapCut-style 5s clip.
+pub const STILL_DEFAULT_DURATION_TICKS: i64 = 5_000;
+
+/// What a [`MediaSource`] fundamentally is, derived from its fields —
+/// see [`MediaSource::kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Video,
+    Audio,
+    Image,
+}
+
 /// An imported source file in the project's media pool.
 ///
 /// This is the *asset*, not a placement on the timeline; many [`Clip`](crate::Clip)s
@@ -20,6 +37,18 @@ pub struct MediaSource {
     /// Total length of the source at [`frame_rate`](Self::frame_rate).
     pub duration: RationalTime,
     pub has_audio: bool,
+    /// Still image (PNG/JPEG/WebP): one frame shown for the clip's whole
+    /// extent. `duration` is the *default placement length* (5s), not an
+    /// intrinsic property. Absent from saves while false, so old files
+    /// load unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_image: bool,
+}
+
+// `&bool` is the signature `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl MediaSource {
@@ -41,6 +70,23 @@ impl MediaSource {
             frame_rate,
             duration: RationalTime::new(duration_ticks, frame_rate),
             has_audio,
+            is_image: false,
+        }
+    }
+
+    /// Create a still-image source (PNG/JPEG/WebP) with the default 5s
+    /// placement length at [`STILL_TICK_RATE`].
+    pub fn image(path: impl Into<PathBuf>, width: u32, height: u32) -> Self {
+        Self {
+            is_image: true,
+            ..Self::new(
+                path,
+                width,
+                height,
+                STILL_TICK_RATE,
+                STILL_DEFAULT_DURATION_TICKS,
+                false,
+            )
         }
     }
 
@@ -53,6 +99,16 @@ impl MediaSource {
     /// Probing reports such sources with zero dimensions.
     pub fn is_audio_only(&self) -> bool {
         self.width == 0 && self.has_audio
+    }
+
+    pub fn kind(&self) -> MediaKind {
+        if self.is_image {
+            MediaKind::Image
+        } else if self.is_audio_only() {
+            MediaKind::Audio
+        } else {
+            MediaKind::Video
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -208,6 +264,7 @@ mod tests {
             frame_rate: R24,
             duration: RationalTime::new(100, R24),
             has_audio: true,
+            is_image: false,
         };
         let fixed_b = fixed_a.clone();
         assert_eq!(fixed_a, fixed_b);
@@ -220,5 +277,59 @@ mod tests {
         assert!(s.contains("debug.mp4"));
         assert!(s.contains("1920"));
         assert!(s.contains("1080"));
+    }
+
+    // --- image stills -------------------------------------------------------
+
+    #[test]
+    fn image_constructor_defaults_to_five_seconds() {
+        let media = MediaSource::image("/photos/sunset.png", 4000, 3000);
+        assert!(media.is_image);
+        assert_eq!(media.kind(), MediaKind::Image);
+        assert_eq!(media.width, 4000);
+        assert_eq!(media.height, 3000);
+        assert!(!media.has_audio);
+        assert_eq!(media.frame_rate, STILL_TICK_RATE);
+        assert_eq!(media.duration.value, STILL_DEFAULT_DURATION_TICKS);
+        // 5000 ticks at 1000/1 is exactly 5 seconds.
+        let seconds =
+            media.duration.value as f64 * media.duration.rate.seconds_per_frame();
+        assert_eq!(seconds, 5.0);
+        assert!(!media.is_audio_only());
+    }
+
+    #[test]
+    fn kind_distinguishes_video_audio_image() {
+        assert_eq!(sample("v.mp4", 10).kind(), MediaKind::Video);
+        let audio = MediaSource::new("a.mp3", 0, 0, Rational::new(1000, 1), 10, true);
+        assert_eq!(audio.kind(), MediaKind::Audio);
+        assert_eq!(MediaSource::image("i.jpg", 8, 8).kind(), MediaKind::Image);
+    }
+
+    #[test]
+    fn non_image_serializes_without_image_field() {
+        let media = sample("plain.mp4", 10);
+        let json = serde_json::to_string(&media).unwrap();
+        assert!(!json.contains("is_image"));
+
+        let image = MediaSource::image("pic.png", 64, 64);
+        let json = serde_json::to_string(&image).unwrap();
+        assert!(json.contains("\"is_image\":true"));
+    }
+
+    #[test]
+    fn image_flag_roundtrips_and_defaults_false() {
+        let image = MediaSource::image("pic.webp", 320, 240);
+        let json = serde_json::to_string(&image).unwrap();
+        let loaded: MediaSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, image);
+
+        // Old saves carry no `is_image` field — it must default to false.
+        let legacy = r#"{"id":1,"path":"old.mp4","width":1920,"height":1080,
+            "frame_rate":{"num":24,"den":1},
+            "duration":{"value":48,"rate":{"num":24,"den":1}},"has_audio":true}"#;
+        let loaded: MediaSource = serde_json::from_str(legacy).unwrap();
+        assert!(!loaded.is_image);
+        assert_eq!(loaded.kind(), MediaKind::Video);
     }
 }

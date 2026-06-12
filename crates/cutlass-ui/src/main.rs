@@ -92,10 +92,14 @@ async fn pick_import_path() -> Option<std::path::PathBuf> {
     rfd::AsyncFileDialog::new()
         .add_filter(
             "Media",
-            &["mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac", "flac", "ogg"],
+            &[
+                "mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac", "flac", "ogg",
+                "png", "jpg", "jpeg", "webp",
+            ],
         )
         .add_filter("Video", &["mp4", "mov", "mkv", "webm", "m4v"])
         .add_filter("Audio", &["mp3", "wav", "m4a", "aac", "flac", "ogg"])
+        .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
         .pick_file()
         .await
         .map(|file| file.path().to_path_buf())

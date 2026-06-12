@@ -1,4 +1,5 @@
-//! Library tile thumbnails: poster frames for video, waveform images for audio.
+//! Library tile thumbnails: poster frames for video, waveform images for
+//! audio, the picture itself for stills.
 //!
 //! Generation (decode + scale, or full audio decode for peaks) runs on a
 //! dedicated worker thread so neither the UI nor the preview/engine thread
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::{Sender, unbounded};
-use cutlass_decoder::{audio_peaks, video_thumbnail};
+use cutlass_decoder::{audio_peaks, decode_image, video_thumbnail};
 use slint::{Image, Model, Rgba8Pixel, SharedPixelBuffer};
 use tracing::{error, info};
 
@@ -34,6 +35,8 @@ const WAVEFORM_BAR: [u8; 4] = [0xA9, 0xC0, 0xFF, 0xFF];
 pub enum ThumbKind {
     Video,
     Audio,
+    /// Still image: the tile shows the picture itself (no poster-frame seek).
+    Image,
 }
 
 struct ThumbRequest {
@@ -104,6 +107,11 @@ fn generate(req: &ThumbRequest) -> Result<(u32, u32, Vec<u8>), String> {
         ThumbKind::Audio => {
             let peaks = audio_peaks(&req.path, WAVEFORM_BARS).map_err(|e| e.to_string())?;
             Ok(render_waveform(&peaks, WAVEFORM_SIZE, WAVEFORM_SIZE))
+        }
+        ThumbKind::Image => {
+            let thumb = decode_image(&req.path, VIDEO_THUMB_MAX, VIDEO_THUMB_MAX)
+                .map_err(|e| e.to_string())?;
+            Ok((thumb.width, thumb.height, thumb.rgba))
         }
     }
 }
