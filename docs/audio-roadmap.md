@@ -153,10 +153,15 @@ beat markers all mirror CapCut desktop's audio panel.
       internal) lowers to `DuckLanes` — "duck the music under the narration"
       from a prompt. Wire DTO + validation + action-log phrasing + schema
       snapshot bump (v14) + eval.
-- [ ] **Inspector trigger (later slice)**: a one-click "Duck under…" control in
-      the audio inspector. Deferred on a UX fork (how the user designates voice
-      vs music) — the capability ships agent-driven today, and the written
-      keyframes are editable through the existing envelope UI.
+- [x] **Inspector trigger (voice-lane UX)**: the UX fork resolved CapCut-style
+      — the user tags a lane as the **voice** source with a "V" toggle in the
+      track header (`Track.duck_source`, serde-default false + `SetTrackDuckSource`
+      command/action, one undoable flag flip like mute/lock), then a **"Duck under
+      voice"** button in the selected music clip's audio inspector. The worker
+      gathers every clip on a voice-tagged lane that overlaps the selection and
+      lowers `DuckLanes` with the same broadcast-typical defaults as the agent
+      tool. The button only shows when a voice lane exists; the written keyframes
+      stay editable through the volume envelope.
 
 ## Phase 5 — Noise reduction
 
