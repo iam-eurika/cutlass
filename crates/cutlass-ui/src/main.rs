@@ -6,6 +6,7 @@ mod params;
 mod preview;
 mod preview_gesture;
 mod preview_select;
+mod preview_view;
 mod preview_worker;
 mod projection;
 mod recent;
@@ -1205,6 +1206,29 @@ fn main() -> Result<(), slint::PlatformError> {
                 pan_x,
                 pan_y,
             )
+        },
+    );
+
+    // --- inspect viewport zoom/pan (src/preview_view.rs) -------------------
+
+    app.global::<PreviewBackend>().on_clamp_view(
+        |canvas_w, canvas_h, view_w, view_h, zoom, pan_x, pan_y| {
+            preview_view::clamp_view(canvas_w, canvas_h, view_w, view_h, zoom, pan_x, pan_y)
+        },
+    );
+
+    app.global::<PreviewBackend>().on_zoom_to(
+        |canvas_w, canvas_h, view_w, view_h, zoom, pan_x, pan_y, cursor_x, cursor_y, target_zoom| {
+            preview_view::zoom_to(
+                canvas_w, canvas_h, view_w, view_h, zoom, pan_x, pan_y, cursor_x, cursor_y,
+                target_zoom,
+            )
+        },
+    );
+
+    app.global::<PreviewBackend>().on_pan_view(
+        |canvas_w, canvas_h, view_w, view_h, zoom, pan_x, pan_y, dx, dy| {
+            preview_view::pan_by(canvas_w, canvas_h, view_w, view_h, zoom, pan_x, pan_y, dx, dy)
         },
     );
 

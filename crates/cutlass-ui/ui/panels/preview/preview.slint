@@ -5,7 +5,7 @@ import { TimelineLib } from "../../lib/timeline-lib.slint";
 import { TimelineStore, TimelineActions } from "../../store/index.slint";
 import { RationalTime } from "../../models/index.slint";
 import { AppState } from "../../state.slint";
-import { PreviewBackend, PreviewHit, PreviewSelectionBox, PreviewDragResolution } from "../../lib/preview-backend.slint";
+import { PreviewBackend, PreviewHit, PreviewSelectionBox, PreviewDragResolution, PreviewView } from "../../lib/preview-backend.slint";
 import { SelectionBackend } from "../../lib/selection-backend.slint";
 
 export component PreviewPanel inherits PanelBase {
@@ -61,77 +61,61 @@ export component PreviewPanel inherits PanelBase {
                     private property <bool> pan-dragging: false;
                     private property <float> pan-press-x;
                     private property <float> pan-press-y;
-                    private property <length> pan-start-x;
-                    private property <length> pan-start-y;
+                    private property <float> pan-start-x;
+                    private property <float> pan-start-y;
+                    // Inspect zoom captured when a trackpad pinch begins; the
+                    // gesture reports a cumulative factor (1.0 at start), so
+                    // the target zoom is this baseline × that factor.
+                    private property <float> pinch-base-zoom: 1.0;
 
-                    private property <float> min-zoom: 1.0;
-                    private property <float> max-zoom: 8.0;
                     private property <float> sequence-aspect:
                         EditorStore.project.sequence.width / EditorStore.project.sequence.height;
+                    private property <float> canvas-w: EditorStore.project.sequence.width / 1px;
+                    private property <float> canvas-h: EditorStore.project.sequence.height / 1px;
+                    // Fitted (ImageFit.contain) content size at zoom 1; the
+                    // frame element below is this scaled by the live zoom.
                     private property <length> fitted-width:
                         min(self.width, self.height * self.sequence-aspect);
                     private property <length> fitted-height: self.fitted-width / self.sequence-aspect;
-                    private property <length> max-pan-x:
-                        max(0px, (self.fitted-width * PreviewStore.viewport-zoom - self.width) / 2);
-                    private property <length> max-pan-y:
-                        max(0px, (self.fitted-height * PreviewStore.viewport-zoom - self.height) / 2);
 
-                    changed max-pan-x => { self.clamp-pan(); }
-                    changed max-pan-y => { self.clamp-pan(); }
-
-                    function clamp-pan() {
-                        if (PreviewStore.viewport-zoom <= self.min-zoom + 0.001) {
-                            PreviewStore.viewport-pan-x = 0px;
-                            PreviewStore.viewport-pan-y = 0px;
-                            return;
-                        }
-                        PreviewStore.viewport-pan-x = clamp(
-                            PreviewStore.viewport-pan-x,
-                            -self.max-pan-x,
-                            self.max-pan-x);
-                        PreviewStore.viewport-pan-y = clamp(
-                            PreviewStore.viewport-pan-y,
-                            -self.max-pan-y,
-                            self.max-pan-y);
+                    // All zoom/pan changes funnel through the Rust math
+                    // (src/preview_view.rs), which returns an already-clamped
+                    // state — so the viewport can never drift past the content
+                    // edges or the zoom limits, even on a panel resize.
+                    function apply-view(v: PreviewView) {
+                        PreviewStore.viewport-zoom = v.zoom;
+                        PreviewStore.viewport-pan-x = v.pan-x * 1px;
+                        PreviewStore.viewport-pan-y = v.pan-y * 1px;
+                    }
+                    function reclamp() {
+                        self.apply-view(PreviewBackend.clamp-view(
+                            self.canvas-w, self.canvas-h, self.width / 1px, self.height / 1px,
+                            PreviewStore.viewport-zoom,
+                            PreviewStore.viewport-pan-x / 1px,
+                            PreviewStore.viewport-pan-y / 1px));
+                    }
+                    function zoom-to(cursor-x: float, cursor-y: float, target: float) {
+                        self.apply-view(PreviewBackend.zoom-to(
+                            self.canvas-w, self.canvas-h, self.width / 1px, self.height / 1px,
+                            PreviewStore.viewport-zoom,
+                            PreviewStore.viewport-pan-x / 1px,
+                            PreviewStore.viewport-pan-y / 1px,
+                            cursor-x, cursor-y, target));
+                    }
+                    function pan-by(dx: float, dy: float) {
+                        self.apply-view(PreviewBackend.pan-view(
+                            self.canvas-w, self.canvas-h, self.width / 1px, self.height / 1px,
+                            PreviewStore.viewport-zoom,
+                            PreviewStore.viewport-pan-x / 1px,
+                            PreviewStore.viewport-pan-y / 1px,
+                            dx, dy));
                     }
 
-                    function reset-viewport() {
-                        PreviewStore.viewport-zoom = self.min-zoom;
-                        PreviewStore.viewport-pan-x = 0px;
-                        PreviewStore.viewport-pan-y = 0px;
-                    }
-
-                    function zoom-at(px: float, py: float, next-zoom: float) {
-                        let clamped-zoom = clamp(next-zoom, self.min-zoom, self.max-zoom);
-                        if (abs(clamped-zoom - PreviewStore.viewport-zoom) < 0.001) {
-                            return;
-                        }
-                        if (clamped-zoom <= self.min-zoom + 0.001) {
-                            self.reset-viewport();
-                            return;
-                        }
-
-                        // Keep the canvas point under the cursor stable while
-                        // changing zoom. Pan is measured from viewport center.
-                        let factor = clamped-zoom / PreviewStore.viewport-zoom;
-                        let vx = px - self.width / 2 / 1px;
-                        let vy = py - self.height / 2 / 1px;
-                        let pan-x = PreviewStore.viewport-pan-x / 1px;
-                        let pan-y = PreviewStore.viewport-pan-y / 1px;
-                        PreviewStore.viewport-zoom = clamped-zoom;
-                        PreviewStore.viewport-pan-x = (vx - (vx - pan-x) * factor) * 1px;
-                        PreviewStore.viewport-pan-y = (vy - (vy - pan-y) * factor) * 1px;
-                        self.clamp-pan();
-                    }
-
-                    function pan-by(dx: length, dy: length) {
-                        if (PreviewStore.viewport-zoom <= self.min-zoom + 0.001) {
-                            return;
-                        }
-                        PreviewStore.viewport-pan-x += dx;
-                        PreviewStore.viewport-pan-y += dy;
-                        self.clamp-pan();
-                    }
+                    // A panel resize changes the fit and the pan limits;
+                    // re-clamp so a frame zoomed/panned at the old size stays
+                    // in range.
+                    changed width => { self.reclamp(); }
+                    changed height => { self.reclamp(); }
 
                     // Recomputed reactively: follows playhead, edits
                     // (projection republish), selection, panel resizes, and
@@ -227,8 +211,8 @@ export component PreviewPanel inherits PanelBase {
                     Image {
                         x: (viewport.width - self.width) / 2 + PreviewStore.viewport-pan-x;
                         y: (viewport.height - self.height) / 2 + PreviewStore.viewport-pan-y;
-                        width: viewport.width * PreviewStore.viewport-zoom;
-                        height: viewport.height * PreviewStore.viewport-zoom;
+                        width: viewport.fitted-width * PreviewStore.viewport-zoom;
+                        height: viewport.fitted-height * PreviewStore.viewport-zoom;
                         source: PreviewStore.frame;
                         image-fit: ImageFit.contain;
                     }
@@ -250,8 +234,8 @@ export component PreviewPanel inherits PanelBase {
                                 viewport.pan-dragging = true;
                                 viewport.pan-press-x = self.mouse-x / 1px;
                                 viewport.pan-press-y = self.mouse-y / 1px;
-                                viewport.pan-start-x = PreviewStore.viewport-pan-x;
-                                viewport.pan-start-y = PreviewStore.viewport-pan-y;
+                                viewport.pan-start-x = PreviewStore.viewport-pan-x / 1px;
+                                viewport.pan-start-y = PreviewStore.viewport-pan-y / 1px;
                                 return;
                             }
                             if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
@@ -309,28 +293,30 @@ export component PreviewPanel inherits PanelBase {
 
                         scroll-event(e) => {
                             AppState.refocus-shortcuts();
-                            if (e.modifiers.shift) {
-                                viewport.pan-by(e.delta-y, 0px);
+                            if (e.modifiers.control || e.modifiers.meta) {
+                                // Ctrl/Cmd-scroll zooms, anchored on the cursor
+                                // (CapCut/Figma). A wheel notch or trackpad
+                                // pixels both map through the same exponential.
+                                viewport.zoom-to(
+                                    self.mouse-x / 1px,
+                                    self.mouse-y / 1px,
+                                    PreviewStore.viewport-zoom * Math.pow(1.0015, e.delta-y / 1px));
                                 return accept;
                             }
-                            if (abs(e.delta-x / 1px) > abs(e.delta-y / 1px)) {
-                                viewport.pan-by(e.delta-x, e.delta-y);
-                                return accept;
-                            }
-                            viewport.zoom-at(
-                                self.mouse-x / 1px,
-                                self.mouse-y / 1px,
-                                PreviewStore.viewport-zoom * Math.pow(1.0018, e.delta-y / 1px));
+                            // Plain two-finger scroll / wheel pans the frame
+                            // (no-op until zoomed in past the viewport edges).
+                            viewport.pan-by(e.delta-x / 1px, e.delta-y / 1px);
                             return accept;
                         }
 
                         moved => {
                             if (viewport.pan-dragging) {
-                                PreviewStore.viewport-pan-x =
-                                    viewport.pan-start-x + (self.mouse-x / 1px - viewport.pan-press-x) * 1px;
-                                PreviewStore.viewport-pan-y =
-                                    viewport.pan-start-y + (self.mouse-y / 1px - viewport.pan-press-y) * 1px;
-                                viewport.clamp-pan();
+                                viewport.apply-view(PreviewBackend.clamp-view(
+                                    viewport.canvas-w, viewport.canvas-h,
+                                    viewport.width / 1px, viewport.height / 1px,
+                                    PreviewStore.viewport-zoom,
+                                    viewport.pan-start-x + (self.mouse-x / 1px - viewport.pan-press-x),
+                                    viewport.pan-start-y + (self.mouse-y / 1px - viewport.pan-press-y)));
                                 return;
                             }
                             if (viewport.drag-mode == 0) {
@@ -553,6 +539,24 @@ export component PreviewPanel inherits PanelBase {
                         }
                     }
 
+                    // Trackpad pinch-to-zoom (precision gesture). `scale` is
+                    // cumulative since the pinch started, anchored on the
+                    // pinch center; non-gesture events fall through to the
+                    // TouchArea below, so clicks/drags are unaffected.
+                    ScaleRotateGestureHandler {
+                        width: 100%;
+                        height: 100%;
+                        started => {
+                            viewport.pinch-base-zoom = PreviewStore.viewport-zoom;
+                        }
+                        updated => {
+                            viewport.zoom-to(
+                                self.center.x / 1px,
+                                self.center.y / 1px,
+                                viewport.pinch-base-zoom * self.scale);
+                        }
+                    }
+
                     if root.session-empty: ProjectWelcome {
                         width: parent.width;
                         height: parent.height;
@@ -647,7 +651,7 @@ export component PreviewPanel inherits PanelBase {
                             width: 52px;
                             height: 24px;
                             border-radius: 4px;
-                            background: PreviewStore.viewport-zoom > 1.001 ? #2A2A2A : transparent;
+                            background: abs(PreviewStore.viewport-zoom - 1.0) > 0.001 ? #2A2A2A : transparent;
                             border-width: 1px;
                             border-color: #FFFFFF24;
 

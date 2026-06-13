@@ -61,6 +61,18 @@ export struct PreviewDragResolution {
     guide-y: float,
 }
 
+// A docked-preview inspect viewport state (zoom + pan). This is UI-only — it
+// changes how the composited frame is viewed, never the project. `zoom` is a
+// multiple of the aspect-fit scale (1 = ImageFit.contain, <1 shrinks, >1
+// magnifies); `pan-x`/`pan-y` are the content center's offset from the
+// viewport center in logical px (0 = centered). Always returned pre-clamped
+// to a renderable state (src/preview_view.rs).
+export struct PreviewView {
+    zoom: float,
+    pan-x: float,
+    pan-y: float,
+}
+
 export global PreviewBackend {
     // Topmost hit at (x, y) in viewport-element coordinates, given the
     // viewport's current size and zoom/pan. Locked lanes don't hit-test
@@ -103,4 +115,20 @@ export global PreviewBackend {
     // Anchor-handle drag: move the pivot within the content while keeping
     // the rendered frame fixed — updates both anchor and position.
     pure callback resolve-anchor(Sequence /* sequence */, string /* clip-id */, int    /* playhead-tick */, float  /* press-x */, float  /* press-y */, float  /* cursor-x */, float  /* cursor-y */, float  /* view-w */, float  /* view-h */, float  /* zoom */, float  /* pan-x */, float  /* pan-y */, ) -> PreviewDragResolution;
+
+    // --- inspect viewport zoom/pan (src/preview_view.rs) -------------------
+    // Pure math over (canvas px, viewport px) → a clamped PreviewView. The
+    // panel feeds back the result it gets, so the state can never drift out
+    // of range (e.g. on a panel resize, or a pan past the content edge).
+
+    // Re-normalize a viewport state: clamp zoom into range, then clamp pan to
+    // what that zoom allows. Used on resize and after any external change.
+    pure callback clamp-view(float /* canvas-w */, float /* canvas-h */, float /* view-w */, float /* view-h */, float /* zoom */, float /* pan-x */, float /* pan-y */, ) -> PreviewView;
+
+    // Zoom toward `target-zoom` keeping the canvas point under the cursor
+    // pinned (Ctrl/Cmd-scroll, trackpad pinch). Cursor is viewport px.
+    pure callback zoom-to(float /* canvas-w */, float /* canvas-h */, float /* view-w */, float /* view-h */, float /* zoom */, float /* pan-x */, float /* pan-y */, float /* cursor-x */, float /* cursor-y */, float /* target-zoom */, ) -> PreviewView;
+
+    // Pan by a viewport-px delta (two-finger scroll / drag), clamped to range.
+    pure callback pan-view(float /* canvas-w */, float /* canvas-h */, float /* view-w */, float /* view-h */, float /* zoom */, float /* pan-x */, float /* pan-y */, float /* dx */, float /* dy */, ) -> PreviewView;
 }

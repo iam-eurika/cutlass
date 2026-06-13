@@ -19,7 +19,7 @@ import { CanvasDialog } from "shell/canvas-dialog.slint";
 import { MessageDialog } from "shell/message-dialog.slint";
 import { RelinkDialog } from "shell/relink-dialog.slint";
 import { ExportBackend } from "lib/export-backend.slint";
-import { PreviewBackend, PreviewDragResolution } from "lib/preview-backend.slint";
+import { PreviewBackend, PreviewDragResolution, PreviewView } from "lib/preview-backend.slint";
 
 // Re-export globals so Slint's codegen generates accessors on `AppWindow`.
 // Slint only exposes globals from the entry file's exports to the host
@@ -40,7 +40,7 @@ export {
     ClipMove,
 }from "lib/drag-backend.slint";
 export { SelectionBackend, SelectionUpdate }from "lib/selection-backend.slint";
-export { PreviewBackend, PreviewHit, PreviewSelectionBox, PreviewDragResolution }from "lib/preview-backend.slint";
+export { PreviewBackend, PreviewHit, PreviewSelectionBox, PreviewDragResolution, PreviewView }from "lib/preview-backend.slint";
 export { InspectorBackend, SelectedClipInfo }from "lib/inspector-backend.slint";
 export { KeyframeBackend }from "lib/keyframe-backend.slint";
 export { StripBackend, StripTile }from "lib/strip-backend.slint";
