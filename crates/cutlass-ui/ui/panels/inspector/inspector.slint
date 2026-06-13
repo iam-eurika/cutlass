@@ -3,7 +3,6 @@ import {
     PanelHeader,
     CutlassScrollView,
     CutlassDropdown,
-    CutlassSlider,
     CutlassText,
 } from "../../components/index.slint";
 import { AppState } from "../../state.slint";
@@ -13,6 +12,13 @@ import {
     SelectedClipInfo,
 } from "../../lib/inspector-backend.slint";
 import { Clip, TrackKind } from "../../models/index.slint";
+import {
+    InspectorDivider,
+    InspectorTabHeader,
+    SectionHeader,
+    LabelCell,
+    SliderRow,
+} from "inspector-widgets.slint";
 import { TextInspector } from "text-inspector.slint";
 import { TransformInspector } from "transform-inspector.slint";
 import { CropInspector } from "crop-inspector.slint";
@@ -114,7 +120,8 @@ component MissingSelectionInspector inherits VerticalLayout {
 component SpeedInspector inherits VerticalLayout {
     in property <Clip> model;
 
-    spacing: AppStore.theme.metrics.spacing.sm;
+    spacing: AppStore.theme.metrics.spacing.lg;
+    alignment: LayoutAlignment.start;
 
     function commit(num: int, den: int, reversed: bool) {
         InspectorBackend.set-clip-speed(root.model.id, num, den, reversed);
@@ -159,21 +166,17 @@ component SpeedInspector inherits VerticalLayout {
         return 1;
     }
 
-    CutlassText {
-        text: "Speed";
-        style: AppStore.theme.typography.heading-sm;
-        foreground: AppStore.theme.text.primary;
+    SectionHeader {
+        title: "Speed";
     }
 
     HorizontalLayout {
         spacing: AppStore.theme.metrics.spacing.md;
+        height: 28px;
+        vertical-stretch: 0;
 
-        CutlassText {
-            width: 64px;
-            vertical-alignment: center;
-            text: "Rate";
-            style: AppStore.theme.typography.label;
-            foreground: AppStore.theme.text.secondary;
+        LabelCell {
+            label: "Rate";
         }
 
         CutlassDropdown {
@@ -188,13 +191,11 @@ component SpeedInspector inherits VerticalLayout {
 
     HorizontalLayout {
         spacing: AppStore.theme.metrics.spacing.md;
+        height: 28px;
+        vertical-stretch: 0;
 
-        CutlassText {
-            width: 64px;
-            vertical-alignment: center;
-            text: "Reverse";
-            style: AppStore.theme.typography.label;
-            foreground: AppStore.theme.text.secondary;
+        LabelCell {
+            label: "Reverse";
         }
 
         Rectangle {
@@ -218,108 +219,10 @@ component SpeedInspector inherits VerticalLayout {
         Rectangle { horizontal-stretch: 1; }
     }
 
-    CutlassText {
+    if root.model.speed-label != "": CutlassText {
         text: "Audio is muted while a clip is retimed.";
         style: AppStore.theme.typography.caption;
         foreground: AppStore.theme.text.muted;
-        visible: root.model.speed-label != "";
-    }
-}
-
-// One audio-mix row: label, slider, live readout. The value only moves on
-// commit (slider release ⇒ one history entry); the readout tracks the cap
-// during the drag. Double-click the label to reset.
-component AudioSliderRow inherits HorizontalLayout {
-    in property <string> label;
-    in property <float> value;
-    in property <float> minimum: 0;
-    in property <float> maximum: 100;
-    in property <float> step: 1;
-    in property <string> suffix;
-    in property <float> reset-value: 0;
-    // Readout precision: 0 ⇒ whole numbers (percent), 1 ⇒ tenths (seconds).
-    in property <int> decimals: 0;
-
-    callback commit(value: float);
-
-    function format(v: float) -> string {
-        return root.decimals == 0
-            ? Math.round(v) + ""
-            : Math.round(v * 10) / 10 + "";
-    }
-
-    spacing: AppStore.theme.metrics.spacing.md;
-    height: 28px;
-    vertical-stretch: 0;
-
-    changed value => {
-        sl.value = clamp(root.value, root.minimum, root.maximum);
-        readout.text = root.format(root.value);
-    }
-
-    TouchArea {
-        width: 64px;
-        height: 28px;
-        vertical-stretch: 0;
-        mouse-cursor: MouseCursor.pointer;
-        clicked => {
-            AppState.refocus-shortcuts();
-        }
-        double-clicked => {
-            root.commit(root.reset-value);
-        }
-
-        CutlassText {
-            width: 100%;
-            height: 100%;
-            text: root.label;
-            style: AppStore.theme.typography.label;
-            foreground: AppStore.theme.text.secondary;
-            vertical-alignment: TextVerticalAlignment.center;
-            overflow: TextOverflow.elide;
-        }
-    }
-
-    sl := CutlassSlider {
-        horizontal-stretch: 1;
-        height: 28px;
-        vertical-stretch: 0;
-        minimum: root.minimum;
-        maximum: root.maximum;
-        step: root.step;
-        value: clamp(root.value, root.minimum, root.maximum);
-
-        changed(v) => {
-            // `root.value` only moves on commit; drive the readout off the
-            // live slider value so it doesn't lag the cap.
-            readout.text = root.format(v);
-        }
-
-        released(v) => {
-            root.commit(v);
-            AppState.refocus-shortcuts();
-        }
-    }
-
-    readout := CutlassText {
-        width: 44px;
-        height: 28px;
-        vertical-stretch: 0;
-        text: root.format(root.value);
-        style: AppStore.theme.typography.label;
-        foreground: AppStore.theme.text.primary;
-        horizontal-alignment: TextHorizontalAlignment.right;
-        vertical-alignment: TextVerticalAlignment.center;
-    }
-
-    CutlassText {
-        width: 16px;
-        height: 28px;
-        vertical-stretch: 0;
-        text: root.suffix;
-        style: AppStore.theme.typography.label;
-        foreground: AppStore.theme.text.muted;
-        vertical-alignment: TextVerticalAlignment.center;
     }
 }
 
@@ -339,95 +242,114 @@ component AudioMixInspector inherits VerticalLayout {
         : 0;
     private property <float> fade-max: min(10.0, root.duration-s);
 
-    spacing: AppStore.theme.metrics.spacing.sm;
+    spacing: AppStore.theme.metrics.spacing.lg;
+    alignment: LayoutAlignment.start;
 
     function commit(volume: float, fade-in: float, fade-out: float) {
         InspectorBackend.set-clip-audio(root.model.id, volume, fade-in, fade-out);
     }
 
-    CutlassText {
-        text: "Audio";
-        style: AppStore.theme.typography.heading-sm;
-        foreground: AppStore.theme.text.primary;
+    SectionHeader {
+        title: "Audio";
     }
 
-    AudioSliderRow {
+    SliderRow {
         label: "Volume";
-        value: root.model.volume * 100;
-        maximum: 200;
         suffix: "%";
+        value: root.model.volume * 100;
+        minimum: 0;
+        maximum: 200;
         reset-value: 100;
         commit(v) => {
             root.commit(v / 100, root.model.fade-in-s, root.model.fade-out-s);
         }
     }
 
-    AudioSliderRow {
+    SliderRow {
         label: "Fade in";
+        suffix: "s";
         value: root.model.fade-in-s;
+        minimum: 0;
         maximum: root.fade-max;
         step: 0.1;
         decimals: 1;
-        suffix: "s";
         commit(v) => {
             root.commit(root.model.volume, v, root.model.fade-out-s);
         }
     }
 
-    AudioSliderRow {
+    SliderRow {
         label: "Fade out";
+        suffix: "s";
         value: root.model.fade-out-s;
+        minimum: 0;
         maximum: root.fade-max;
         step: 0.1;
         decimals: 1;
-        suffix: "s";
         commit(v) => {
             root.commit(root.model.volume, root.model.fade-in-s, v);
         }
     }
 }
 
+// CapCut-style property sheet for visual clips that aren't text (video,
+// solids, shapes): transform, crop, speed (media-backed only), and the
+// effect chain — one scrolling sheet, sections split by dividers, all rows
+// on the shared 28px slider/numeric grid (see inspector-widgets.slint).
 component VisualClipInspector inherits VerticalLayout {
     in property <Clip> model;
 
     spacing: AppStore.theme.metrics.spacing.none;
 
-    PanelHeader {
-        title: "Inspector";
+    InspectorTabHeader {
+        tabs: ["Video", "Animation", "Tracking", "Adjustment"];
+        selected: 0;
     }
 
-    CutlassScrollView {
+    body-scroll := CutlassScrollView {
         vertical-stretch: 1;
         viewport-width: root.width;
         viewport-height: content.preferred-height;
         show-horizontal-scrollbar: false;
 
+        // Blur catcher: any click that no control claims (labels, dividers,
+        // padding) unfocuses the active text input, which commits its
+        // pending edit.
+        TouchArea {
+            x: 0;
+            y: 0;
+            width: body-scroll.width;
+            height: max(body-scroll.height, content.preferred-height);
+            clicked => {
+                AppState.refocus-shortcuts();
+            }
+        }
+
         content := VerticalLayout {
-            width: root.width;
-            spacing: AppStore.theme.metrics.spacing.xl;
+            width: max(0px, root.width - AppStore.theme.scrollbar.size);
+            spacing: AppStore.theme.metrics.spacing.lg;
             alignment: LayoutAlignment.start;
             padding: AppStore.theme.metrics.spacing.lg;
-
-            Text {
-                text: root.model.name;
-                font-size: AppStore.theme.typography.heading-sm.size;
-                font-weight: AppStore.theme.typography.heading-sm.weight;
-                color: AppStore.theme.text.primary;
-            }
 
             TransformInspector {
                 model: root.model;
             }
+
+            InspectorDivider { }
 
             CropInspector {
                 model: root.model;
             }
 
             // Speed needs a source to retime: media-backed clips only
-            // (generated text/solids have no footage behind them).
+            // (generated solids/shapes have no footage behind them).
+            if root.model.media-id != "": InspectorDivider { }
+
             if root.model.media-id != "": SpeedInspector {
                 model: root.model;
             }
+
+            InspectorDivider { }
 
             // Effect chain (M4): every visual clip can carry effects.
             EffectsInspector {
@@ -442,30 +364,40 @@ component AudioClipInspector inherits VerticalLayout {
 
     spacing: AppStore.theme.metrics.spacing.none;
 
-    PanelHeader {
-        title: "Inspector";
+    InspectorTabHeader {
+        tabs: ["Audio", "Speech to text"];
+        selected: 0;
     }
 
-    Rectangle {
+    body-scroll := CutlassScrollView {
         vertical-stretch: 1;
+        viewport-width: root.width;
+        viewport-height: content.preferred-height;
+        show-horizontal-scrollbar: false;
 
-        VerticalLayout {
-            spacing: AppStore.theme.metrics.spacing.xl;
+        TouchArea {
+            x: 0;
+            y: 0;
+            width: body-scroll.width;
+            height: max(body-scroll.height, content.preferred-height);
+            clicked => {
+                AppState.refocus-shortcuts();
+            }
+        }
+
+        content := VerticalLayout {
+            width: max(0px, root.width - AppStore.theme.scrollbar.size);
+            spacing: AppStore.theme.metrics.spacing.lg;
             alignment: LayoutAlignment.start;
             padding: AppStore.theme.metrics.spacing.lg;
-
-            Text {
-                text: root.model.name;
-                font-size: AppStore.theme.typography.heading-sm.size;
-                font-weight: AppStore.theme.typography.heading-sm.weight;
-                color: AppStore.theme.text.primary;
-            }
 
             // Volume + fades (M1): the audio-lane clip is where sound
             // lives, so the mix controls sit here.
             if root.model.media-id != "": AudioMixInspector {
                 model: root.model;
             }
+
+            if root.model.media-id != "": InspectorDivider { }
 
             // Same retime control as visual clips — the engine retimes the
             // waveform window; playback stays muted until varispeed (M8).
