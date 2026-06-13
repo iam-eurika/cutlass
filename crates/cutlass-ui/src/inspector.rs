@@ -91,10 +91,13 @@ pub fn sample_transform(clip: &Clip, playhead: i32) -> TransformSample {
     TransformSample {
         position_x: t.position[0],
         position_y: t.position[1],
+        anchor_x: t.anchor_point[0],
+        anchor_y: t.anchor_point[1],
         scale: t.scale,
         rotation: t.rotation,
         opacity: t.opacity,
         position_row: row_state(&clip.kf_position, playhead),
+        anchor_row: row_state(&clip.kf_anchor, playhead),
         scale_row: row_state(&clip.kf_scale, playhead),
         rotation_row: row_state(&clip.kf_rotation, playhead),
         opacity_row: row_state(&clip.kf_opacity, playhead),

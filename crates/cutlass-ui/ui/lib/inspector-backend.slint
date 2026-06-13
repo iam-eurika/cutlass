@@ -29,10 +29,13 @@ export struct ParamRowState {
 export struct TransformSample {
     position-x: float,
     position-y: float,
+    anchor-x: float,
+    anchor-y: float,
     scale: float,
     rotation: float,
     opacity: float,
     position-row: ParamRowState,
+    anchor-row: ParamRowState,
     scale-row: ParamRowState,
     rotation-row: ParamRowState,
     opacity-row: ParamRowState,
@@ -69,7 +72,7 @@ export global InspectorBackend {
     // matches the mixed gain.
     pure callback sample-audio(clip: Clip, playhead-tick: int) -> AudioSample;
 
-    // Insert or replace a keyframe on `param` ("position" | "scale" |
+    // Insert or replace a keyframe on `param` ("position" | "anchor" | "scale" |
     // "rotation" | "opacity" | "volume") at the absolute sequence tick.
     // Scalars ride `value-x`; position uses both axes. `easing`: 0 linear,
     // 1 ease-in, 2 ease-out, 3 ease-in-out. One undoable engine edit.
