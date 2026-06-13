@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use cutlass_ai::providers::openai_compat::OpenAiCompatProvider;
 use cutlass_ai::{
-    AgentConfig, AgentEvent, EditorContext, EngineBridge, ProjectSummary, PromptStatus,
+    AgentConfig, AgentEvent, EditorContext, EngineBridge, Message, ProjectSummary, PromptStatus,
     WireCommand, run_prompt, summarize, validate,
 };
 use cutlass_commands::EditOutcome;
@@ -59,6 +59,9 @@ enum AgentRequest {
     },
     ApplyPlan,
     DiscardPlan,
+    /// Forget the conversation so far (the project was replaced wholesale —
+    /// open / new / restore — and prior turns name clips that are gone).
+    ResetHistory,
 }
 
 #[derive(Clone)]
@@ -82,6 +85,12 @@ impl AgentHandle {
 
     pub fn discard_plan(&self) {
         let _ = self.tx.send(AgentRequest::DiscardPlan);
+    }
+
+    /// Drop the multi-turn conversation memory; the next prompt starts a
+    /// fresh dialogue. Fired when the project is replaced wholesale.
+    pub fn reset_history(&self) {
+        let _ = self.tx.send(AgentRequest::ResetHistory);
     }
 
     /// Cooperative cancel: the provider checks this flag between stream
@@ -258,6 +267,11 @@ fn agent_main(
     // spins a headless GPU context we shouldn't pay for at launch.
     let mut sandbox: Option<Engine> = None;
     let mut pending_plan: Vec<AgentPlanStep> = Vec::new();
+    // Multi-turn memory: each completed prompt appends its turn here, and
+    // the next prompt sees it (behind a freshly regenerated system prompt,
+    // so current project state always wins). Trimmed to a budget; reset
+    // when the project is replaced.
+    let mut history: Vec<Message> = Vec::new();
 
     // Surface the configured/not-configured state before the first send.
     let config_path = cutlass_ai::config::default_config_path();
@@ -294,6 +308,7 @@ fn agent_main(
                     &store,
                     &mut sandbox,
                     &mut pending_plan,
+                    &mut history,
                     &prompt,
                     context,
                     dry_run,
@@ -317,6 +332,7 @@ fn agent_main(
                 }
                 with_store(&store, |s| s.set_plan_pending(false));
             }
+            AgentRequest::ResetHistory => history.clear(),
         }
     }
 }
@@ -327,6 +343,7 @@ fn run_one_prompt(
     store: &slint::Weak<AgentStore<'static>>,
     sandbox: &mut Option<Engine>,
     pending_plan: &mut Vec<AgentPlanStep>,
+    history: &mut Vec<Message>,
     prompt: &str,
     context: EditorContext,
     dry_run: bool,
@@ -399,6 +416,7 @@ fn run_one_prompt(
         &provider,
         &mut bridge,
         &context,
+        history,
         prompt,
         &AgentConfig::default(),
         cancel,
@@ -423,6 +441,10 @@ fn run_one_prompt(
         // decides what happens to the rehearsed plan next.
         PromptStatus::Completed | PromptStatus::DryRun => {
             info!(actions = plan.len(), "agent prompt completed");
+            // Remember this turn even when it made no edits (Q&A is the case
+            // that most needs memory) — append before the empty-plan return.
+            history.extend(outcome.turn_messages);
+            trim_history(history);
             if plan.is_empty() {
                 return;
             }
@@ -474,6 +496,57 @@ fn apply_plan_live(
             );
         }
         None => push_entry(store, "error", "The editor engine is not responding.".into()),
+    }
+}
+
+// --- session memory ---------------------------------------------------------
+
+/// Soft ceiling on the conversation carried into each prompt, in characters
+/// of message content. A turn that splits a clip and reports back is a few
+/// hundred chars, so this holds dozens of turns; `describe_project` blobs
+/// are collapsed upstream so they don't blow it.
+const HISTORY_CHAR_BUDGET: usize = 24_000;
+
+/// Keep history bounded: drop oldest whole turns (each begins with a `User`
+/// message) until under budget. One turn is always kept — even alone it is
+/// useful, and the fresh system prompt carries current state regardless.
+fn trim_history(history: &mut Vec<Message>) {
+    while history_chars(history) > HISTORY_CHAR_BUDGET {
+        let next_turn = history
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, m)| matches!(m, Message::User { .. }))
+            .map(|(i, _)| i);
+        match next_turn {
+            // Drop from the front up to the next turn boundary, so a
+            // turn's tool-call/result pairs are never split.
+            Some(i) => {
+                history.drain(0..i);
+            }
+            None => break,
+        }
+    }
+}
+
+fn history_chars(history: &[Message]) -> usize {
+    history.iter().map(message_chars).sum()
+}
+
+fn message_chars(m: &Message) -> usize {
+    match m {
+        Message::System { content } | Message::User { content } => content.len(),
+        Message::Assistant {
+            content,
+            tool_calls,
+        } => {
+            content.len()
+                + tool_calls
+                    .iter()
+                    .map(|c| c.name.len() + c.arguments.to_string().len())
+                    .sum::<usize>()
+        }
+        Message::ToolResult { content, .. } => content.len(),
     }
 }
 

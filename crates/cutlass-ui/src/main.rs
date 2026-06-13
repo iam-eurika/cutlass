@@ -498,11 +498,13 @@ fn main() -> Result<(), slint::PlatformError> {
     agent_store.on_discard_plan(move || agent_discard.discard_plan());
 
     // Open / New / Restore replaced the project: a running prompt and any
-    // parked plan rehearsed against the old one. Cancel and discard.
+    // parked plan rehearsed against the old one. Cancel and discard, and
+    // forget the conversation — prior turns name clips that are now gone.
     let agent_session = agent_worker.handle();
     agent_store.on_session_changed(move || {
         agent_session.cancel();
         agent_session.discard_plan();
+        agent_session.reset_history();
     });
 
     let editor = app.global::<EditorStore>();

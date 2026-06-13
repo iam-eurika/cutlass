@@ -64,5 +64,6 @@ pub use agent::{
     PromptStatus,
 };
 pub use describe::{summarize, EditorContext, ProjectSummary};
+pub use provider::Message;
 pub use validate::{validate, Rejection};
 pub use wire::{tool_specs, ToolSpec, WireCommand, TOOL_SCHEMA_VERSION};

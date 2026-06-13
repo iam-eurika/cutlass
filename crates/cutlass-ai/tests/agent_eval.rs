@@ -137,6 +137,7 @@ fn run_with(
         provider,
         host,
         context,
+        &[],
         prompt,
         config,
         &cancel,
@@ -1244,4 +1245,131 @@ fn provider_failure_mid_prompt_rolls_back() {
         "the applied split must be rolled back"
     );
     assert!(!host.engine.undo());
+}
+
+fn message_kind(m: &Message) -> &'static str {
+    match m {
+        Message::System { .. } => "system",
+        Message::User { .. } => "user",
+        Message::Assistant { .. } => "assistant",
+        Message::ToolResult { .. } => "tool",
+    }
+}
+
+/// Multi-turn memory: the first prompt's `turn_messages` carry the whole
+/// turn, and threading them into the next prompt puts the prior dialogue
+/// into the request — behind a freshly regenerated system prompt — so the
+/// model can answer "what did you just do?".
+#[test]
+fn session_history_threads_prior_turns_into_the_next_prompt() {
+    let (mut host, _media, _track, clip) = fixture();
+    let ctx = EditorContext {
+        selected_clips: vec![clip],
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+
+    let first = ScriptedProvider::new(vec![
+        tool_turn(vec![(
+            "call_1",
+            "split_clip",
+            serde_json::json!({ "clip": clip, "at": 4.0 }),
+        )]),
+        text_turn("Split the clip at 4.00s into two."),
+    ]);
+    let outcome1 = run_prompt(
+        &first,
+        &mut host,
+        &ctx,
+        &[],
+        "split the selected clip in half",
+        &AgentConfig::default(),
+        &cancel,
+        &mut |_| {},
+    );
+    assert_eq!(outcome1.status, PromptStatus::Completed);
+
+    // The turn carries: the user prompt, the assistant's tool call, the
+    // tool result, and the final text answer.
+    let kinds: Vec<&str> = outcome1
+        .turn_messages
+        .iter()
+        .map(message_kind)
+        .collect();
+    assert_eq!(kinds, ["user", "assistant", "tool", "assistant"]);
+
+    let second = ScriptedProvider::new(vec![text_turn("I split it into two clips.")]);
+    let _ = run_prompt(
+        &second,
+        &mut host,
+        &ctx,
+        &outcome1.turn_messages,
+        "what did you just do?",
+        &AgentConfig::default(),
+        &cancel,
+        &mut |_| {},
+    );
+
+    let sent = second.requests();
+    assert_eq!(sent.len(), 1, "the second prompt is one provider call");
+    let convo = &sent[0];
+    assert!(
+        matches!(convo[0], Message::System { .. }),
+        "a fresh system prompt leads every request"
+    );
+    assert!(
+        convo.iter().any(|m| matches!(
+            m,
+            Message::User { content } if content == "split the selected clip in half"
+        )),
+        "the prior user turn is remembered"
+    );
+    assert!(
+        matches!(
+            convo.last().unwrap(),
+            Message::User { content } if content == "what did you just do?"
+        ),
+        "the newest user message comes last"
+    );
+}
+
+/// `describe_project` results are large and the fresh system snapshot
+/// supersedes them, so history keeps only a placeholder — never a full
+/// stale project blob.
+#[test]
+fn describe_project_results_are_collapsed_in_history() {
+    let (mut host, _media, _track, _clip) = fixture();
+    let cancel = AtomicBool::new(false);
+    let provider = ScriptedProvider::new(vec![
+        tool_turn(vec![("call_1", "describe_project", serde_json::json!({}))]),
+        text_turn("There is one clip on one video track."),
+    ]);
+    let outcome = run_prompt(
+        &provider,
+        &mut host,
+        &EditorContext::default(),
+        &[],
+        "what's on the timeline?",
+        &AgentConfig::default(),
+        &cancel,
+        &mut |_| {},
+    );
+    assert_eq!(outcome.status, PromptStatus::Completed);
+
+    let tool_result = outcome
+        .turn_messages
+        .iter()
+        .find_map(|m| match m {
+            Message::ToolResult { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("the describe_project tool result");
+    assert!(
+        tool_result.contains("project state omitted"),
+        "the blob is collapsed: {tool_result}"
+    );
+    assert!(
+        !tool_result.contains("\"tracks\""),
+        "no full project json survives in history"
+    );
 }

@@ -89,6 +89,13 @@ pub struct PromptOutcome {
     pub text: String,
     pub actions: Vec<ActionLogEntry>,
     pub status: PromptStatus,
+    /// This turn's conversation, ready to append to the session history so
+    /// the next prompt remembers it: the user message, every assistant
+    /// turn and tool result the loop produced, and the final text answer.
+    /// Empty when the prompt aborted (nothing applied → no memory trace).
+    /// `describe_project` results are collapsed to a short placeholder —
+    /// they're large and the fresh system snapshot supersedes them.
+    pub turn_messages: Vec<Message>,
 }
 
 /// House rules + the send-time state, prepended to every conversation.
@@ -119,6 +126,11 @@ pub fn system_prompt(summary: &ProjectSummary, context: &EditorContext) -> Strin
          clips and tracks by id and content so the answer is checkable. \
          If the state cannot answer the question, say what is missing \
          instead of guessing.\n\
+         - Earlier messages in this conversation may describe an older \
+         version of the project (clips since split, trimmed, or removed). \
+         The state below always reflects the project as it is now, so \
+         trust it over anything said earlier; use the conversation only to \
+         understand what the user is referring to.\n\
          \n\
          Current state (the user's selection and playhead are in \
          'editor'):\n{state}"
@@ -128,31 +140,42 @@ pub fn system_prompt(summary: &ProjectSummary, context: &EditorContext) -> Strin
 /// Run one prompt to completion against `bridge`.
 ///
 /// `context` is the send-time editor snapshot (selection, playhead);
-/// `on_event` receives streamed text and applied actions for the UI.
+/// `history` is the prior conversation in this session (the caller's
+/// accumulated `turn_messages`, with no system message — a fresh one is
+/// regenerated here so the current project state always wins); `on_event`
+/// receives streamed text and applied actions for the UI. The returned
+/// [`PromptOutcome::turn_messages`] is this turn's contribution to append.
 pub fn run_prompt(
     provider: &dyn ChatProvider,
     bridge: &mut dyn EngineBridge,
     context: &EditorContext,
+    history: &[Message],
     prompt: &str,
     config: &AgentConfig,
     cancel: &AtomicBool,
     on_event: &mut dyn FnMut(AgentEvent),
 ) -> PromptOutcome {
     let summary = bridge.summary();
-    let mut messages = vec![
-        Message::System {
-            content: system_prompt(&summary, context),
-        },
-        Message::User {
-            content: prompt.to_string(),
-        },
-    ];
+    let mut messages = Vec::with_capacity(history.len() + 2);
+    messages.push(Message::System {
+        content: system_prompt(&summary, context),
+    });
+    messages.extend_from_slice(history);
+    // This turn's own messages start here (the user prompt and everything
+    // the loop appends), kept so we can hand them back as `turn_messages`.
+    let turn_start = messages.len();
+    messages.push(Message::User {
+        content: prompt.to_string(),
+    });
     let mut tools = wire::tool_specs();
     tools.push(wire::describe_project_spec());
 
     let mut actions: Vec<ActionLogEntry> = Vec::new();
     let mut edit_calls = 0usize;
     let mut final_text = String::new();
+    // Call ids of `describe_project` results, collapsed in `turn_messages`
+    // so the session history never carries a full stale project blob.
+    let mut describe_call_ids: Vec<String> = Vec::new();
 
     if !config.dry_run {
         bridge.begin_group();
@@ -167,6 +190,7 @@ pub fn run_prompt(
             text: String::new(),
             actions,
             status: PromptStatus::Aborted(reason),
+            turn_messages: Vec::new(),
         }
     };
 
@@ -209,6 +233,7 @@ pub fn run_prompt(
 
         for call in tool_calls {
             let result: String = if call.name == "describe_project" {
+                describe_call_ids.push(call.id.clone());
                 let state = serde_json::json!({
                     "project": bridge.summary(),
                     "editor": context,
@@ -269,11 +294,13 @@ pub fn run_prompt(
         }
     }
 
+    let turn_messages = collect_turn_messages(messages, turn_start, &describe_call_ids, &final_text);
     if config.dry_run {
         return PromptOutcome {
             text: final_text,
             actions,
             status: PromptStatus::DryRun,
+            turn_messages,
         };
     }
     bridge.end_group();
@@ -281,7 +308,38 @@ pub fn run_prompt(
         text: final_text,
         actions,
         status: PromptStatus::Completed,
+        turn_messages,
     }
+}
+
+/// This turn's slice of the conversation (`messages[turn_start..]`: the
+/// user prompt plus every assistant/tool message the loop appended), with
+/// the final text answer added (it isn't pushed during the loop) and
+/// `describe_project` results collapsed to a placeholder. This is what the
+/// session appends to its history so the next prompt remembers the turn.
+fn collect_turn_messages(
+    messages: Vec<Message>,
+    turn_start: usize,
+    describe_call_ids: &[String],
+    final_text: &str,
+) -> Vec<Message> {
+    let mut turn: Vec<Message> = messages.into_iter().skip(turn_start).collect();
+    for message in &mut turn {
+        if let Message::ToolResult { call_id, content } = message {
+            if describe_call_ids.iter().any(|id| id == call_id) {
+                *content =
+                    "(project state omitted — see the current state in the system message)"
+                        .to_string();
+            }
+        }
+    }
+    if !final_text.is_empty() {
+        turn.push(Message::Assistant {
+            content: final_text.to_string(),
+            tool_calls: Vec::new(),
+        });
+    }
+    turn
 }
 
 // --- action log ---------------------------------------------------------

@@ -111,6 +111,7 @@ fn main() {
         &provider,
         &mut host,
         &context,
+        &[],
         &prompt,
         &AgentConfig::default(),
         &cancel,
