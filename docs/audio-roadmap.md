@@ -66,21 +66,34 @@ beat markers all mirror CapCut desktop's audio panel.
       export mixer (`cutlass-engine/src/export_audio.rs`) both carry the
       envelope on their span, rebase it to the sample-frame domain, and
       sample per frame; preview and export agree.
-- [ ] **Agent vocabulary**: `volume` joins `WireClipParam` so the agent can
+- [x] **Agent vocabulary**: `volume` joins `WireClipParam` so the agent can
       write volume keyframes ("fade the music down under the voice"); wire
-      DTO + validation + action-log phrasing + schema snapshot bump + eval.
-- [ ] **Inspector envelope UI**: a keyframe diamond on the Volume row (the
-      M2 cluster) plus the CapCut line-and-points envelope drawn on audio
-      clips — drag a point to set gain, double-click to add/remove, with the
-      projection publishing the volume curve like the transform curves.
-- [ ] **Timeline badge**: the audio chip marks an enveloped clip
-      (alongside the existing muted / volume% / fade chips).
+      DTO + validation + action-log phrasing + schema snapshot bump (v12) +
+      eval.
+- [x] **Inspector envelope UI**: a keyframe diamond on the Volume row (the
+      M2 cluster) — `sample-audio` reads the envelope at the playhead, the
+      diamond adds/removes a keyframe, and the slider sculpts the keyframe on
+      an animated clip or sets the flat level on a constant one. Projection
+      publishes `kf-volume` (absolute-tick keyframes, the transform pattern)
+      and a normalized `volume-path` curve.
+- [x] **On-clip envelope line**: the gain curve drawn over the waveform
+      (densely sampled `volume-path`, easing included) with a dot at each
+      keyframe. The dots are markers today; on-clip drag editing rides a
+      later slice — editing is the inspector diamond for now.
+- [x] **Timeline badge**: an envelope chip marks a keyframed clip; it
+      supersedes the M1 muted / volume% / fade chips while the gain is
+      animated.
 
 ## Phase 2 — Fades as corner handles
 
 - [ ] Fade-in/out handles on the clip's top corners (sugar over the M1
       `fade_in`/`fade_out` fields, which already feed `audio_gain_at`);
       drag to set duration, with the existing badge.
+- [ ] **Envelope-preserving fades**: `set_clip_audio` flattens the envelope
+      (it sets a constant gain), so the basic fade rows currently *hide*
+      while a clip is keyframed (a keyframed ramp expresses the same thing).
+      Make fades orthogonal — preserve the envelope when only the fades
+      change — so the corner handles and an automation curve coexist.
 
 ## Phase 3 — Varispeed audio
 
