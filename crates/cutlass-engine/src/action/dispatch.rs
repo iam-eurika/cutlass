@@ -149,6 +149,10 @@ fn dispatch_edit(
             let inverse = edit::set_speed::set_speed(ctx, clip, speed, reversed)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
         }
+        EditCommand::SetSpeedCurve { clip, curve } => {
+            let inverse = edit::set_speed_curve::set_speed_curve(ctx, clip, curve)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
         EditCommand::SetClipCrop {
             clip,
             crop,

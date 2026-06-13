@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use cutlass_models::{
     CanvasAspect, ClipId, ClipParam, ClipTransform, CropRect, Easing, Generator, MarkerColor,
-    MarkerId, MediaId, ParamValue, Rational, RationalTime, TimeRange, TrackId, TrackKind,
+    MarkerId, MediaId, Param, ParamValue, Rational, RationalTime, TimeRange, TrackId, TrackKind,
 };
 
 /// A project-level action (media pool, not timeline placement).
@@ -108,6 +108,18 @@ pub enum EditCommand {
         clip: ClipId,
         speed: Rational,
         reversed: bool,
+    },
+    /// Set (or clear) a media clip's playback-rate ramp (CapCut speed curves,
+    /// M2): `curve` is the normalized speed-multiplier curve over the clip's
+    /// span (ticks `0..=SPEED_CURVE_SCALE`); `None` clears it to a flat unit
+    /// ramp. Keeps the clip's base `speed`/`reversed` and source window; the
+    /// timeline duration re-derives from `source ÷ (base_speed × average
+    /// curve)`. Rejected on generated clips, malformed curves, and when the
+    /// new extent would overlap a neighbor. The inverse restores the previous
+    /// clip state.
+    SetSpeedCurve {
+        clip: ClipId,
+        curve: Option<Param<f32>>,
     },
     /// Set a clip's framing (CapCut crop, M1): `crop` is the normalized
     /// kept region of the content (applied before placement, so the kept

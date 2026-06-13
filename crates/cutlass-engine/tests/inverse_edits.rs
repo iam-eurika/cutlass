@@ -682,6 +682,69 @@ fn set_clip_speed_undo_redo_roundtrip() {
 }
 
 #[test]
+fn set_speed_curve_undo_redo_roundtrip() {
+    let Some(path) = small_video_asset() else {
+        return;
+    };
+    let (_dir, mut engine) = temp_engine();
+    let media_id = import_asset(&mut engine, &path);
+    let track = common::add_track(&mut engine, TrackKind::Video, "V1");
+    let clip_id = created(
+        engine
+            .apply(Command::Edit(EditCommand::AddClip {
+                track,
+                media: media_id,
+                source: tr(0, 48),
+                start: rt(0),
+            }))
+            .expect("add"),
+    );
+    let clip = |engine: &cutlass_engine::Engine| engine.project().clip(clip_id).unwrap().clone();
+
+    // A montage ramp (average 2×) halves the footprint and marks the clip
+    // retimed, just like a constant 2× — but as a curve.
+    let curve = cutlass_models::speed_preset("montage").unwrap();
+    let avg = {
+        let mut probe = clip(&engine);
+        probe.speed_curve = curve.clone();
+        probe.speed_curve_average()
+    };
+    let expected = (48.0 / avg).round() as i64;
+    engine
+        .apply(Command::Edit(EditCommand::SetSpeedCurve {
+            clip: clip_id,
+            curve: Some(curve.clone()),
+        }))
+        .expect("set ramp");
+    assert_eq!(clip(&engine).timeline.duration.value, expected);
+    assert!(clip(&engine).has_speed_curve() && clip(&engine).is_retimed());
+
+    // One undo restores the flat ramp AND the original duration.
+    assert!(engine.undo());
+    let restored = clip(&engine);
+    assert_eq!(restored.timeline.duration.value, 48);
+    assert!(!restored.has_speed_curve() && !restored.is_retimed());
+
+    assert!(engine.redo());
+    assert_eq!(clip(&engine).speed_curve, curve);
+    assert_eq!(clip(&engine).timeline.duration.value, expected);
+}
+
+#[test]
+fn set_speed_curve_rejects_generated_clips() {
+    let (_dir, mut engine) = temp_engine();
+    let clip_id = text_clip(&mut engine);
+    assert!(
+        engine
+            .apply(Command::Edit(EditCommand::SetSpeedCurve {
+                clip: clip_id,
+                curve: Some(cutlass_models::speed_preset("hero").unwrap()),
+            }))
+            .is_err()
+    );
+}
+
+#[test]
 fn set_clip_audio_undo_redo_roundtrip() {
     let Some(path) = small_video_asset() else {
         return;
