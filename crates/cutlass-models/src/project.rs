@@ -9,7 +9,7 @@ use crate::error::ModelError;
 use crate::ids::{ClipId, MediaId, ProjectId, TrackId};
 use crate::media::MediaSource;
 use crate::metadata::ProjectMetadata;
-use crate::param::Easing;
+use crate::param::{Easing, Param};
 use crate::schema::ProjectSchema;
 use crate::time::{
     Rational, RationalTime, TimeRange, check_same_rate, resample, time_add, time_sub,
@@ -781,7 +781,9 @@ impl Project {
         };
         let tl_rate = self.timeline.frame_rate;
         let src_dur_tl = resample(source.duration, tl_rate).value;
-        let new_dur = (src_dur_tl * i64::from(speed.den) / i64::from(speed.num)).max(1);
+        // Faster average ⇒ less timeline. A flat ramp keeps the exact integer
+        // path (no f64 drift); any active ramp folds in its average.
+        let new_dur = retimed_duration(src_dur_tl, speed, clip.speed_curve_average(), clip.has_speed_curve());
         let new_timeline = TimeRange::at_rate(clip.timeline.start.value, new_dur, tl_rate);
 
         if self
@@ -799,6 +801,68 @@ impl Project {
             .expect("clip existence checked above");
         clip.speed = speed;
         clip.reversed = reversed;
+        clip.timeline = new_timeline;
+        Ok(())
+    }
+
+    /// Set (or clear) a media clip's playback-rate ramp (CapCut speed curves,
+    /// M2): keep its timeline start, base `speed`, and source window; store
+    /// the normalized `curve` (`None` clears it to a flat unit ramp); and
+    /// re-derive the timeline duration from `source ÷ (base_speed ×
+    /// average_curve)`. Rejected on generated clips, malformed curves, and
+    /// when the retimed extent would overlap a neighbor.
+    pub fn set_clip_speed_curve(
+        &mut self,
+        clip_id: ClipId,
+        curve: Option<Param<f32>>,
+    ) -> Result<(), ModelError> {
+        if let Some(curve) = &curve {
+            crate::clip::validate_speed_curve(curve)?;
+        }
+        let track_id = self
+            .timeline
+            .track_of(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        let clip = self
+            .timeline
+            .clip(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        let Some(source) = clip.source_range() else {
+            return Err(ModelError::InvalidParam(
+                "speed ramps require a media-backed clip".into(),
+            ));
+        };
+        let new_curve = curve.unwrap_or(Param::Constant(1.0));
+        let has_curve = !matches!(&new_curve, Param::Constant(v) if *v == 1.0);
+        let average = match &new_curve {
+            Param::Constant(v) => f64::from(*v),
+            Param::Keyframed { .. } => {
+                // Reuse the clip's integral over the candidate curve.
+                let mut probe = clip.clone();
+                probe.speed_curve = new_curve.clone();
+                probe.speed_curve_average()
+            }
+        };
+
+        let tl_rate = self.timeline.frame_rate;
+        let src_dur_tl = resample(source.duration, tl_rate).value;
+        let new_dur = retimed_duration(src_dur_tl, clip.speed, average, has_curve);
+        let new_timeline = TimeRange::at_rate(clip.timeline.start.value, new_dur, tl_rate);
+
+        if self
+            .timeline
+            .track(track_id)
+            .expect("clip is on a track")
+            .has_overlap(new_timeline, Some(clip_id))?
+        {
+            return Err(ModelError::Overlap(track_id));
+        }
+
+        let clip = self
+            .timeline
+            .clip_mut(clip_id)
+            .expect("clip existence checked above");
+        clip.speed_curve = new_curve;
         clip.timeline = new_timeline;
         Ok(())
     }
@@ -1061,6 +1125,22 @@ fn effect_mut(clip: &mut Clip, index: u32) -> Result<&mut EffectInstance, ModelE
     clip.effects
         .get_mut(index as usize)
         .ok_or_else(|| ModelError::InvalidParam(format!("effect index {index} out of range")))
+}
+
+/// Timeline ticks a retimed clip occupies: `source ÷ (base_speed × average
+/// ramp)`. A flat ramp keeps the exact integer division M1 used (no f64
+/// drift on the common constant-speed path); an active ramp folds in its
+/// average multiplier. Always at least one tick.
+fn retimed_duration(src_dur_tl: i64, speed: Rational, average: f64, has_curve: bool) -> i64 {
+    if !has_curve {
+        return (src_dur_tl * i64::from(speed.den) / i64::from(speed.num)).max(1);
+    }
+    let base = f64::from(speed.num) / f64::from(speed.den);
+    let effective = base * average;
+    if effective <= 0.0 {
+        return src_dur_tl.max(1);
+    }
+    (src_dur_tl as f64 / effective).round().max(1.0) as i64
 }
 
 /// Unwrap a scalar [`ParamValue`] (effect params are always scalar).
@@ -1570,6 +1650,52 @@ mod tests {
         // Slow motion stretches it.
         project.set_clip_speed(clip, Rational::new(1, 2), false).unwrap();
         assert_eq!(project.clip(clip).unwrap().timeline, tr(0, 200));
+    }
+
+    #[test]
+    fn set_clip_speed_curve_rederives_duration_from_average() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+
+        // Average 2× ramp halves the footprint (source ÷ avg), like constant 2×.
+        let ramp = crate::clip::speed_preset("montage").unwrap();
+        let avg = {
+            let mut probe = project.clip(clip).unwrap().clone();
+            probe.speed_curve = ramp.clone();
+            probe.speed_curve_average()
+        };
+        project.set_clip_speed_curve(clip, Some(ramp)).unwrap();
+        let expected = (100.0 / avg).round() as i64;
+        assert_eq!(project.clip(clip).unwrap().timeline, tr(0, expected));
+        assert!(project.clip(clip).unwrap().has_speed_curve());
+
+        // Clearing the ramp restores the original footprint exactly.
+        project.set_clip_speed_curve(clip, None).unwrap();
+        assert_eq!(project.clip(clip).unwrap().timeline, tr(0, 100));
+        assert!(!project.clip(clip).unwrap().has_speed_curve());
+    }
+
+    #[test]
+    fn set_clip_speed_curve_rejects_bad_targets() {
+        let (mut project, media_id, track) = project_with_media(500);
+        let clip = project.add_clip(track, media_id, tr(0, 100), rt(0)).unwrap();
+        // Out-of-range ramp value.
+        let bad = Param::Keyframed {
+            keyframes: vec![
+                crate::param::Keyframe { tick: 0, value: 0.0, easing: Easing::Linear },
+                crate::param::Keyframe { tick: 1000, value: 1.0, easing: Easing::Linear },
+            ],
+        };
+        assert!(project.set_clip_speed_curve(clip, Some(bad)).is_err());
+        // Generated clips cannot be retimed.
+        let sticker = project.add_track(TrackKind::Sticker, "S");
+        let generated = project
+            .add_generated(sticker, Generator::SolidColor { rgba: [0, 0, 0, 255] }, tr(200, 10))
+            .unwrap();
+        assert!(matches!(
+            project.set_clip_speed_curve(generated, Some(crate::clip::speed_preset("hero").unwrap())),
+            Err(ModelError::InvalidParam(_))
+        ));
     }
 
     #[test]

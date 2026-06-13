@@ -52,6 +52,45 @@ impl Easing {
         }
     }
 
+    /// Definite integral `∫₀ᵗ apply(τ) dτ` for `t` in `0..=1`.
+    ///
+    /// Speed is a *rate*, so the source position swept by a keyframed speed
+    /// segment is the integral of the eased curve, not the eased value
+    /// itself (M2 speed ramps). The preset easings integrate in closed form;
+    /// bezier falls back to Simpson's rule (smooth and monotonic over the
+    /// unit interval, so a fixed step count is accurate and allocation-free).
+    pub fn integral_to(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            // ∫ τ        = t²/2
+            Easing::Linear => 0.5 * t * t,
+            // ∫ τ²       = t³/3
+            Easing::EaseIn => t * t * t / 3.0,
+            // ∫ (2τ−τ²)  = t² − t³/3
+            Easing::EaseOut => t * t - t * t * t / 3.0,
+            // ∫ (3τ²−2τ³)= t³ − t⁴/2
+            Easing::EaseInOut => {
+                let t3 = t * t * t;
+                t3 - 0.5 * t3 * t
+            }
+            Easing::Bezier { points: [x1, y1, x2, y2] } => {
+                // Simpson's rule over [0, t] with an even step count.
+                const STEPS: usize = 32;
+                let h = t / STEPS as f32;
+                if h == 0.0 {
+                    return 0.0;
+                }
+                let f = |s: f32| cubic_bezier(s, x1, y1, x2, y2);
+                let mut sum = f(0.0) + f(t);
+                for i in 1..STEPS {
+                    let s = h * i as f32;
+                    sum += if i % 2 == 0 { 2.0 } else { 4.0 } * f(s);
+                }
+                sum * h / 3.0
+            }
+        }
+    }
+
     /// `Ok` iff a bezier's x control points are within `0..=1` and every
     /// component is finite (an x outside the unit range makes the curve
     /// non-monotonic in time — not a function of t).
@@ -448,6 +487,28 @@ mod tests {
             let v = e.apply(i as f32 / 100.0);
             assert!(v >= prev - 1e-4, "non-monotonic at {i}");
             prev = v;
+        }
+    }
+
+    #[test]
+    fn easing_integrals_match_closed_form_endpoints() {
+        // ∫₀¹ of each easing over the unit interval.
+        assert!((Easing::Linear.integral_to(1.0) - 0.5).abs() < 1e-6);
+        assert!((Easing::EaseIn.integral_to(1.0) - 1.0 / 3.0).abs() < 1e-6);
+        assert!((Easing::EaseOut.integral_to(1.0) - 2.0 / 3.0).abs() < 1e-6);
+        assert!((Easing::EaseInOut.integral_to(1.0) - 0.5).abs() < 1e-6);
+        // The symmetric CSS ease-in-out bezier integrates to ½ by symmetry.
+        let e = Easing::Bezier { points: [0.42, 0.0, 0.58, 1.0] };
+        assert!((e.integral_to(1.0) - 0.5).abs() < 1e-3);
+        // Integral is 0 at t=0 and monotonic increasing.
+        for easing in [Easing::Linear, Easing::EaseIn, Easing::EaseOut, Easing::EaseInOut] {
+            assert_eq!(easing.integral_to(0.0), 0.0);
+            let mut prev = 0.0;
+            for i in 0..=20 {
+                let v = easing.integral_to(i as f32 / 20.0);
+                assert!(v >= prev - 1e-6, "{easing:?} non-monotonic integral");
+                prev = v;
+            }
         }
     }
 

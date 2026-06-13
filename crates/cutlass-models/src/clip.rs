@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::effects::EffectInstance;
 use crate::error::ModelError;
 use crate::ids::{ClipId, LinkId, MediaId};
-use crate::param::{Easing, Param};
+use crate::param::{Easing, Keyframe, Param};
 use crate::time::{Rational, RationalTime, TimeRange, resample, time_sub};
 
 /// What a clip draws. Either a trimmed range of imported media, or synthetic
@@ -413,6 +413,12 @@ pub enum ClipParam {
     Scale,
     Rotation,
     Opacity,
+    /// The clip's playback-rate ramp (M2 speed curves). Animates the
+    /// instantaneous speed *multiplier* over the clip's normalized span
+    /// (`speed_curve`), not the clip transform — its keyframe ticks live in
+    /// `0..=`[`SPEED_CURVE_SCALE`], and editing it re-derives the clip's
+    /// timeline duration. Always carries a [`ParamValue::Scalar`].
+    Speed,
     /// A scalar parameter of one of the clip's effects (M4): `effect` is the
     /// index into [`Clip::effects`], `param` the catalog slot. Routed to the
     /// effect's `Param<f32>` instead of the transform, so the same keyframe
@@ -589,7 +595,7 @@ impl AnimatedTransform {
                 validate_opacity(v)?;
                 self.opacity.set_keyframe(tick, v, easing);
             }
-            ClipParam::Effect { .. } => return Err(not_a_transform_param()),
+            ClipParam::Effect { .. } | ClipParam::Speed => return Err(not_a_transform_param()),
         }
         Ok(())
     }
@@ -602,7 +608,7 @@ impl AnimatedTransform {
             ClipParam::Scale => self.scale.remove_keyframe(tick),
             ClipParam::Rotation => self.rotation.remove_keyframe(tick),
             ClipParam::Opacity => self.opacity.remove_keyframe(tick),
-            ClipParam::Effect { .. } => return Err(not_a_transform_param()),
+            ClipParam::Effect { .. } | ClipParam::Speed => return Err(not_a_transform_param()),
         };
         if removed {
             Ok(())
@@ -636,7 +642,7 @@ impl AnimatedTransform {
                 validate_opacity(v)?;
                 self.opacity.set_constant(v);
             }
-            ClipParam::Effect { .. } => return Err(not_a_transform_param()),
+            ClipParam::Effect { .. } | ClipParam::Speed => return Err(not_a_transform_param()),
         }
         Ok(())
     }
@@ -658,10 +664,11 @@ impl AnimatedTransform {
     }
 }
 
-/// Effect params route through [`Clip::effects`], not the transform; the
-/// transform mutators reject them so a misrouted command fails loudly.
+/// Effect params and the speed ramp route through their own clip fields, not
+/// the transform; the transform mutators reject them so a misrouted command
+/// fails loudly.
 fn not_a_transform_param() -> ModelError {
-    ModelError::InvalidParam("effect parameters are not transform properties".into())
+    ModelError::InvalidParam("parameter is not a clip transform property".into())
 }
 
 fn validate_position(v: &[f32; 2]) -> Result<(), ModelError> {
@@ -750,6 +757,21 @@ pub struct Clip {
     /// backward). Media clips only; absent from saves while false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub reversed: bool,
+    /// Playback-rate ramp (CapCut speed curves, M2): the instantaneous speed
+    /// *multiplier* over the clip's normalized span. Constant `1.0` (the
+    /// default, omitted from saves) ⇔ a flat ramp, so `speed`/`reversed`
+    /// alone govern retiming and old/never-rammed clips are byte-identical.
+    ///
+    /// Keyframe ticks are normalized to `0..=`[`SPEED_CURVE_SCALE`] (`0` =
+    /// clip start, `SPEED_CURVE_SCALE` = clip end), so the ramp's *shape*
+    /// rides along when the clip is trimmed or its base speed changes. Speed
+    /// is a rate: the source position swept to a point in the clip is the
+    /// integral of `speed × speed_curve`, and the clip's timeline duration
+    /// re-derives from the curve's average (see [`Clip::source_time_at`] and
+    /// [`crate::Project::set_clip_speed_curve`]). Meaningful on media clips
+    /// only.
+    #[serde(default = "default_speed_curve", skip_serializing_if = "is_unit_speed_curve")]
+    pub speed_curve: Param<f32>,
     /// Audio gain multiplier (CapCut volume, M1): `0.0` mutes, `1.0` is
     /// unchanged, up to [`MAX_CLIP_VOLUME`]× boost. Read by both audio
     /// mixers for clips on audio lanes; meaningless elsewhere. Constant for
@@ -792,12 +814,36 @@ pub struct Clip {
 /// Upper bound for [`Clip::volume`] (CapCut's 1000% ceiling).
 pub const MAX_CLIP_VOLUME: f32 = 10.0;
 
+/// Normalized tick span of a [`Clip::speed_curve`]: keyframe tick `0` is the
+/// clip's start, [`SPEED_CURVE_SCALE`] its end. The ramp is stored over this
+/// fixed domain (not absolute clip ticks) so its shape survives trims and
+/// base-speed changes that re-derive the clip's timeline duration.
+pub const SPEED_CURVE_SCALE: i64 = 1000;
+
+/// Slowest instantaneous speed multiplier a ramp keyframe may hold (matches
+/// the agent's `set_clip_speed` floor). A positive floor keeps the curve's
+/// average — and thus the derived duration — finite.
+pub const MIN_SPEED: f32 = 0.05;
+
+/// Fastest instantaneous speed multiplier a ramp keyframe may hold.
+pub const MAX_SPEED: f32 = 100.0;
+
 fn unit_speed() -> Rational {
     Rational::new(1, 1)
 }
 
 fn is_unit_speed(speed: &Rational) -> bool {
     speed.num == speed.den
+}
+
+fn default_speed_curve() -> Param<f32> {
+    Param::Constant(1.0)
+}
+
+/// A flat unit ramp — no retiming contribution. `&` form for serde's
+/// `skip_serializing_if`.
+fn is_unit_speed_curve(curve: &Param<f32>) -> bool {
+    matches!(curve, Param::Constant(v) if *v == 1.0)
 }
 
 fn unit_volume() -> f32 {
@@ -850,6 +896,7 @@ impl Clip {
             transform: AnimatedTransform::identity(),
             speed: unit_speed(),
             reversed: false,
+            speed_curve: default_speed_curve(),
             volume: unit_volume(),
             fade_in: 0,
             fade_out: 0,
@@ -870,6 +917,7 @@ impl Clip {
             transform: AnimatedTransform::identity(),
             speed: unit_speed(),
             reversed: false,
+            speed_curve: default_speed_curve(),
             volume: unit_volume(),
             fade_in: 0,
             fade_out: 0,
@@ -894,9 +942,68 @@ impl Clip {
 
     /// True iff the clip plays at anything but forward 1× — the audio
     /// mixers mute retimed clips until varispeed lands (M8), and the UI
-    /// badges them.
+    /// badges them. A non-flat speed ramp counts (M2 speed curves).
     pub fn is_retimed(&self) -> bool {
-        !is_unit_speed(&self.speed) || self.reversed
+        !is_unit_speed(&self.speed) || self.reversed || self.has_speed_curve()
+    }
+
+    /// True iff the clip carries a non-flat playback-rate ramp (M2 speed
+    /// curves) — the constant `1.0` default does not.
+    pub fn has_speed_curve(&self) -> bool {
+        !is_unit_speed_curve(&self.speed_curve)
+    }
+
+    /// `∫₀ᵖ speed_curve(q) dq` over the normalized clip span, `p` in `0..=1`
+    /// (`0` = clip start, `1` = clip end). The speed curve is a *rate*, so
+    /// this cumulative integral — not the sampled value — is what maps a
+    /// timeline position to a fraction of the source window. Pure and
+    /// allocation-free; `O(keyframes)` (a handful of ramp points).
+    pub fn speed_curve_integral(&self, p: f64) -> f64 {
+        let p = p.clamp(0.0, 1.0);
+        match &self.speed_curve {
+            Param::Constant(v) => f64::from(*v) * p,
+            Param::Keyframed { keyframes } => {
+                let scale = SPEED_CURVE_SCALE as f64;
+                let pos = |kf: &Keyframe<f32>| kf.tick as f64 / scale;
+                let first = &keyframes[0];
+                let q0 = pos(first);
+                // Leading flat region holds the first value (CapCut clamp).
+                let mut acc = f64::from(first.value) * p.min(q0);
+                if p <= q0 {
+                    return acc;
+                }
+                for pair in keyframes.windows(2) {
+                    let (k0, k1) = (&pair[0], &pair[1]);
+                    let (qa, qb) = (pos(k0), pos(k1));
+                    if p <= qa {
+                        return acc;
+                    }
+                    let seg = qb - qa;
+                    if seg > 0.0 {
+                        let upper = p.min(qb);
+                        let t_hi = ((upper - qa) / seg) as f32;
+                        let (va, vb) = (f64::from(k0.value), f64::from(k1.value));
+                        // ∫ over [qa, upper] of lerp(va, vb, e(t)) dq, dq = seg·dt
+                        //   = seg·[va·t_hi + (vb − va)·∫₀^{t_hi} e].
+                        let e_int = f64::from(k0.easing.integral_to(t_hi));
+                        acc += seg * (va * f64::from(t_hi) + (vb - va) * e_int);
+                    }
+                    if p <= qb {
+                        return acc;
+                    }
+                }
+                // Trailing flat region holds the last value.
+                let last = &keyframes[keyframes.len() - 1];
+                acc + f64::from(last.value) * (p - pos(last))
+            }
+        }
+    }
+
+    /// Average instantaneous multiplier of the speed ramp over the whole clip
+    /// (`speed_curve_integral(1.0)`). The clip's timeline duration derives
+    /// from `source_duration ÷ (base_speed × this)`.
+    pub fn speed_curve_average(&self) -> f64 {
+        self.speed_curve_integral(1.0)
     }
 
     /// Source ticks consumed by `tl_ticks` timeline ticks at this clip's
@@ -960,10 +1067,12 @@ impl Clip {
     }
 
     /// Map a timeline position to the corresponding source time, for media
-    /// clips. Honors the clip's retiming: the timeline offset scales by
-    /// `speed` (exact rational math), and `reversed` walks the source
-    /// window backward from its end. The result clamps into the source
-    /// window so duration rounding can never read past an edge.
+    /// clips. Honors the clip's retiming: without a ramp the timeline offset
+    /// scales by `speed` (exact rational math); with a [`Self::speed_curve`]
+    /// the source offset is the curve's cumulative integral (speed is a
+    /// rate). `reversed` walks the source window backward from its end. The
+    /// result clamps into the source window so duration rounding can never
+    /// read past an edge.
     pub fn source_time_at(&self, timeline_pos: RationalTime) -> Result<Option<RationalTime>, ModelError> {
         if !self.timeline.contains(timeline_pos)? {
             return Ok(None);
@@ -971,14 +1080,33 @@ impl Clip {
         match &self.content {
             ClipSource::Media { source, .. } => {
                 let offset_tl = time_sub(&timeline_pos, &self.timeline.start)?;
-                let scaled = RationalTime::new(self.scale_by_speed(offset_tl.value), offset_tl.rate);
-                let offset_src = resample(scaled, source.start.rate);
                 let first = source.start.value;
                 let last = first + (source.duration.value - 1).max(0);
-                let tick = if self.reversed {
-                    last - offset_src.value
+                let offset_src = if self.has_speed_curve() {
+                    // Speed is a rate: the fraction of the source window swept
+                    // by clip-relative position `p` is `∫₀ᵖ curve ÷ ∫₀¹ curve`.
+                    // base_speed and the derived duration cancel in the ratio
+                    // (the duration was derived to consume the window exactly),
+                    // so the curve *shape* alone places the source frame.
+                    let dur = self.timeline.duration.value.max(1) as f64;
+                    let p = offset_tl.value as f64 / dur;
+                    let total = self.speed_curve_average();
+                    let ratio = if total > 0.0 {
+                        self.speed_curve_integral(p) / total
+                    } else {
+                        p
+                    };
+                    (source.duration.value as f64 * ratio).round() as i64
                 } else {
-                    first + offset_src.value
+                    // Flat ramp: the exact rational fast path (zero f64 drift),
+                    // identical to M1 constant speed.
+                    let scaled = RationalTime::new(self.scale_by_speed(offset_tl.value), offset_tl.rate);
+                    resample(scaled, source.start.rate).value
+                };
+                let tick = if self.reversed {
+                    last - offset_src
+                } else {
+                    first + offset_src
                 };
                 Ok(Some(RationalTime::new(
                     tick.clamp(first, last),
@@ -988,6 +1116,70 @@ impl Clip {
             ClipSource::Generated(_) => Ok(None),
         }
     }
+}
+
+/// Validate a speed ramp (M2 speed curves) before it is stored: a structurally
+/// sound `Param` (sorted, non-empty, valid easings) whose every keyframe value
+/// is finite and within `[`[`MIN_SPEED`]`, `[`MAX_SPEED`]`]`, with normalized
+/// ticks inside `0..=`[`SPEED_CURVE_SCALE`].
+pub fn validate_speed_curve(curve: &Param<f32>) -> Result<(), ModelError> {
+    curve.validate_shape()?;
+    for kf in curve.keyframes() {
+        if kf.tick < 0 || kf.tick > SPEED_CURVE_SCALE {
+            return Err(ModelError::InvalidParam(format!(
+                "speed ramp keyframe tick {} is outside 0..={SPEED_CURVE_SCALE}",
+                kf.tick
+            )));
+        }
+    }
+    curve.for_each_value(|v| {
+        if !v.is_finite() || !(MIN_SPEED..=MAX_SPEED).contains(v) {
+            return Err(ModelError::InvalidParam(format!(
+                "speed ramp value {v} must be within {MIN_SPEED}..={MAX_SPEED}"
+            )));
+        }
+        Ok(())
+    })
+}
+
+/// Built-in speed-ramp presets (M2 speed curves, "presets as data"). Each is
+/// a normalized [`Param`] over `0..=`[`SPEED_CURVE_SCALE`] of multipliers on
+/// the clip's base speed. Shared by the inspector buttons and the agent's
+/// `set_speed_curve` tool. Returns `None` for an unknown name.
+pub fn speed_preset(name: &str) -> Option<Param<f32>> {
+    let s = SPEED_CURVE_SCALE;
+    let kf = |frac: f64, value: f32, easing: Easing| Keyframe {
+        tick: (frac * s as f64).round() as i64,
+        value,
+        easing,
+    };
+    let keyframes = match name {
+        // Accelerate from slow-mo into fast (CapCut "speed up").
+        "ramp_up" => vec![kf(0.0, 0.4, Easing::EaseIn), kf(1.0, 2.5, Easing::Linear)],
+        // Decelerate from fast into slow-mo (CapCut "slow down").
+        "ramp_down" => vec![kf(0.0, 2.5, Easing::EaseOut), kf(1.0, 0.4, Easing::Linear)],
+        // Fast / slow / fast cuts — montage energy.
+        "montage" => vec![
+            kf(0.0, 2.0, Easing::EaseInOut),
+            kf(0.5, 0.5, Easing::EaseInOut),
+            kf(1.0, 2.0, Easing::Linear),
+        ],
+        // Normal, dip to slow-mo on the action, back to normal — "hero moment".
+        "hero" => vec![
+            kf(0.0, 1.5, Easing::EaseInOut),
+            kf(0.5, 0.3, Easing::EaseInOut),
+            kf(1.0, 1.5, Easing::Linear),
+        ],
+        // Punchy fast / hard slow / fast — "bullet time".
+        "bullet" => vec![
+            kf(0.0, 3.0, Easing::EaseInOut),
+            kf(0.4, 0.25, Easing::EaseInOut),
+            kf(0.6, 0.25, Easing::EaseInOut),
+            kf(1.0, 3.0, Easing::Linear),
+        ],
+        _ => return None,
+    };
+    Some(Param::Keyframed { keyframes })
 }
 
 #[cfg(test)]
@@ -1308,6 +1500,118 @@ mod tests {
         let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(loaded.speed, Rational::new(2, 1));
         assert!(loaded.reversed);
+    }
+
+    // --- speed curves (M2) ---------------------------------------------------
+
+    fn linear_ramp(v0: f32, v1: f32) -> Param<f32> {
+        Param::Keyframed {
+            keyframes: vec![
+                Keyframe { tick: 0, value: v0, easing: Easing::Linear },
+                Keyframe { tick: SPEED_CURVE_SCALE, value: v1, easing: Easing::Linear },
+            ],
+        }
+    }
+
+    #[test]
+    fn flat_curve_is_not_retimed_and_omitted_from_saves() {
+        let clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 10, R24));
+        assert!(!clip.has_speed_curve());
+        assert_eq!(clip.speed_curve_average(), 1.0);
+        let map = serde_json::to_value(&clip).unwrap();
+        assert!(!map.as_object().unwrap().contains_key("speed_curve"));
+    }
+
+    #[test]
+    fn curve_integral_matches_analytic_linear_ramp() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 100, R24), tr(0, 100, R24));
+        // Rate ramps 1 → 3 linearly; average = 2, ∫₀ᵖ (1+2q) dq = p + p².
+        clip.speed_curve = linear_ramp(1.0, 3.0);
+        assert!(clip.has_speed_curve());
+        assert!((clip.speed_curve_average() - 2.0).abs() < 1e-6);
+        assert!((clip.speed_curve_integral(0.5) - (0.5 + 0.25)).abs() < 1e-6);
+        assert!((clip.speed_curve_integral(1.0) - 2.0).abs() < 1e-6);
+        // Outside the unit range clamps.
+        assert_eq!(clip.speed_curve_integral(0.0), 0.0);
+        assert!((clip.speed_curve_integral(2.0) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn curve_integral_holds_flat_outside_keyframes() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 100, R24), tr(0, 100, R24));
+        // One mid keyframe: constant 2.0 everywhere (flat extrapolation).
+        clip.speed_curve = Param::Keyframed {
+            keyframes: vec![Keyframe { tick: SPEED_CURVE_SCALE / 2, value: 2.0, easing: Easing::Linear }],
+        };
+        assert!((clip.speed_curve_integral(0.25) - 0.5).abs() < 1e-6);
+        assert!((clip.speed_curve_average() - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn source_time_at_curve_sweeps_full_window_symmetrically() {
+        // A symmetric slow-fast-slow ramp must still consume the whole source
+        // window across the clip, and the midpoint sweeps exactly half.
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 100, R24), tr(0, 100, R24));
+        clip.speed_curve = Param::Keyframed {
+            keyframes: vec![
+                Keyframe { tick: 0, value: 0.5, easing: Easing::Linear },
+                Keyframe { tick: SPEED_CURVE_SCALE / 2, value: 2.0, easing: Easing::Linear },
+                Keyframe { tick: SPEED_CURVE_SCALE, value: 0.5, easing: Easing::Linear },
+            ],
+        };
+        let start = clip.source_time_at(rt(0, R24)).unwrap().unwrap();
+        let mid = clip.source_time_at(rt(50, R24)).unwrap().unwrap();
+        let endish = clip.source_time_at(rt(99, R24)).unwrap().unwrap();
+        assert_eq!(start.value, 0);
+        // By symmetry the middle of the clip is the middle of the source.
+        assert_eq!(mid.value, 50);
+        // The last frame clamps to the final source frame (window fully swept).
+        assert_eq!(endish.value, 99);
+    }
+
+    #[test]
+    fn source_time_at_flat_curve_matches_constant_speed_exact_path() {
+        // A clip with a flat curve and a constant 2× must map identically to
+        // the exact rational path (no f64 drift).
+        let mut curved = media_clip(MediaId::from_raw(1), tr(0, 100, R24), tr(0, 50, R24));
+        curved.speed = Rational::new(2, 1);
+        for tick in [0, 7, 23, 49] {
+            let got = curved.source_time_at(rt(tick, R24)).unwrap().unwrap();
+            assert_eq!(got.value, (tick * 2).min(99), "tick {tick}");
+        }
+    }
+
+    #[test]
+    fn validate_speed_curve_rejects_out_of_range_values_and_ticks() {
+        // Value below the floor.
+        assert!(validate_speed_curve(&linear_ramp(0.0, 1.0)).is_err());
+        // Tick outside the normalized span.
+        let bad_tick = Param::Keyframed {
+            keyframes: vec![Keyframe { tick: SPEED_CURVE_SCALE + 1, value: 1.0, easing: Easing::Linear }],
+        };
+        assert!(validate_speed_curve(&bad_tick).is_err());
+        // A sane ramp passes.
+        assert!(validate_speed_curve(&linear_ramp(0.5, 2.0)).is_ok());
+    }
+
+    #[test]
+    fn speed_presets_are_valid_curves() {
+        for name in ["ramp_up", "ramp_down", "montage", "hero", "bullet"] {
+            let curve = speed_preset(name).unwrap_or_else(|| panic!("missing preset {name}"));
+            validate_speed_curve(&curve).unwrap_or_else(|e| panic!("{name} invalid: {e:?}"));
+        }
+        assert!(speed_preset("nope").is_none());
+    }
+
+    #[test]
+    fn curve_roundtrips_through_serde_and_marks_retimed() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 100, R24), tr(0, 100, R24));
+        clip.speed_curve = speed_preset("montage").unwrap();
+        assert!(clip.is_retimed());
+        let json = serde_json::to_string(&clip).unwrap();
+        let loaded: Clip = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.speed_curve, clip.speed_curve);
+        assert!(loaded.has_speed_curve());
     }
 
     // --- audio mix: volume + fades (M1) --------------------------------------
