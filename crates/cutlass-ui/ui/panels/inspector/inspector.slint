@@ -261,8 +261,8 @@ component SpeedInspector inherits VerticalLayout {
 // span; the engine re-derives the clip's timeline footprint from the ramp's
 // average, the projection republish updates the graph, duration label and
 // timeline badge. Each handle drags vertically to retune one control point.
-// The base "Rate" above multiplies this curve; audio stays muted until
-// varispeed (M8).
+// The base "Rate" above multiplies this curve; audio time-stretches along the
+// ramp (M8 Phase 3), pitch-locked per the Speed panel's "Keep pitch" toggle.
 component SpeedRampInspector inherits VerticalLayout {
     in property <Clip> model;
 
@@ -389,7 +389,7 @@ component SpeedRampInspector inherits VerticalLayout {
     }
 
     if root.model.has-speed-curve: CutlassText {
-        text: "Effective speed " + Math.round(root.model.speed-curve-avg * 100) / 100 + "× · audio muted while ramped.";
+        text: "Effective speed " + Math.round(root.model.speed-curve-avg * 100) / 100 + "×.";
         style: AppStore.theme.typography.caption;
         foreground: AppStore.theme.text.muted;
     }
@@ -626,7 +626,7 @@ component AudioClipInspector inherits VerticalLayout {
             if root.model.media-id != "": InspectorDivider { }
 
             // Same retime control as visual clips — the engine retimes the
-            // waveform window; playback stays muted until varispeed (M8).
+            // waveform window and the audio time-stretches to match (M8 Phase 3).
             if root.model.media-id != "": SpeedInspector {
                 model: root.model;
             }

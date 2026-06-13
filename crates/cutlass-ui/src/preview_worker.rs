@@ -2346,8 +2346,8 @@ fn set_clip_pitch_and_publish(
 /// constant-speed retiming the engine re-derives each clip's timeline
 /// duration from the ramp average, so with linkage on every link partner
 /// ramps in lockstep to keep A/V in sync — one undoable history group. The
-/// republish re-snapshots the mixer, which keeps a ramped clip muted until
-/// M8 varispeed audio lands.
+/// republish re-snapshots the mixer, which now plays the ramp time-stretched
+/// along its curve (M8 Phase 3).
 fn set_speed_curve_and_publish(
     engine: &mut Engine,
     clip: &str,

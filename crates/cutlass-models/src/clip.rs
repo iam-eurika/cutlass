@@ -1011,9 +1011,9 @@ impl Clip {
         matches!(self.volume.constant(), Some(v) if v <= 0.0)
     }
 
-    /// True iff the clip plays at anything but forward 1× — the audio
-    /// mixers mute retimed clips until varispeed lands (M8), and the UI
-    /// badges them. A non-flat speed ramp counts (M2 speed curves).
+    /// True iff the clip plays at anything but forward 1× — the audio mixers
+    /// time-stretch retimed clips (M8 Phase 3) and the UI badges them. A
+    /// non-flat speed ramp counts (M2 speed curves).
     pub fn is_retimed(&self) -> bool {
         !is_unit_speed(&self.speed) || self.reversed || self.has_speed_curve()
     }
