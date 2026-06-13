@@ -1044,44 +1044,7 @@ impl Clip {
     /// timeline position to a fraction of the source window. Pure and
     /// allocation-free; `O(keyframes)` (a handful of ramp points).
     pub fn speed_curve_integral(&self, p: f64) -> f64 {
-        let p = p.clamp(0.0, 1.0);
-        match &self.speed_curve {
-            Param::Constant(v) => f64::from(*v) * p,
-            Param::Keyframed { keyframes } => {
-                let scale = SPEED_CURVE_SCALE as f64;
-                let pos = |kf: &Keyframe<f32>| kf.tick as f64 / scale;
-                let first = &keyframes[0];
-                let q0 = pos(first);
-                // Leading flat region holds the first value (CapCut clamp).
-                let mut acc = f64::from(first.value) * p.min(q0);
-                if p <= q0 {
-                    return acc;
-                }
-                for pair in keyframes.windows(2) {
-                    let (k0, k1) = (&pair[0], &pair[1]);
-                    let (qa, qb) = (pos(k0), pos(k1));
-                    if p <= qa {
-                        return acc;
-                    }
-                    let seg = qb - qa;
-                    if seg > 0.0 {
-                        let upper = p.min(qb);
-                        let t_hi = ((upper - qa) / seg) as f32;
-                        let (va, vb) = (f64::from(k0.value), f64::from(k1.value));
-                        // ∫ over [qa, upper] of lerp(va, vb, e(t)) dq, dq = seg·dt
-                        //   = seg·[va·t_hi + (vb − va)·∫₀^{t_hi} e].
-                        let e_int = f64::from(k0.easing.integral_to(t_hi));
-                        acc += seg * (va * f64::from(t_hi) + (vb - va) * e_int);
-                    }
-                    if p <= qb {
-                        return acc;
-                    }
-                }
-                // Trailing flat region holds the last value.
-                let last = &keyframes[keyframes.len() - 1];
-                acc + f64::from(last.value) * (p - pos(last))
-            }
-        }
+        speed_curve_integral(&self.speed_curve, p)
     }
 
     /// Average instantaneous multiplier of the speed ramp over the whole clip
@@ -1200,6 +1163,66 @@ impl Clip {
             }
             ClipSource::Generated(_) => Ok(None),
         }
+    }
+}
+
+/// `∫₀ᵖ curve(q) dq` over the normalized clip span, `p` in `0..=1` (`0` = clip
+/// start, `1` = clip end). Free-function core of [`Clip::speed_curve_integral`]
+/// so the audio mixers can evaluate a clip's ramp without a whole [`Clip`].
+/// Pure and allocation-free; `O(keyframes)`.
+pub fn speed_curve_integral(curve: &Param<f32>, p: f64) -> f64 {
+    let p = p.clamp(0.0, 1.0);
+    match curve {
+        Param::Constant(v) => f64::from(*v) * p,
+        Param::Keyframed { keyframes } => {
+            let scale = SPEED_CURVE_SCALE as f64;
+            let pos = |kf: &Keyframe<f32>| kf.tick as f64 / scale;
+            let first = &keyframes[0];
+            let q0 = pos(first);
+            // Leading flat region holds the first value (CapCut clamp).
+            let mut acc = f64::from(first.value) * p.min(q0);
+            if p <= q0 {
+                return acc;
+            }
+            for pair in keyframes.windows(2) {
+                let (k0, k1) = (&pair[0], &pair[1]);
+                let (qa, qb) = (pos(k0), pos(k1));
+                if p <= qa {
+                    return acc;
+                }
+                let seg = qb - qa;
+                if seg > 0.0 {
+                    let upper = p.min(qb);
+                    let t_hi = ((upper - qa) / seg) as f32;
+                    let (va, vb) = (f64::from(k0.value), f64::from(k1.value));
+                    // ∫ over [qa, upper] of lerp(va, vb, e(t)) dq, dq = seg·dt
+                    //   = seg·[va·t_hi + (vb − va)·∫₀^{t_hi} e].
+                    let e_int = f64::from(k0.easing.integral_to(t_hi));
+                    acc += seg * (va * f64::from(t_hi) + (vb - va) * e_int);
+                }
+                if p <= qb {
+                    return acc;
+                }
+            }
+            // Trailing flat region holds the last value.
+            let last = &keyframes[keyframes.len() - 1];
+            acc + f64::from(last.value) * (p - pos(last))
+        }
+    }
+}
+
+/// Fraction of a clip's source window swept by clip-relative output position
+/// `p` in `0..=1`: the normalized cumulative integral `∫₀ᵖ curve ÷ ∫₀¹ curve`.
+/// Monotonic with `0 ↦ 0` and `1 ↦ 1`, this is exactly the source placement
+/// [`Clip::source_time_at`] uses for video, so the varispeed audio renderer
+/// (M8 Phase 3) warps the sound in lockstep with the picture. A degenerate
+/// (zero-area) curve falls back to a linear map.
+pub fn speed_curve_source_fraction(curve: &Param<f32>, p: f64) -> f64 {
+    let total = speed_curve_integral(curve, 1.0);
+    if total > 0.0 {
+        (speed_curve_integral(curve, p) / total).clamp(0.0, 1.0)
+    } else {
+        p.clamp(0.0, 1.0)
     }
 }
 
@@ -1651,6 +1674,33 @@ mod tests {
         // Outside the unit range clamps.
         assert_eq!(clip.speed_curve_integral(0.0), 0.0);
         assert!((clip.speed_curve_integral(2.0) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn source_fraction_is_normalized_and_matches_source_time_at() {
+        // Linear 1 → 3 ramp: ∫₀ᵖ (1+2q) dq / 2 = (p + p²)/2.
+        let curve = linear_ramp(1.0, 3.0);
+        assert_eq!(speed_curve_source_fraction(&curve, 0.0), 0.0);
+        assert!((speed_curve_source_fraction(&curve, 1.0) - 1.0).abs() < 1e-9, "ends at 1");
+        assert!(
+            (speed_curve_source_fraction(&curve, 0.5) - (0.5 + 0.25) / 2.0).abs() < 1e-9,
+            "midpoint sweeps the analytic fraction"
+        );
+        // It is exactly the placement `source_time_at` uses for the picture, so
+        // the audio render warps in lockstep: fraction · window == source offset.
+        let clip = {
+            let mut c = media_clip(MediaId::from_raw(1), tr(0, 100, R24), tr(0, 100, R24));
+            c.speed_curve = curve.clone();
+            c
+        };
+        let src_dur = clip.source_range().unwrap().duration.value as f64;
+        let mid = clip.start().value + clip.timeline.duration.value / 2;
+        let src = clip
+            .source_time_at(RationalTime::new(mid, R24))
+            .unwrap()
+            .unwrap();
+        let expected = (src_dur * speed_curve_source_fraction(&curve, 0.5)).round() as i64;
+        assert_eq!(src.value, expected, "audio fraction matches the video mapping");
     }
 
     #[test]
