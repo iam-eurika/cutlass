@@ -14,6 +14,12 @@
 //!
 //! With the dry-run toggle on (the default), the plan is parked here and
 //! the chat panel shows an Apply / Discard card instead of auto-applying.
+//! Preview is cumulative: a follow-up prompt builds on the still-parked
+//! plan rather than discarding it — the sandbox keeps those edits applied,
+//! so the model's memory and the state it reads stay in sync, and the
+//! combined plan grows until the user applies or discards. Discard restores
+//! the conversation to before the preview began, so the model never carries
+//! memory of edits that were thrown away.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -255,6 +261,37 @@ impl EngineBridge for SandboxBridge<'_> {
     }
 }
 
+// --- pending preview --------------------------------------------------------
+
+/// A rehearsed-but-unapplied plan, parked while the user decides (preview
+/// mode). Follow-up prompts build on it cumulatively: the sandbox keeps the
+/// plan applied so the model's memory and the state it sees stay in sync,
+/// and the combined plan grows until the user applies or discards it.
+#[derive(Default)]
+struct Preview {
+    /// Every rehearsed step, in order, ready for one live replay.
+    plan: Vec<AgentPlanStep>,
+    /// Editor-language line per step, for the Apply/Discard card.
+    descriptions: Vec<SharedString>,
+    /// The conversation as it stood before this preview session began.
+    /// Restored verbatim on Discard so the model never "remembers" edits
+    /// that were thrown away (the divergence that otherwise makes it
+    /// distrust the next snapshot).
+    history_restore: Option<Vec<Message>>,
+}
+
+impl Preview {
+    fn is_pending(&self) -> bool {
+        !self.plan.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.plan.clear();
+        self.descriptions.clear();
+        self.history_restore = None;
+    }
+}
+
 // --- the worker -------------------------------------------------------------
 
 fn agent_main(
@@ -266,7 +303,9 @@ fn agent_main(
     // Lazy: most sessions never open the assistant, and `Engine::new`
     // spins a headless GPU context we shouldn't pay for at launch.
     let mut sandbox: Option<Engine> = None;
-    let mut pending_plan: Vec<AgentPlanStep> = Vec::new();
+    // The parked, rehearsed-but-unapplied plan. Follow-up prompts extend
+    // it (cumulative preview) until the user applies or discards.
+    let mut preview = Preview::default();
     // Multi-turn memory: each completed prompt appends its turn here, and
     // the next prompt sees it (behind a freshly regenerated system prompt,
     // so current project state always wins). Trimmed to a budget; reset
@@ -290,11 +329,23 @@ fn agent_main(
                 dry_run,
             } => {
                 cancel.store(false, Ordering::Relaxed);
-                // A new prompt invalidates any parked plan: it rehearsed
-                // against a snapshot the next prompt is about to replace.
-                if !pending_plan.is_empty() {
-                    pending_plan.clear();
-                    push_entry(&store, "status", "Pending plan discarded.".into());
+                if dry_run {
+                    // Starting (or continuing) a preview session. Capture
+                    // the conversation as it is now the first time, so a
+                    // later Discard can restore it; follow-up prompts build
+                    // on the pending plan instead of discarding it.
+                    if !preview.is_pending() {
+                        preview.history_restore = Some(history.clone());
+                    }
+                } else if preview.is_pending() {
+                    // Preview turned off with a plan still parked: drop the
+                    // un-applied proposal and the memory of it, then run
+                    // fresh and apply immediately.
+                    if let Some(saved) = preview.history_restore.take() {
+                        history = saved;
+                    }
+                    preview.clear();
+                    push_entry(&store, "status", "Pending preview discarded.".into());
                 }
                 with_store(&store, |s| {
                     s.set_running(true);
@@ -307,7 +358,7 @@ fn agent_main(
                     &worker,
                     &store,
                     &mut sandbox,
-                    &mut pending_plan,
+                    &mut preview,
                     &mut history,
                     &prompt,
                     context,
@@ -318,7 +369,8 @@ fn agent_main(
                 with_store(&store, |s| s.set_running(false));
             }
             AgentRequest::ApplyPlan => {
-                let plan = std::mem::take(&mut pending_plan);
+                let plan = std::mem::take(&mut preview.plan);
+                preview.clear();
                 with_store(&store, |s| s.set_plan_pending(false));
                 if plan.is_empty() {
                     continue;
@@ -326,13 +378,19 @@ fn agent_main(
                 apply_plan_live(&worker, &store, plan);
             }
             AgentRequest::DiscardPlan => {
-                if !pending_plan.is_empty() {
-                    pending_plan.clear();
+                if preview.is_pending() {
+                    if let Some(saved) = preview.history_restore.take() {
+                        history = saved;
+                    }
+                    preview.clear();
                     push_entry(&store, "status", "Plan discarded — nothing was applied.".into());
                 }
                 with_store(&store, |s| s.set_plan_pending(false));
             }
-            AgentRequest::ResetHistory => history.clear(),
+            AgentRequest::ResetHistory => {
+                history.clear();
+                preview.clear();
+            }
         }
     }
 }
@@ -342,7 +400,7 @@ fn run_one_prompt(
     worker: &WorkerHandle,
     store: &slint::Weak<AgentStore<'static>>,
     sandbox: &mut Option<Engine>,
-    pending_plan: &mut Vec<AgentPlanStep>,
+    preview: &mut Preview,
     history: &mut Vec<Message>,
     prompt: &str,
     context: EditorContext,
@@ -382,6 +440,7 @@ fn run_one_prompt(
     with_store(store, |s| s.set_configured(true));
     let provider = OpenAiCompatProvider::new(&section.base_url, &section.model, api_key);
 
+    let sandbox_existed = sandbox.is_some();
     let engine = match sandbox {
         Some(engine) => engine,
         None => match sandbox_engine() {
@@ -393,14 +452,25 @@ fn run_one_prompt(
         },
     };
 
-    // Rehearse against a snapshot of the live project as of right now.
-    let Some(snapshot) = worker.snapshot_project() else {
-        push_entry(store, "error", "The editor engine is not responding.".into());
-        return;
-    };
-    engine.reset_project(snapshot);
+    // Continue building on a still-pending preview so the model's memory
+    // and the state it sees agree (the sandbox already holds those edits);
+    // otherwise rehearse against a fresh snapshot of the live project.
+    let continue_pending = preview.is_pending() && sandbox_existed;
+    if !continue_pending {
+        let Some(snapshot) = worker.snapshot_project() else {
+            push_entry(store, "error", "The editor engine is not responding.".into());
+            return;
+        };
+        engine.reset_project(snapshot);
+        // A parked plan we can't rebuild on (the sandbox was just created)
+        // is dropped rather than replayed against the wrong base.
+        preview.plan.clear();
+        preview.descriptions.clear();
+    }
 
-    let mut plan: Vec<AgentPlanStep> = Vec::new();
+    // The combined plan starts from whatever is already parked; the bridge
+    // appends this turn's steps onto it.
+    let mut plan: Vec<AgentPlanStep> = preview.plan.clone();
     let mut bridge = SandboxBridge {
         engine,
         plan: &mut plan,
@@ -442,28 +512,36 @@ fn run_one_prompt(
         PromptStatus::Completed | PromptStatus::DryRun => {
             info!(actions = plan.len(), "agent prompt completed");
             // Remember this turn even when it made no edits (Q&A is the case
-            // that most needs memory) — append before the empty-plan return.
+            // that most needs memory).
             history.extend(outcome.turn_messages);
             trim_history(history);
-            if plan.is_empty() {
-                return;
-            }
             if dry_run {
-                let descriptions: Vec<SharedString> = outcome
-                    .actions
-                    .iter()
-                    .map(|a| a.description.clone().into())
-                    .collect();
-                *pending_plan = plan;
-                with_store(store, move |s| {
-                    s.set_plan_actions(ModelRc::new(VecModel::from(descriptions)));
-                    s.set_plan_pending(true);
-                });
-            } else {
+                // Park the combined plan (prior steps + this turn's) and its
+                // descriptions for the Apply/Discard card.
+                preview.plan = plan;
+                preview.descriptions.extend(
+                    outcome
+                        .actions
+                        .iter()
+                        .map(|a| SharedString::from(a.description.clone())),
+                );
+            } else if !plan.is_empty() {
                 apply_plan_live(worker, store, plan);
             }
         }
     }
+
+    // Reflect the parked preview in the card: grown this turn, unchanged
+    // after a pure-question turn, still intact after an abort (the sandbox
+    // rolled back only this turn's group), or gone after an apply.
+    let pending = preview.is_pending();
+    let descriptions = preview.descriptions.clone();
+    with_store(store, move |s| {
+        if pending {
+            s.set_plan_actions(ModelRc::new(VecModel::from(descriptions)));
+        }
+        s.set_plan_pending(pending);
+    });
 }
 
 /// Replay a rehearsed plan on the live engine (one history group, one
