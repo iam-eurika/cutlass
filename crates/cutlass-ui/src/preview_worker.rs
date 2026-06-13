@@ -122,13 +122,15 @@ enum WorkerMsg {
         index: usize,
         value: f32,
     },
-    /// Set a clip's audio mix (CapCut volume + fades, M1): gain multiplier
-    /// plus fade durations in seconds (converted to ticks at the timeline
-    /// rate worker-side). Routed to the clip's audio-lane link partners when
-    /// a video half is targeted; one undoable history entry.
+    /// Set a clip's audio mix (CapCut volume + fades): `volume` is `Some` for
+    /// the basic flat-level slider (flattening any M8 envelope) or `None` to
+    /// keep the gain and change only the fades. Fade durations are seconds
+    /// (converted to ticks at the timeline rate worker-side). Routed to the
+    /// clip's audio-lane link partners when a video half is targeted; one
+    /// undoable history entry.
     SetClipAudio {
         clip: String,
-        volume: f32,
+        volume: Option<f32>,
         fade_in_s: f32,
         fade_out_s: f32,
     },
@@ -576,10 +578,23 @@ impl WorkerHandle {
             .send(WorkerMsg::SetSpeedCurvePoint { clip, index, value });
     }
 
+    /// Set the flat volume level + fades (CapCut's basic slider): `volume` is
+    /// `Some`, flattening any envelope.
     pub fn set_clip_audio(&self, clip: String, volume: f32, fade_in_s: f32, fade_out_s: f32) {
         let _ = self.tx.send(WorkerMsg::SetClipAudio {
             clip,
-            volume,
+            volume: Some(volume),
+            fade_in_s,
+            fade_out_s,
+        });
+    }
+
+    /// Set only the fades, preserving the clip's gain (constant or a
+    /// keyframed M8 envelope) — `volume` lowers to `None`.
+    pub fn set_clip_fades(&self, clip: String, fade_in_s: f32, fade_out_s: f32) {
+        let _ = self.tx.send(WorkerMsg::SetClipAudio {
+            clip,
+            volume: None,
             fade_in_s,
             fade_out_s,
         });
@@ -2355,7 +2370,7 @@ fn set_speed_curve_point_and_publish(
 fn set_clip_audio_and_publish(
     engine: &mut Engine,
     clip: &str,
-    volume: f32,
+    volume: Option<f32>,
     fade_in_s: f32,
     fade_out_s: f32,
     ui: &UiSink,
@@ -2398,7 +2413,7 @@ fn set_clip_audio_and_publish(
     for target in &targets {
         if let Err(e) = engine.apply(Command::Edit(EditCommand::SetClipAudio {
             clip: *target,
-            volume: Some(volume),
+            volume,
             fade_in,
             fade_out,
         })) {
@@ -2409,7 +2424,7 @@ fn set_clip_audio_and_publish(
         }
     }
     engine.commit_group();
-    info!(%clip_id, volume, fade_in_s, fade_out_s, clips = targets.len(), "set clip audio");
+    info!(%clip_id, ?volume, fade_in_s, fade_out_s, clips = targets.len(), "set clip audio");
     publish_projection(engine, ui);
 }
 

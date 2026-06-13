@@ -1373,6 +1373,11 @@ fn main() -> Result<(), slint::PlatformError> {
         .on_set_clip_audio(move |clip_id, volume, fade_in_s, fade_out_s| {
             set_audio_handle.set_clip_audio(clip_id.to_string(), volume, fade_in_s, fade_out_s);
         });
+    let set_fades_handle = preview_worker.handle();
+    app.global::<InspectorBackend>()
+        .on_set_clip_fades(move |clip_id, fade_in_s, fade_out_s| {
+            set_fades_handle.set_clip_fades(clip_id.to_string(), fade_in_s, fade_out_s);
+        });
     let set_crop_handle = preview_worker.handle();
     app.global::<InspectorBackend>().on_set_clip_crop(
         move |clip_id, left, top, right, bottom, flip_h, flip_v| {

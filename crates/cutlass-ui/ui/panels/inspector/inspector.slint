@@ -455,12 +455,10 @@ component AudioMixInspector inherits VerticalLayout {
         }
     }
 
-    // The basic fade ramps set a flat level + edge fades in one shot
-    // (set-clip-audio), which would flatten a keyframed envelope. While the
-    // gain is animated, hide them — fades belong in the curve itself, drawn
-    // with the diamond — and say so. (Envelope-preserving fades are a later
-    // audio-suite slice.)
-    if !root.model.has-volume-envelope: SliderRow {
+    // Fades route through set-clip-fades, which keeps the gain (a flat level
+    // or a keyframed M8 envelope) and only moves the edge ramps — so a fade
+    // edit never flattens an envelope. They coexist with volume automation.
+    SliderRow {
         label: "Fade in";
         suffix: "s";
         value: root.model.fade-in-s;
@@ -469,11 +467,11 @@ component AudioMixInspector inherits VerticalLayout {
         step: 0.1;
         decimals: 1;
         commit(v) => {
-            root.commit(root.model.volume, v, root.model.fade-out-s);
+            InspectorBackend.set-clip-fades(root.model.id, v, root.model.fade-out-s);
         }
     }
 
-    if !root.model.has-volume-envelope: SliderRow {
+    SliderRow {
         label: "Fade out";
         suffix: "s";
         value: root.model.fade-out-s;
@@ -482,14 +480,8 @@ component AudioMixInspector inherits VerticalLayout {
         step: 0.1;
         decimals: 1;
         commit(v) => {
-            root.commit(root.model.volume, root.model.fade-in-s, v);
+            InspectorBackend.set-clip-fades(root.model.id, root.model.fade-in-s, v);
         }
-    }
-
-    if root.model.has-volume-envelope: CutlassText {
-        text: "Fades fold into the volume curve while it's keyframed.";
-        style: AppStore.theme.typography.caption;
-        foreground: AppStore.theme.text.muted;
     }
 }
 

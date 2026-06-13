@@ -122,6 +122,15 @@ export global InspectorBackend {
         fade-out-s: float,
     );
 
+    // Set only a clip's fades, leaving the gain untouched — a flat level or a
+    // keyframed M8 envelope, which set-clip-audio would flatten. Same linkage
+    // routing as set-clip-audio. One undoable edit.
+    callback set-clip-fades(
+        clip-id: string,
+        fade-in-s: float,
+        fade-out-s: float,
+    );
+
     // Set a visual clip's crop window + mirroring (CapCut crop, M1):
     // normalized inset fractions measured in from each content edge
     // (0,0,0,0 ⇔ uncropped) plus flip flags. main.rs converts insets to the
