@@ -90,6 +90,12 @@ pub struct Track {
     /// trimmed. Compositing/playback are unaffected (CapCut semantics).
     #[serde(default)]
     pub locked: bool,
+    /// Audio: whether this lane is a sidechain "voice" source — its clips
+    /// drive audio ducking (M8 Phase 4), so a "duck under voice" gesture dips
+    /// music under the talkers on every lane flagged here. Additive: old
+    /// projects load with none. Inert on non-audio lanes.
+    #[serde(default)]
+    pub duck_source: bool,
     #[serde(with = "crate::serde_map")]
     clips: Map<ClipId, Clip>,
     /// Transitions at clip junctions, keyed by the left (outgoing) clip id.
@@ -109,6 +115,7 @@ impl Track {
             enabled: true,
             muted: false,
             locked: false,
+            duck_source: false,
             clips: Map::default(),
             transitions: Vec::new(),
         }
@@ -287,6 +294,7 @@ mod tests {
         assert!(track.enabled);
         assert!(!track.muted);
         assert!(!track.locked);
+        assert!(!track.duck_source);
         assert!(track.is_empty());
         assert!(track.id.raw() >= 1);
     }
@@ -495,9 +503,27 @@ mod tests {
         track.enabled = false;
         track.muted = true;
         track.locked = true;
+        track.duck_source = true;
         assert!(!track.enabled);
         assert!(track.muted);
         assert!(track.locked);
+        assert!(track.duck_source);
+    }
+
+    #[test]
+    fn duck_source_defaults_false_for_back_compat() {
+        // A pre-Phase-4 track JSON (no duck_source field) loads as not a
+        // voice source.
+        let json = serde_json::json!({
+            "id": 1,
+            "kind": "Audio",
+            "name": "A1",
+            "enabled": true,
+            "muted": false,
+            "clips": []
+        });
+        let track: Track = serde_json::from_value(json).unwrap();
+        assert!(!track.duck_source);
     }
 
     #[test]
