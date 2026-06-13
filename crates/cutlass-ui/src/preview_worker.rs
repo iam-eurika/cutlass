@@ -4380,9 +4380,9 @@ fn audio_snapshot(engine: &Engine) -> AudioSnapshot {
         for clip in track.clips_ordered() {
             // Retimed clips (speed ≠ 1× or reversed) play silent until
             // varispeed lands (M8) — the export mixer mutes them the same
-            // way, so what you hear is what you ship. Zero-volume clips
+            // way, so what you hear is what you ship. Constant-zero clips
             // contribute nothing either way.
-            if clip.is_retimed() || clip.volume <= 0.0 {
+            if clip.is_retimed() || clip.is_silent() {
                 continue;
             }
             let Some(media_id) = clip.media() else {
@@ -4403,7 +4403,7 @@ fn audio_snapshot(engine: &Engine) -> AudioSnapshot {
                 end_tick: clip.timeline.end_tick(),
                 source_start: source.start.value,
                 source_rate: (source.start.rate.num, source.start.rate.den),
-                volume: clip.volume,
+                volume: clip.volume.clone(),
                 fade_in_ticks: clip.fade_in,
                 fade_out_ticks: clip.fade_out,
             });

@@ -313,6 +313,23 @@ impl Project {
         Ok(())
     }
 
+    /// Precondition for volume-envelope edits (M8): the clip exists and is
+    /// media-backed (generators have nothing to hear). Mirrors
+    /// [`Self::set_clip_audio`]'s target rule — volume rides any media clip,
+    /// since linkage lands the audible half on an audio lane.
+    fn check_audio_param_target(&self, clip_id: ClipId) -> Result<(), ModelError> {
+        let clip = self
+            .timeline
+            .clip(clip_id)
+            .ok_or(ModelError::UnknownClip(clip_id))?;
+        if clip.is_generated() {
+            return Err(ModelError::InvalidParam(
+                "volume requires a media-backed clip".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Convert an absolute timeline position to a clip-relative animation
     /// tick, rejecting positions outside the clip (a keyframe must sit on
     /// the clip it animates).
@@ -341,6 +358,21 @@ impl Project {
         value: ParamValue,
         easing: Easing,
     ) -> Result<(), ModelError> {
+        // Volume (M8) is an audio property, not a transform: validate the
+        // gain range and an audio-capable target, then write to the envelope.
+        if param == ClipParam::Volume {
+            easing.validate()?;
+            let v = scalar_param(value)?;
+            crate::clip::validate_volume(v)?;
+            self.check_audio_param_target(clip_id)?;
+            let tick = self.keyframe_tick(clip_id, at)?;
+            let clip = self
+                .timeline
+                .clip_mut(clip_id)
+                .ok_or(ModelError::UnknownClip(clip_id))?;
+            clip.volume.set_keyframe(tick, v, easing);
+            return Ok(());
+        }
         self.check_param_target(clip_id)?;
         let tick = self.keyframe_tick(clip_id, at)?;
         let clip = self
@@ -364,6 +396,22 @@ impl Project {
         param: ClipParam,
         at: RationalTime,
     ) -> Result<(), ModelError> {
+        if param == ClipParam::Volume {
+            self.check_audio_param_target(clip_id)?;
+            let tick = self.keyframe_tick(clip_id, at)?;
+            let clip = self
+                .timeline
+                .clip_mut(clip_id)
+                .ok_or(ModelError::UnknownClip(clip_id))?;
+            return if clip.volume.remove_keyframe(tick) {
+                Ok(())
+            } else {
+                Err(ModelError::InvalidParam(format!(
+                    "no volume keyframe at {} to remove",
+                    at.value
+                )))
+            };
+        }
         self.check_param_target(clip_id)?;
         let tick = self.keyframe_tick(clip_id, at)?;
         let clip = self
@@ -385,6 +433,17 @@ impl Project {
         param: ClipParam,
         value: ParamValue,
     ) -> Result<(), ModelError> {
+        if param == ClipParam::Volume {
+            let v = scalar_param(value)?;
+            crate::clip::validate_volume(v)?;
+            self.check_audio_param_target(clip_id)?;
+            let clip = self
+                .timeline
+                .clip_mut(clip_id)
+                .ok_or(ModelError::UnknownClip(clip_id))?;
+            clip.volume.set_constant(v);
+            return Ok(());
+        }
         self.check_param_target(clip_id)?;
         let clip = self
             .timeline
@@ -624,9 +683,10 @@ impl Project {
                 // The retiming rides along on both halves.
                 right.speed = clip.speed;
                 right.reversed = clip.reversed;
-                // Audio mix splits CapCut-style: volume on both halves, the
-                // fade-in stays with the head, the fade-out with the tail.
-                right.volume = clip.volume;
+                // Audio mix splits CapCut-style: the volume envelope rides on
+                // both halves, the fade-in stays with the head, the fade-out
+                // with the tail.
+                right.volume = clip.volume.clone();
                 right.fade_out = clip.fade_out;
                 (Some(left_source), right)
             }
@@ -879,12 +939,7 @@ impl Project {
         fade_in: RationalTime,
         fade_out: RationalTime,
     ) -> Result<(), ModelError> {
-        if !volume.is_finite() || !(0.0..=crate::MAX_CLIP_VOLUME).contains(&volume) {
-            return Err(ModelError::InvalidParam(format!(
-                "volume must be between 0 and {}",
-                crate::MAX_CLIP_VOLUME
-            )));
-        }
+        crate::clip::validate_volume(volume)?;
         let tl_rate = self.timeline.frame_rate;
         check_same_rate(fade_in.rate, tl_rate)?;
         check_same_rate(fade_out.rate, tl_rate)?;
@@ -914,7 +969,10 @@ impl Project {
             .timeline
             .clip_mut(clip_id)
             .expect("clip existence checked above");
-        clip.volume = volume;
+        // The basic volume control sets a flat level, flattening any envelope
+        // (CapCut's slider behaviour); envelopes are drawn through the volume
+        // keyframe commands (`ClipParam::Volume`).
+        clip.volume = Param::Constant(volume);
         clip.fade_in = fade_in.value;
         clip.fade_out = fade_out.value;
         Ok(())
@@ -1764,7 +1822,7 @@ mod tests {
 
         project.set_clip_audio(clip, 0.5, rt(10), rt(20)).unwrap();
         let c = project.clip(clip).unwrap();
-        assert_eq!(c.volume, 0.5);
+        assert_eq!(c.volume.constant(), Some(0.5));
         assert_eq!((c.fade_in, c.fade_out), (10, 20));
         assert!(c.has_custom_audio());
 
@@ -1820,7 +1878,7 @@ mod tests {
         let right = project.clip(right).unwrap();
         // Volume rides both halves; the fade-in stays with the head, the
         // fade-out moves to the tail.
-        assert_eq!((left.volume, right.volume), (0.5, 0.5));
+        assert_eq!((left.volume.constant(), right.volume.constant()), (Some(0.5), Some(0.5)));
         assert_eq!((left.fade_in, left.fade_out), (10, 0));
         assert_eq!((right.fade_in, right.fade_out), (0, 20));
     }

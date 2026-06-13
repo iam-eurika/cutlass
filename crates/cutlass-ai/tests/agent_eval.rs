@@ -697,7 +697,7 @@ fn lower_music_volume_with_fades() {
 
     let clip_id = cutlass_models::ClipId::from_raw(clip);
     let c = host.engine.project().clip(clip_id).unwrap();
-    assert_eq!(c.volume, 0.5);
+    assert_eq!(c.volume.constant(), Some(0.5));
     assert_eq!((c.fade_in, c.fade_out), (24, 48));
     // The summary the next prompt would see carries the new mix.
     let summary = summarize(host.engine.project());

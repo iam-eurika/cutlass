@@ -383,7 +383,9 @@ pub fn validate(command: &WireCommand, project: &Project) -> Result<Command, Rej
                     }
                     volume as f32
                 }
-                None => clip.volume,
+                // Omitting volume keeps the clip's level; an envelope
+                // collapses to its base (set_clip_audio sets a flat level).
+                None => clip.volume.constant().unwrap_or_else(|| clip.volume.sample(0)),
             };
             let rate = timeline_rate(project);
             let clip_ticks = clip.timeline.duration.value;

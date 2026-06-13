@@ -419,6 +419,12 @@ pub enum ClipParam {
     /// `0..=`[`SPEED_CURVE_SCALE`], and editing it re-derives the clip's
     /// timeline duration. Always carries a [`ParamValue::Scalar`].
     Speed,
+    /// The clip's audio gain envelope (M8 volume envelopes). Routed to the
+    /// clip's `volume: Param<f32>` instead of the transform, so the same
+    /// keyframe commands draw volume automation and ducking writes ordinary
+    /// volume keyframes. Media-backed clips only. Always carries a
+    /// [`ParamValue::Scalar`] in `0..=`[`MAX_CLIP_VOLUME`].
+    Volume,
     /// A scalar parameter of one of the clip's effects (M4): `effect` is the
     /// index into [`Clip::effects`], `param` the catalog slot. Routed to the
     /// effect's `Param<f32>` instead of the transform, so the same keyframe
@@ -595,7 +601,9 @@ impl AnimatedTransform {
                 validate_opacity(v)?;
                 self.opacity.set_keyframe(tick, v, easing);
             }
-            ClipParam::Effect { .. } | ClipParam::Speed => return Err(not_a_transform_param()),
+            ClipParam::Effect { .. } | ClipParam::Speed | ClipParam::Volume => {
+                return Err(not_a_transform_param());
+            }
         }
         Ok(())
     }
@@ -608,7 +616,9 @@ impl AnimatedTransform {
             ClipParam::Scale => self.scale.remove_keyframe(tick),
             ClipParam::Rotation => self.rotation.remove_keyframe(tick),
             ClipParam::Opacity => self.opacity.remove_keyframe(tick),
-            ClipParam::Effect { .. } | ClipParam::Speed => return Err(not_a_transform_param()),
+            ClipParam::Effect { .. } | ClipParam::Speed | ClipParam::Volume => {
+                return Err(not_a_transform_param());
+            }
         };
         if removed {
             Ok(())
@@ -642,7 +652,9 @@ impl AnimatedTransform {
                 validate_opacity(v)?;
                 self.opacity.set_constant(v);
             }
-            ClipParam::Effect { .. } | ClipParam::Speed => return Err(not_a_transform_param()),
+            ClipParam::Effect { .. } | ClipParam::Speed | ClipParam::Volume => {
+                return Err(not_a_transform_param());
+            }
         }
         Ok(())
     }
@@ -772,13 +784,16 @@ pub struct Clip {
     /// only.
     #[serde(default = "default_speed_curve", skip_serializing_if = "is_unit_speed_curve")]
     pub speed_curve: Param<f32>,
-    /// Audio gain multiplier (CapCut volume, M1): `0.0` mutes, `1.0` is
-    /// unchanged, up to [`MAX_CLIP_VOLUME`]× boost. Read by both audio
-    /// mixers for clips on audio lanes; meaningless elsewhere. Constant for
-    /// now — envelopes ride the M8 `Param` migration. `1.0` (and absent
-    /// from saves) when never touched, so old files load unchanged.
-    #[serde(default = "unit_volume", skip_serializing_if = "is_unit_volume")]
-    pub volume: f32,
+    /// Audio gain envelope (CapCut volume, M1 → M8): `0.0` mutes, `1.0` is
+    /// unchanged, up to [`MAX_CLIP_VOLUME`]× boost. Read by both audio mixers
+    /// for clips on audio lanes; meaningless elsewhere. A constant for the
+    /// common case (byte-identical to the pre-M8 bare-`f32` shape, so old
+    /// files load unchanged), or a keyframed [`Param`] envelope (M8): the
+    /// mixers sample it per sample-frame, and ducking writes ordinary volume
+    /// keyframes. Keyframe ticks are clip-relative timeline ticks, like every
+    /// other [`Param`]. `1.0` (and absent from saves) when never touched.
+    #[serde(default = "default_volume", skip_serializing_if = "is_unit_volume")]
+    pub volume: Param<f32>,
     /// Fade-in duration in timeline ticks from the clip's start: a linear
     /// gain ramp 0 → `volume`. First-class field like CapCut, not keyframe
     /// sugar. Absent from saves while 0.
@@ -846,13 +861,34 @@ fn is_unit_speed_curve(curve: &Param<f32>) -> bool {
     matches!(curve, Param::Constant(v) if *v == 1.0)
 }
 
-fn unit_volume() -> f32 {
-    1.0
+fn default_volume() -> Param<f32> {
+    Param::Constant(1.0)
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_unit_volume(volume: &f32) -> bool {
-    *volume == 1.0
+/// A flat unit-gain envelope — no audio edit. `&` form for serde's
+/// `skip_serializing_if`.
+fn is_unit_volume(volume: &Param<f32>) -> bool {
+    matches!(volume, Param::Constant(v) if *v == 1.0)
+}
+
+/// Range check for one volume value: finite, within `0..=`[`MAX_CLIP_VOLUME`].
+/// Shared by `set_clip_audio`, the envelope keyframe routing, and load-time
+/// envelope validation.
+pub fn validate_volume(v: f32) -> Result<(), ModelError> {
+    if !v.is_finite() || !(0.0..=MAX_CLIP_VOLUME).contains(&v) {
+        return Err(ModelError::InvalidParam(format!(
+            "volume must be between 0 and {MAX_CLIP_VOLUME}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate a volume envelope (M8) before it is stored: structurally sound
+/// (sorted, non-empty when keyframed, valid easings) with every value in
+/// gain range.
+pub fn validate_volume_envelope(volume: &Param<f32>) -> Result<(), ModelError> {
+    volume.validate_shape()?;
+    volume.for_each_value(|v| validate_volume(*v))
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -861,12 +897,15 @@ fn is_zero(ticks: &i64) -> bool {
 }
 
 /// Audio gain at `pos` within a span of `len` (clip-relative, any unit —
-/// ticks or sample frames — as long as all arguments share it): `volume`
-/// shaped by the linear fade ramps. Fades anchor at the span edges, so a
-/// fade longer than a trimmed span just ramps part-way. Both audio mixers
-/// evaluate this per sample frame; keep it branch-light.
-pub fn audio_gain_at(pos: i64, len: i64, volume: f32, fade_in: i64, fade_out: i64) -> f32 {
-    let mut gain = volume;
+/// ticks or sample frames — as long as all arguments and the `volume`
+/// envelope share it): the envelope sampled at `pos` shaped by the linear
+/// fade ramps. Fades anchor at the span edges, so a fade longer than a
+/// trimmed span just ramps part-way. Both audio mixers evaluate this per
+/// sample frame; keep it branch-light. The mixers rebase the envelope into
+/// the sample-frame domain once per span ([`Param::map_ticks`]) so this
+/// stays an O(log k) lookup, not a tick conversion.
+pub fn audio_gain_at(pos: i64, len: i64, volume: &Param<f32>, fade_in: i64, fade_out: i64) -> f32 {
+    let mut gain = volume.sample(pos);
     if fade_in > 0 && pos < fade_in {
         gain *= pos.max(0) as f32 / fade_in as f32;
     }
@@ -897,7 +936,7 @@ impl Clip {
             speed: unit_speed(),
             reversed: false,
             speed_curve: default_speed_curve(),
-            volume: unit_volume(),
+            volume: default_volume(),
             fade_in: 0,
             fade_out: 0,
             crop: CropRect::FULL,
@@ -918,7 +957,7 @@ impl Clip {
             speed: unit_speed(),
             reversed: false,
             speed_curve: default_speed_curve(),
-            volume: unit_volume(),
+            volume: default_volume(),
             fade_in: 0,
             fade_out: 0,
             crop: CropRect::FULL,
@@ -938,6 +977,19 @@ impl Clip {
     /// no fades) — drives the inspector reset state and timeline badges.
     pub fn has_custom_audio(&self) -> bool {
         !is_unit_volume(&self.volume) || self.fade_in > 0 || self.fade_out > 0
+    }
+
+    /// True iff the clip carries a keyframed volume envelope (M8), versus a
+    /// flat constant gain. Drives the inspector envelope UI and the badge.
+    pub fn has_volume_envelope(&self) -> bool {
+        self.volume.is_animated()
+    }
+
+    /// True iff the clip is inaudible: a constant gain of `0` (or below). A
+    /// keyframed envelope is never treated as silent — it may be non-zero
+    /// elsewhere — so the mixers keep it and sample per sample-frame.
+    pub fn is_silent(&self) -> bool {
+        matches!(self.volume.constant(), Some(v) if v <= 0.0)
     }
 
     /// True iff the clip plays at anything but forward 1× — the audio
@@ -1628,46 +1680,105 @@ mod tests {
 
         // And a pre-volume save loads with the defaults.
         let loaded: Clip = serde_json::from_value(value).expect("deserialize");
-        assert_eq!(loaded.volume, 1.0);
+        assert_eq!(loaded.volume, Param::Constant(1.0));
         assert_eq!((loaded.fade_in, loaded.fade_out), (0, 0));
     }
 
     #[test]
     fn custom_audio_roundtrips_through_serde() {
         let mut clip = media_clip(MediaId::from_raw(1), tr(0, 48, R24), tr(0, 48, R24));
-        clip.volume = 0.5;
+        clip.volume = Param::Constant(0.5);
         clip.fade_in = 12;
         clip.fade_out = 24;
         assert!(clip.has_custom_audio());
         let json = serde_json::to_string(&clip).expect("serialize");
         let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(loaded.volume, 0.5);
+        assert_eq!(loaded.volume, Param::Constant(0.5));
         assert_eq!((loaded.fade_in, loaded.fade_out), (12, 24));
     }
 
     #[test]
+    fn constant_volume_serializes_as_a_bare_value() {
+        // M8 migrated `volume` to a `Param`, but a constant gain must stay
+        // byte-identical to the pre-M8 bare-`f32` shape so old files load
+        // unchanged and constant-only saves never grow a `{"kf":..}` wrapper.
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 48, R24), tr(0, 48, R24));
+        clip.volume = Param::Constant(0.5);
+        let value = serde_json::to_value(&clip).expect("serialize");
+        assert_eq!(value.get("volume"), Some(&serde_json::json!(0.5)));
+        // A pre-M8 bare value still loads as a constant.
+        let loaded: Clip = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(loaded.volume, Param::Constant(0.5));
+    }
+
+    #[test]
+    fn volume_envelope_roundtrips_and_validates() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 48, R24), tr(0, 48, R24));
+        clip.volume = Param::Keyframed {
+            keyframes: vec![
+                Keyframe { tick: 0, value: 0.0, easing: Easing::Linear },
+                Keyframe { tick: 24, value: 1.0, easing: Easing::EaseOut },
+            ],
+        };
+        assert!(clip.has_volume_envelope());
+        assert!(!clip.is_silent(), "an envelope is non-zero somewhere");
+        validate_volume_envelope(&clip.volume).expect("in-range envelope");
+        let json = serde_json::to_string(&clip).expect("serialize");
+        let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(loaded.volume, clip.volume);
+
+        // Out-of-range gain is rejected.
+        let hot = Param::Keyframed {
+            keyframes: vec![Keyframe {
+                tick: 0,
+                value: MAX_CLIP_VOLUME + 1.0,
+                easing: Easing::Linear,
+            }],
+        };
+        assert!(validate_volume_envelope(&hot).is_err());
+    }
+
+    #[test]
     fn audio_gain_ramps_linearly_at_both_edges() {
+        let vol = |v: f32| Param::Constant(v);
         // No fades: flat volume everywhere.
-        assert_eq!(audio_gain_at(0, 100, 0.8, 0, 0), 0.8);
-        assert_eq!(audio_gain_at(99, 100, 0.8, 0, 0), 0.8);
+        assert_eq!(audio_gain_at(0, 100, &vol(0.8), 0, 0), 0.8);
+        assert_eq!(audio_gain_at(99, 100, &vol(0.8), 0, 0), 0.8);
 
         // Fade-in over the first 10: silence at 0, half at 5, full at 10.
-        assert_eq!(audio_gain_at(0, 100, 1.0, 10, 0), 0.0);
-        assert_eq!(audio_gain_at(5, 100, 1.0, 10, 0), 0.5);
-        assert_eq!(audio_gain_at(10, 100, 1.0, 10, 0), 1.0);
+        assert_eq!(audio_gain_at(0, 100, &vol(1.0), 10, 0), 0.0);
+        assert_eq!(audio_gain_at(5, 100, &vol(1.0), 10, 0), 0.5);
+        assert_eq!(audio_gain_at(10, 100, &vol(1.0), 10, 0), 1.0);
 
         // Fade-out over the last 10: full until 90, half at 95, ~0 at the end.
-        assert_eq!(audio_gain_at(90, 100, 1.0, 0, 10), 1.0);
-        assert_eq!(audio_gain_at(95, 100, 1.0, 0, 10), 0.5);
-        assert!(audio_gain_at(99, 100, 1.0, 0, 10) <= 0.11);
+        assert_eq!(audio_gain_at(90, 100, &vol(1.0), 0, 10), 1.0);
+        assert_eq!(audio_gain_at(95, 100, &vol(1.0), 0, 10), 0.5);
+        assert!(audio_gain_at(99, 100, &vol(1.0), 0, 10) <= 0.11);
 
         // Ramps scale by the volume and overlapping fades multiply.
-        assert_eq!(audio_gain_at(5, 100, 2.0, 10, 0), 1.0);
-        assert_eq!(audio_gain_at(5, 10, 1.0, 10, 10), 0.25);
+        assert_eq!(audio_gain_at(5, 100, &vol(2.0), 10, 0), 1.0);
+        assert_eq!(audio_gain_at(5, 10, &vol(1.0), 10, 10), 0.25);
 
         // Out-of-span positions never go negative.
-        assert_eq!(audio_gain_at(-3, 100, 1.0, 10, 0), 0.0);
-        assert_eq!(audio_gain_at(105, 100, 1.0, 0, 10), 0.0);
+        assert_eq!(audio_gain_at(-3, 100, &vol(1.0), 10, 0), 0.0);
+        assert_eq!(audio_gain_at(105, 100, &vol(1.0), 0, 10), 0.0);
+    }
+
+    #[test]
+    fn audio_gain_follows_a_keyframed_envelope() {
+        // A 0→1 ramp envelope over the span: the gain tracks the curve.
+        let env = Param::Keyframed {
+            keyframes: vec![
+                Keyframe { tick: 0, value: 0.0, easing: Easing::Linear },
+                Keyframe { tick: 100, value: 1.0, easing: Easing::Linear },
+            ],
+        };
+        assert_eq!(audio_gain_at(0, 100, &env, 0, 0), 0.0);
+        assert_eq!(audio_gain_at(50, 100, &env, 0, 0), 0.5);
+        assert_eq!(audio_gain_at(100, 100, &env, 0, 0), 1.0);
+        // Fades still multiply on top of the sampled envelope value.
+        assert_eq!(audio_gain_at(50, 100, &env, 0, 20), 0.5);
+        assert_eq!(audio_gain_at(90, 100, &env, 0, 20), 0.9 * 0.5);
     }
 
     // --- crop & flip (M1) ----------------------------------------------------

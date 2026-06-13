@@ -36,7 +36,7 @@ pub use clip::{
     AnimatedTransform, Clip, ClipParam, ClipSource, ClipTransform, CropRect, Generator,
     MAX_CLIP_VOLUME, MAX_SPEED, MIN_CROP_FRACTION, MIN_SPEED, ParamValue, SPEED_CURVE_SCALE, Shape,
     TextAlignH, TextAlignV, TextBackground, TextCase, TextShadow, TextStroke, TextStyle,
-    audio_gain_at, speed_preset, validate_speed_curve,
+    audio_gain_at, speed_preset, validate_speed_curve, validate_volume, validate_volume_envelope,
 };
 pub use effects::{
     EffectInstance, EffectParamSpec, EffectSpec, effect_catalog, effect_spec,

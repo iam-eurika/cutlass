@@ -772,19 +772,19 @@ fn set_clip_audio_undo_redo_roundtrip() {
         }))
         .expect("set audio");
     let clip = |engine: &cutlass_engine::Engine| engine.project().clip(clip_id).unwrap().clone();
-    assert_eq!(clip(&engine).volume, 0.5);
+    assert_eq!(clip(&engine).volume.constant(), Some(0.5));
     assert_eq!((clip(&engine).fade_in, clip(&engine).fade_out), (12, 24));
 
     // One undo restores volume and both fades.
     assert!(engine.undo());
     let restored = clip(&engine);
-    assert_eq!(restored.volume, 1.0);
+    assert_eq!(restored.volume.constant(), Some(1.0));
     assert_eq!((restored.fade_in, restored.fade_out), (0, 0));
     assert!(!restored.has_custom_audio());
 
     assert!(engine.redo());
     assert!(clip(&engine).has_custom_audio());
-    assert_eq!(clip(&engine).volume, 0.5);
+    assert_eq!(clip(&engine).volume.constant(), Some(0.5));
 }
 
 #[test]

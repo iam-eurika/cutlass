@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 
 use cutlass_decoder::{AUDIO_CHANNELS, AudioReader};
-use cutlass_models::{Project, TrackKind, audio_gain_at};
+use cutlass_models::{Param, Project, TrackKind, audio_gain_at};
 
 use crate::error::EngineError;
 
@@ -30,8 +30,9 @@ struct Span {
     end: i64,
     /// Source position (in output sample frames) of the span's first sample.
     source_start: i64,
-    /// Clip gain (volume, M1): `1.0` ⇔ unchanged.
-    volume: f32,
+    /// Clip gain envelope (volume, M1 → M8): `1.0` ⇔ unchanged. Keyframe
+    /// ticks are rebased into clip-relative output sample frames.
+    volume: Param<f32>,
     /// Fade ramp lengths in output sample frames, anchored at the span edges.
     fade_in: i64,
     fade_out: i64,
@@ -63,8 +64,8 @@ impl ExportAudioMixer {
             for clip in track.clips_ordered() {
                 // Retimed clips (speed ≠ 1× or reversed) are silent until
                 // varispeed lands (M8) — same as CapCut's pre-pitch days.
-                // Zero-volume clips contribute nothing either way.
-                if clip.is_retimed() || clip.volume <= 0.0 {
+                // Constant-zero clips contribute nothing either way.
+                if clip.is_retimed() || clip.is_silent() {
                     continue;
                 }
                 let Some(media_id) = clip.media() else {
@@ -88,7 +89,11 @@ impl ExportAudioMixer {
                         source.start.rate.num,
                         source.start.rate.den,
                     ),
-                    volume: clip.volume,
+                    // Rebase the envelope's clip-relative ticks into
+                    // clip-relative output sample frames.
+                    volume: clip
+                        .volume
+                        .map_ticks(|tick| ticks_to_samples(tick, fps.num, fps.den)),
                     fade_in: ticks_to_samples(clip.fade_in, fps.num, fps.den),
                     fade_out: ticks_to_samples(clip.fade_out, fps.num, fps.den),
                     reader: None,
@@ -155,8 +160,9 @@ impl ExportAudioMixer {
             }
 
             let offset = ((s - pos + lead) as usize) * AUDIO_CHANNELS;
-            let flat = span.fade_in == 0 && span.fade_out == 0;
-            if flat && span.volume == 1.0 {
+            let unity =
+                span.volume.constant() == Some(1.0) && span.fade_in == 0 && span.fade_out == 0;
+            if unity {
                 for (dst, src) in out[offset..]
                     .iter_mut()
                     .zip(&self.scratch[..got * AUDIO_CHANNELS])
@@ -164,22 +170,19 @@ impl ExportAudioMixer {
                     *dst += *src;
                 }
             } else {
-                // Volume + fade ramps (M1): gain per sample frame so fades
-                // are smooth at sample resolution, not block-stepped.
+                // Volume envelope + fade ramps (M1/M8): gain per sample frame
+                // so automation and fades are smooth at sample resolution, not
+                // block-stepped.
                 let span_len = span.end - span.start;
                 let first = s + lead - span.start;
                 for frame in 0..got {
-                    let gain = if flat {
-                        span.volume
-                    } else {
-                        audio_gain_at(
-                            first + frame as i64,
-                            span_len,
-                            span.volume,
-                            span.fade_in,
-                            span.fade_out,
-                        )
-                    };
+                    let gain = audio_gain_at(
+                        first + frame as i64,
+                        span_len,
+                        &span.volume,
+                        span.fade_in,
+                        span.fade_out,
+                    );
                     for ch in 0..AUDIO_CHANNELS {
                         out[offset + frame * AUDIO_CHANNELS + ch] +=
                             self.scratch[frame * AUDIO_CHANNELS + ch] * gain;
@@ -329,7 +332,7 @@ mod tests {
             .unwrap();
         let mixer = ExportAudioMixer::for_project(&project).expect("audible span");
         let span = &mixer.spans[0];
-        assert_eq!(span.volume, 0.5);
+        assert_eq!(span.volume.constant(), Some(0.5));
         assert_eq!(span.fade_in, 48_000);
         assert_eq!(span.fade_out, 24_000);
     }

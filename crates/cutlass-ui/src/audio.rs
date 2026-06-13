@@ -31,6 +31,7 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use cutlass_decoder::{AUDIO_CHANNELS, AudioReader};
+use cutlass_models::Param;
 use tracing::{debug, info, warn};
 
 /// Frames per mixed block. 1024 @ 48kHz ≈ 21ms.
@@ -52,8 +53,10 @@ pub struct AudioSpan {
     /// Source-in value at `source_rate` (the media's native rate).
     pub source_start: i64,
     pub source_rate: (i32, i32),
-    /// Clip gain (volume, M1): `1.0` ⇔ unchanged.
-    pub volume: f32,
+    /// Clip gain envelope (volume, M1 → M8): `1.0` ⇔ unchanged. Keyframe
+    /// ticks are clip-relative sequence ticks at the snapshot's fps; the
+    /// mixer rebases them into sample frames once per span.
+    pub volume: Param<f32>,
     /// Fade ramp lengths, sequence ticks at the snapshot's fps.
     pub fade_in_ticks: i64,
     pub fade_out_ticks: i64,
@@ -344,7 +347,8 @@ struct ResolvedSpan {
     start_frame: i64,
     end_frame: i64,
     source_start_frame: i64,
-    volume: f32,
+    /// Gain envelope rebased into clip-relative sample frames.
+    volume: Param<f32>,
     fade_in_frames: i64,
     fade_out_frames: i64,
 }
@@ -497,8 +501,10 @@ fn mix_block(
             Err(_) => continue,
         };
         let offset = ((s - pos) as usize + lead) * AUDIO_CHANNELS;
-        let flat = span.fade_in_frames == 0 && span.fade_out_frames == 0;
-        if flat && span.volume == 1.0 {
+        let unity = span.volume.constant() == Some(1.0)
+            && span.fade_in_frames == 0
+            && span.fade_out_frames == 0;
+        if unity {
             for (i, sample) in slots[lead * AUDIO_CHANNELS..(lead + got) * AUDIO_CHANNELS]
                 .iter()
                 .enumerate()
@@ -506,22 +512,19 @@ fn mix_block(
                 out[offset + i] += sample;
             }
         } else {
-            // Volume + fade ramps (M1): gain per sample frame so fades are
-            // smooth at sample resolution, not block-stepped.
+            // Volume envelope + fade ramps (M1/M8): gain per sample frame so
+            // automation and fades are smooth at sample resolution, not
+            // block-stepped.
             let span_len = span.end_frame - span.start_frame;
             let first = s + lead as i64 - span.start_frame;
             for frame in 0..got {
-                let gain = if flat {
-                    span.volume
-                } else {
-                    cutlass_models::audio_gain_at(
-                        first + frame as i64,
-                        span_len,
-                        span.volume,
-                        span.fade_in_frames,
-                        span.fade_out_frames,
-                    )
-                };
+                let gain = cutlass_models::audio_gain_at(
+                    first + frame as i64,
+                    span_len,
+                    &span.volume,
+                    span.fade_in_frames,
+                    span.fade_out_frames,
+                );
                 let src = (lead + frame) * AUDIO_CHANNELS;
                 let dst = offset + frame * AUDIO_CHANNELS;
                 for ch in 0..AUDIO_CHANNELS {
@@ -545,7 +548,11 @@ fn resolve_spans(snapshot: &AudioSnapshot, sample_rate: u32) -> Vec<ResolvedSpan
             start_frame: ticks_to_frames(span.start_tick, snapshot.fps, sample_rate),
             end_frame: ticks_to_frames(span.end_tick, snapshot.fps, sample_rate),
             source_start_frame: ticks_to_frames(span.source_start, span.source_rate, sample_rate),
-            volume: span.volume,
+            // Rebase the envelope's clip-relative ticks into clip-relative
+            // sample frames, matching the per-frame `pos` the mixer feeds it.
+            volume: span
+                .volume
+                .map_ticks(|tick| ticks_to_frames(tick, snapshot.fps, sample_rate)),
             fade_in_frames: ticks_to_frames(span.fade_in_ticks, snapshot.fps, sample_rate),
             fade_out_frames: ticks_to_frames(span.fade_out_ticks, snapshot.fps, sample_rate),
         })
@@ -585,6 +592,37 @@ mod tests {
         assert_eq!(frames_to_ticks(48_000, (24, 1), 48_000), 24);
         // One tick = 2000 frames.
         assert_eq!(ticks_to_frames(1, (24, 1), 48_000), 2_000);
+    }
+
+    #[test]
+    fn resolve_spans_rebases_volume_envelope_to_frames() {
+        use cutlass_models::{Easing, Keyframe};
+        // A 0→1 ramp over clip ticks [0, 24] (1s at 24fps) must rebase to
+        // sample frames [0, 48000] so the mixer's per-frame lookup matches.
+        let snapshot = AudioSnapshot {
+            fps: (24, 1),
+            spans: vec![AudioSpan {
+                path: PathBuf::from("/tmp/x.mp3"),
+                start_tick: 0,
+                end_tick: 24,
+                source_start: 0,
+                source_rate: (24, 1),
+                volume: Param::Keyframed {
+                    keyframes: vec![
+                        Keyframe { tick: 0, value: 0.0, easing: Easing::Linear },
+                        Keyframe { tick: 24, value: 1.0, easing: Easing::Linear },
+                    ],
+                },
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+            }],
+        };
+        let spans = resolve_spans(&snapshot, 48_000);
+        let kfs = spans[0].volume.keyframes();
+        assert_eq!(kfs.len(), 2);
+        assert_eq!((kfs[0].tick, kfs[1].tick), (0, 48_000));
+        // Halfway through (frame 24000) the ramp reads 0.5.
+        assert_eq!(spans[0].volume.sample(24_000), 0.5);
     }
 
     #[test]
@@ -663,7 +701,7 @@ mod tests {
                 end_tick: 48,
                 source_start: 0,
                 source_rate: (24, 1),
-                volume: 1.0,
+                volume: Param::Constant(1.0),
                 fade_in_ticks: 0,
                 fade_out_ticks: 0,
             }],
@@ -724,7 +762,7 @@ mod tests {
                 end_tick: 48,
                 source_start: 0,
                 source_rate: (24, 1),
-                volume,
+                volume: Param::Constant(volume),
                 fade_in_ticks,
                 fade_out_ticks: 0,
             }],
@@ -786,7 +824,7 @@ mod tests {
                     end_tick: 48,
                     source_start: 0,
                     source_rate: (24, 1),
-                    volume: 1.0,
+                    volume: Param::Constant(1.0),
                     fade_in_ticks: 0,
                     fade_out_ticks: 0,
                 }],

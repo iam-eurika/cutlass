@@ -277,7 +277,7 @@ pub fn summarize(project: &Project) -> ProjectSummary {
                     }),
                     reversed: clip.reversed.then_some(true),
                     speed_ramp: clip.has_speed_curve().then_some(true),
-                    volume: (clip.volume != 1.0).then(|| f64::from(clip.volume)),
+                    volume: clip.volume.constant().filter(|v| *v != 1.0).map(f64::from),
                     fade_in: (clip.fade_in > 0).then(|| seconds(clip.fade_in, rate)),
                     fade_out: (clip.fade_out > 0).then(|| seconds(clip.fade_out, rate)),
                     crop: (!clip.crop.is_full()).then(|| {

@@ -316,6 +316,29 @@ impl<T: Copy> Param<T> {
     }
 }
 
+impl<T: Clone> Param<T> {
+    /// A copy with every keyframe tick remapped by `f` (constants pass through
+    /// unchanged). Used to rebase a clip-relative envelope from timeline ticks
+    /// into the audio mixer's sample-frame domain once per span, so the
+    /// per-sample gain lookup stays a plain tick compare. `f` must be
+    /// monotonic so the remapped keyframes stay sorted.
+    pub fn map_ticks(&self, f: impl Fn(i64) -> i64) -> Param<T> {
+        match self {
+            Param::Constant(value) => Param::Constant(value.clone()),
+            Param::Keyframed { keyframes } => Param::Keyframed {
+                keyframes: keyframes
+                    .iter()
+                    .map(|kf| Keyframe {
+                        tick: f(kf.tick),
+                        value: kf.value.clone(),
+                        easing: kf.easing,
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
 impl<T> Param<T> {
     pub fn is_animated(&self) -> bool {
         matches!(self, Param::Keyframed { .. })
