@@ -267,6 +267,11 @@ fn clip_to_slint(
         has_speed_curve: clip.has_speed_curve(),
         speed_curve_avg: clip.speed_curve_average() as f32,
         speed_curve_samples: speed_curve_samples(clip),
+        // Volume automation (M8): the envelope as absolute-tick keyframes
+        // (transform pattern), plus a dense sample curve for the on-clip line.
+        kf_volume: keyframes_to_slint(&clip.volume, clip_start, |v| (*v, 0.0)),
+        has_volume_envelope: clip.has_volume_envelope(),
+        volume_samples: volume_samples(clip),
         effects: project_effects(clip),
     }
 }
@@ -315,6 +320,26 @@ fn speed_curve_samples(clip: &EngineClip) -> ModelRc<f32> {
         .map(|i| {
             let tick = (i as f64 / last) * scale;
             clip.speed_curve.sample_at(tick)
+        })
+        .collect();
+    model(rows)
+}
+
+/// Dense, evenly-spaced gain samples of a clip's volume envelope across its
+/// span, in the envelope's own clip-relative tick domain (engine `Param`
+/// math, so easing curvature shows). Empty for a constant-gain clip — the
+/// on-clip automation line then draws nothing. Mirrors `speed_curve_samples`
+/// but in absolute clip ticks rather than the normalized speed domain.
+fn volume_samples(clip: &EngineClip) -> ModelRc<f32> {
+    if !clip.has_volume_envelope() {
+        return model(Vec::new());
+    }
+    let span = (clip.timeline.duration.value - 1).max(0) as f64;
+    let last = (SPEED_GRAPH_SAMPLES - 1) as f64;
+    let rows: Vec<f32> = (0..SPEED_GRAPH_SAMPLES)
+        .map(|i| {
+            let tick = ((i as f64 / last) * span).round() as i64;
+            clip.volume.sample(tick)
         })
         .collect();
     model(rows)

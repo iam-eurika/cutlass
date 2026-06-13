@@ -265,6 +265,19 @@ export struct Clip {
     // clip's normalized span (engine `Param` math, easing included), for the
     // inspector velocity graph. Empty ⇔ flat — the graph draws a 1.0× line.
     speed-curve-samples: [float],
+    // Volume automation (M8 volume envelopes): the gain curve as ABSOLUTE
+    // sequence-tick keyframes (clip start + clip-relative offset), exactly
+    // like the transform `kf-*` curves. Empty ⇔ a constant gain (read it from
+    // `volume`). Edits ride `InspectorBackend.set/remove-param-keyframe` with
+    // param "volume".
+    kf-volume: [ParamKeyframe],
+    // True ⇔ the clip's gain is a non-constant envelope — drives the
+    // inspector's diamond state and the on-clip automation line + badge.
+    has-volume-envelope: bool,
+    // Dense, evenly-spaced gain samples across the clip's span (engine
+    // `Param` math, easing included), for the on-clip volume line. Empty ⇔
+    // a flat clip, so no automation line is drawn.
+    volume-samples: [float],
     // Visual effect chain (M4), in order. The index of each entry is what
     // remove-effect / set-effect-param address. Empty ⇔ no effects.
     effects: [EffectView],
