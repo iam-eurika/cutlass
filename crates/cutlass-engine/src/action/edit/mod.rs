@@ -3,6 +3,7 @@
 pub mod add_clip;
 pub mod add_generated;
 pub mod add_track;
+pub mod duck;
 pub mod insert_clip;
 pub mod insert_media;
 pub mod link_clips;

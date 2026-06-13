@@ -9,7 +9,7 @@ pub mod ducking;
 mod playback;
 mod stretch;
 
-pub use ducking::{DuckSettings, duck_gain, reduce_curve, speech_band_energy};
+pub use ducking::{CONTROL_HZ, DuckSettings, duck_gain, reduce_curve, speech_band_energy};
 pub use playback::{AudioReader, CHANNELS as AUDIO_CHANNELS};
 pub use stretch::{render_stretched, render_stretched_curve};
 

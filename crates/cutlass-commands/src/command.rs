@@ -223,6 +223,22 @@ pub enum EditCommand {
     /// select, move, and trim together. Any previous links on the clips are
     /// replaced; the inverse restores them.
     LinkClips { clips: Vec<ClipId> },
+    /// Sidechain-duck the `music` clips under the `voice` clips (CapCut audio
+    /// ducking, M8 Phase 4): analyze speech-band energy on the voice clips and
+    /// write volume keyframes that dip each music clip while the voice is
+    /// present. `amount` is the fractional duck depth (`0` none … `1` to
+    /// silence), `threshold` the linear speech-band RMS gate, `attack`/`release`
+    /// the dip/recover times in seconds. Reuses the M8 volume envelope, so the
+    /// result is ordinary, editable keyframes; the inverse restores every
+    /// touched clip's prior volume in one undo.
+    DuckLanes {
+        voice: Vec<ClipId>,
+        music: Vec<ClipId>,
+        threshold: f32,
+        amount: f32,
+        attack: f32,
+        release: f32,
+    },
     /// Drop a named, colored marker on the timeline ruler at `at` (M1
     /// markers). `color: None` cycles the fixed palette. The inverse
     /// removes it.

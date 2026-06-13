@@ -286,6 +286,18 @@ fn dispatch_edit(
             let inverse = edit::link_clips::execute(ctx, &clips)?;
             Ok((ApplyOutcome::Edited(EditOutcome::Updated(first)), Some(inverse)))
         }
+        EditCommand::DuckLanes {
+            voice,
+            music,
+            threshold,
+            amount,
+            attack,
+            release,
+        } => {
+            let (clip, inverse) =
+                edit::duck::duck(ctx, &voice, &music, threshold, amount, attack, release)?;
+            Ok((ApplyOutcome::Edited(EditOutcome::Updated(clip)), Some(inverse)))
+        }
         EditCommand::AddMarker { at, name, color } => {
             let (id, inverse) = edit::marker::add(ctx, at, name, color)?;
             Ok((ApplyOutcome::Edited(EditOutcome::CreatedMarker(id)), Some(inverse)))
