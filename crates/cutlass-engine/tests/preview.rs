@@ -135,6 +135,7 @@ fn get_frame_places_transformed_solid() {
                 scale: 0.5,
                 rotation: 0.0,
                 opacity: 1.0,
+                ..ClipTransform::IDENTITY
             },
             at: None,
         }))
@@ -187,6 +188,7 @@ fn transform_override_previews_without_touching_state() {
             scale: 0.5,
             rotation: 0.0,
             opacity: 1.0,
+            ..ClipTransform::IDENTITY
         },
     )));
     let frame = engine.get_frame(rt(0)).expect("override frame");

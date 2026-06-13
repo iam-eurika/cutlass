@@ -527,6 +527,7 @@ fn undo_redo_set_clip_transform_oscillates() {
         scale: 0.5,
         rotation: 45.0,
         opacity: 0.8,
+        ..ClipTransform::IDENTITY
     };
     engine
         .apply(Command::Edit(EditCommand::SetClipTransform {

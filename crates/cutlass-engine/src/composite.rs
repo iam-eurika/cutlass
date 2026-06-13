@@ -86,7 +86,7 @@ pub fn composite_canvas_config(project: &Project) -> CompositorConfig {
 /// Canvas placement for content of `content_w × content_h` under a clip
 /// transform (CapCut semantics: scale 1.0 aspect-fits the content inside the
 /// canvas, centered; position offsets are normalized to canvas dimensions;
-/// rotation is degrees clockwise about the content center).
+/// rotation is degrees clockwise about the anchor).
 ///
 /// This is *the* geometry: the compositor draws it, and preview hit-testing
 /// (preview roadmap Phase 2) inverts it — the two can never disagree.
@@ -120,9 +120,18 @@ pub fn cropped_layer_placement(
     };
     let scale = fit * transform.scale;
     let size = [w * scale, h * scale];
-    let mut center = [
+    let anchor = [
         cw * 0.5 + transform.position[0] * cw,
         ch * 0.5 + transform.position[1] * ch,
+    ];
+    let to_center = [
+        (0.5 - transform.anchor_point[0]) * size[0],
+        (0.5 - transform.anchor_point[1]) * size[1],
+    ];
+    let (sin, cos) = transform.rotation.to_radians().sin_cos();
+    let mut center = [
+        anchor[0] + to_center[0] * cos - to_center[1] * sin,
+        anchor[1] + to_center[0] * sin + to_center[1] * cos,
     ];
     // Unrotated layers snap their top-left corner to whole canvas pixels.
     // The bilinear sampler then sees the same sub-texel phase every frame,
@@ -144,6 +153,52 @@ pub fn cropped_layer_placement(
         rotation: transform.rotation.to_radians(),
         opacity: transform.opacity.clamp(0.0, 1.0),
     }
+}
+
+/// The anchor pivot in canvas pixels for a placed layer — the point scale and
+/// rotation gestures pivot about, and what `ClipTransform::position` places.
+pub fn anchor_canvas_position(
+    transform: &ClipTransform,
+    placement: &LayerPlacement,
+) -> [f32; 2] {
+    let offset = [
+        (transform.anchor_point[0] - 0.5) * placement.size[0],
+        (transform.anchor_point[1] - 0.5) * placement.size[1],
+    ];
+    let (sin, cos) = placement.rotation.sin_cos();
+    [
+        placement.center[0] + offset[0] * cos - offset[1] * sin,
+        placement.center[1] + offset[0] * sin + offset[1] * cos,
+    ]
+}
+
+/// Given a fixed content center and placed size, derive the normalized
+/// anchor + position that keep the frame unchanged while moving the pivot to
+/// `anchor_canvas`.
+pub fn reposition_anchor(
+    anchor_canvas: [f32; 2],
+    center: [f32; 2],
+    size: [f32; 2],
+    rotation_deg: f32,
+    canvas: &CompositorConfig,
+) -> ([f32; 2], [f32; 2]) {
+    let (cw, ch) = (canvas.width as f32, canvas.height as f32);
+    let (sin, cos) = rotation_deg.to_radians().sin_cos();
+    let delta = [center[0] - anchor_canvas[0], center[1] - anchor_canvas[1]];
+    // Invert the clockwise rotation used by placement (same matrix as hit-test).
+    let to_center = [
+        delta[0] * cos + delta[1] * sin,
+        -delta[0] * sin + delta[1] * cos,
+    ];
+    let anchor_point = [
+        0.5 - to_center[0] / size[0],
+        0.5 - to_center[1] / size[1],
+    ];
+    let position = [
+        (anchor_canvas[0] - cw * 0.5) / cw,
+        (anchor_canvas[1] - ch * 0.5) / ch,
+    ];
+    (anchor_point, position)
 }
 
 /// The compositor UV rect sampling a clip's kept region: the crop window,
@@ -633,12 +688,52 @@ mod tests {
             scale: 0.5,
             rotation: 90.0,
             opacity: 0.4,
+            ..ClipTransform::IDENTITY
         };
         let p = layer_placement(&t, 1920, 1080, &CANVAS);
         assert_eq!(p.center, [960.0 + 0.25 * 1920.0, 540.0 - 0.5 * 1080.0]);
         assert_eq!(p.size, [960.0, 540.0]);
         assert!((p.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
         assert_eq!(p.opacity, 0.4);
+    }
+
+    #[test]
+    fn off_center_anchor_shifts_placement() {
+        // Anchor at the content's top-left corner; position places that
+        // corner on the canvas center — the layer hangs down-right.
+        let t = ClipTransform {
+            anchor_point: [0.0, 0.0],
+            ..ClipTransform::IDENTITY
+        };
+        let p = layer_placement(&t, 1920, 1080, &CANVAS);
+        assert_eq!(p.size, [1920.0, 1080.0]);
+        assert_eq!(p.center, [960.0 + 960.0, 540.0 + 540.0]);
+        assert_eq!(anchor_canvas_position(&t, &p), [960.0, 540.0]);
+    }
+
+    #[test]
+    fn reposition_anchor_preserves_center() {
+        let base = ClipTransform {
+            position: [0.125, -0.130],
+            rotation: 30.0,
+            ..ClipTransform::IDENTITY
+        };
+        let p0 = layer_placement(&base, 1920, 1080, &CANVAS);
+        let center = p0.center;
+        let anchor = anchor_canvas_position(&base, &p0);
+        let (ap, pos) = reposition_anchor(anchor, center, p0.size, 30.0, &CANVAS);
+        let t = ClipTransform {
+            position: pos,
+            anchor_point: ap,
+            rotation: 30.0,
+            ..ClipTransform::IDENTITY
+        };
+        let p = layer_placement(&t, 1920, 1080, &CANVAS);
+        assert!((p.center[0] - center[0]).abs() < 1e-3, "{:?} vs {:?}", p.center, center);
+        assert!((p.center[1] - center[1]).abs() < 1e-3);
+        let a = anchor_canvas_position(&t, &p);
+        assert!((a[0] - anchor[0]).abs() < 1e-3);
+        assert!((a[1] - anchor[1]).abs() < 1e-3);
     }
 
     #[test]
