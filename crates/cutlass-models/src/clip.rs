@@ -784,6 +784,13 @@ pub struct Clip {
     /// only.
     #[serde(default = "default_speed_curve", skip_serializing_if = "is_unit_speed_curve")]
     pub speed_curve: Param<f32>,
+    /// Preserve pitch while retiming (CapCut's "pitch" toggle, M8 Phase 3).
+    /// `true` (the default) time-stretches the audio so a sped-up clip keeps
+    /// its original pitch; `false` is "chipmunk" mode where pitch rides the
+    /// speed. Meaningful on retimed media clips only; `true` (and absent from
+    /// saves) otherwise, so old files load pitch-locked.
+    #[serde(default = "default_preserve_pitch", skip_serializing_if = "is_true")]
+    pub preserve_pitch: bool,
     /// Audio gain envelope (CapCut volume, M1 → M8): `0.0` mutes, `1.0` is
     /// unchanged, up to [`MAX_CLIP_VOLUME`]× boost. Read by both audio mixers
     /// for clips on audio lanes; meaningless elsewhere. A constant for the
@@ -861,6 +868,16 @@ fn is_unit_speed_curve(curve: &Param<f32>) -> bool {
     matches!(curve, Param::Constant(v) if *v == 1.0)
 }
 
+fn default_preserve_pitch() -> bool {
+    true
+}
+
+// `&bool` is the signature `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 fn default_volume() -> Param<f32> {
     Param::Constant(1.0)
 }
@@ -936,6 +953,7 @@ impl Clip {
             speed: unit_speed(),
             reversed: false,
             speed_curve: default_speed_curve(),
+            preserve_pitch: default_preserve_pitch(),
             volume: default_volume(),
             fade_in: 0,
             fade_out: 0,
@@ -957,6 +975,7 @@ impl Clip {
             speed: unit_speed(),
             reversed: false,
             speed_curve: default_speed_curve(),
+            preserve_pitch: default_preserve_pitch(),
             volume: default_volume(),
             fade_in: 0,
             fade_out: 0,
@@ -1003,6 +1022,20 @@ impl Clip {
     /// curves) — the constant `1.0` default does not.
     pub fn has_speed_curve(&self) -> bool {
         !is_unit_speed_curve(&self.speed_curve)
+    }
+
+    /// Frequency multiplier the varispeed renderer (M8 Phase 3) applies to a
+    /// retimed clip's audio: `1.0` when pitch is locked (the CapCut default,
+    /// time-stretch preserves pitch), else the clip's overall playback-speed
+    /// ratio (`base speed × ramp average`) so pitch rides the speed — the
+    /// optional "chipmunk" mode. Reverse does not change pitch.
+    pub fn audio_pitch_factor(&self) -> f32 {
+        if self.preserve_pitch {
+            1.0
+        } else {
+            let base = f64::from(self.speed.num) / f64::from(self.speed.den);
+            (base * self.speed_curve_average()) as f32
+        }
     }
 
     /// `∫₀ᵖ speed_curve(q) dq` over the normalized clip span, `p` in `0..=1`
@@ -1552,6 +1585,38 @@ mod tests {
         let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(loaded.speed, Rational::new(2, 1));
         assert!(loaded.reversed);
+    }
+
+    // --- pitch lock (M8 Phase 3) --------------------------------------------
+
+    #[test]
+    fn pitch_lock_defaults_on_and_is_omitted_from_saves() {
+        let clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 5, R24));
+        assert!(clip.preserve_pitch, "pitch is locked by default");
+        let map = serde_json::to_value(&clip).unwrap();
+        assert!(
+            !map.as_object().unwrap().contains_key("preserve_pitch"),
+            "the locked default stays absent so old files are byte-identical"
+        );
+        // A pre-Phase-3 save (no field) loads pitch-locked.
+        let loaded: Clip = serde_json::from_value(map).unwrap();
+        assert!(loaded.preserve_pitch);
+    }
+
+    #[test]
+    fn pitch_unlock_roundtrips_and_drives_the_transpose_factor() {
+        let mut clip = media_clip(MediaId::from_raw(1), tr(0, 10, R24), tr(0, 5, R24));
+        clip.speed = Rational::new(2, 1);
+        // Locked: no pitch shift regardless of speed.
+        assert_eq!(clip.audio_pitch_factor(), 1.0);
+        // Unlocked (chipmunk): pitch rides the 2× speed.
+        clip.preserve_pitch = false;
+        assert!((clip.audio_pitch_factor() - 2.0).abs() < 1e-6);
+        let json = serde_json::to_string(&clip).expect("serialize");
+        assert!(json.contains("preserve_pitch"), "the off state is saved");
+        let loaded: Clip = serde_json::from_str(&json).expect("deserialize");
+        assert!(!loaded.preserve_pitch);
+        assert!((loaded.audio_pitch_factor() - 2.0).abs() < 1e-6);
     }
 
     // --- speed curves (M2) ---------------------------------------------------
