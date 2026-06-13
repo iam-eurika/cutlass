@@ -6,8 +6,10 @@
 //! lives in [`playback`].
 
 mod playback;
+mod stretch;
 
 pub use playback::{AudioReader, CHANNELS as AUDIO_CHANNELS};
+pub use stretch::render_stretched;
 
 use std::path::Path;
 
