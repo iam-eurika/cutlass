@@ -4,6 +4,13 @@ import { TrackKind } from "models/index.slint";
 // (chrome visibility, full-window overlays, …) lives here rather than
 // inside any one panel's state global.
 export global AppState {
+    // Start screen (launch.slint): the full-window home shown before the
+    // editor on a cold start. Dismissed by app.slint's session-epoch watcher
+    // the moment a real session loads (New / Open / Open Recent / autosave
+    // recovery) — the initial empty-project publish does not bump the epoch,
+    // so the launch screen stays up until the user actually picks something.
+    in-out property <bool> launch-visible: true;
+
     in-out property <bool> preview-maximized: false;
 
     // AI assistant chat panel (ai-agent roadmap Phase 4): docked at the

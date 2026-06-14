@@ -12,6 +12,7 @@ import {
 } from "panels/index.slint";
 import { AgentStore, AppStore, EditorStore, PreviewStore, TimelineStore, TimelineActions } from "store/index.slint";
 import { AppState } from "state.slint";
+import { LaunchScreen } from "launch.slint";
 import { FullscreenPreview } from "fullscreen-preview.slint";
 import { TitleBar } from "shell/title-bar.slint";
 import { ExportDialog } from "shell/export-dialog.slint";
@@ -107,6 +108,10 @@ export component AppWindow inherits Window {
     private property <int> session-epoch: EditorStore.session-epoch;
 
     changed session-epoch => {
+        // A real session just loaded (New / Open / Open Recent / autosave
+        // recovery all bump the epoch; the initial empty-project publish does
+        // not) — leave the start screen and reveal the editor.
+        AppState.launch-visible = false;
         TimelineActions.pause();
         TimelineActions.clear-selection();
         TimelineActions.clear-range();
@@ -188,6 +193,23 @@ export component AppWindow inherits Window {
 
     shortcuts := FocusScope {
         key-pressed(event) => {
+            // Start screen: only the New / Open project shortcuts make sense
+            // here; swallow everything else so timeline keys never fire under
+            // it. (An open failure can raise the error dialog over the launch
+            // screen — let its Escape/Enter handler below run first.)
+            if (AppState.launch-visible && EditorStore.session-error == "") {
+                if (event.modifiers.control || event.modifiers.meta) {
+                    if (event.text == "n" || event.text == "N") {
+                        EditorStore.on-new-requested();
+                        return accept;
+                    }
+                    if (event.text == "o" || event.text == "O") {
+                        EditorStore.on-open-requested();
+                        return accept;
+                    }
+                }
+                return accept;
+            }
             // The error dialog is modal: Escape/Enter dismiss, everything
             // else is swallowed (same policy as the export dialog below).
             if (EditorStore.session-error != "") {
@@ -358,12 +380,20 @@ export component AppWindow inherits Window {
             reject
         }
 
-        if AppState.preview-maximized: FullscreenPreview {
+        // Start screen (launch.slint): the full-window home shown before the
+        // editor on a cold start, dismissed by the session-epoch watcher
+        // above once the user creates or opens a project.
+        if AppState.launch-visible: LaunchScreen {
             width: root.width;
             height: root.height;
         }
 
-        if !AppState.preview-maximized: VerticalLayout {
+        if !AppState.launch-visible && AppState.preview-maximized: FullscreenPreview {
+            width: root.width;
+            height: root.height;
+        }
+
+        if !AppState.launch-visible && !AppState.preview-maximized: VerticalLayout {
             spacing: AppStore.theme.metrics.spacing.none;
 
             // Edge-to-edge so the drag region reaches the window borders —

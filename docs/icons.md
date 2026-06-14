@@ -75,6 +75,13 @@ lacks cleanly (`letter-spacing`, `line-height`): **[Tabler](https://tabler.io/ic
 - [ ] `upload` — placeholder `"Export"` — `shell/title-bar.slint` — export action (AccentButton).
 - [ ] (logo) — placeholder `"C"` — `shell/title-bar.slint` — brand mark; use the existing logo, not a letter.
 
+### Start screen — `launch.slint`
+
+- [ ] `plus` — placeholder `"+"` — `launch.slint` — New project tile mark.
+- [ ] `folder-open` — placeholder (drawn folder silhouette) — `launch.slint` — Open project tile mark.
+- [ ] `clapperboard` / `film` — placeholder `"▶"` — `launch.slint` — recent-project thumb chip.
+- [ ] window controls — placeholders `"─" "□" "❐" "✕"` — `launch.slint` — frameless min/max/restore/close (mirrors `shell/title-bar.slint`).
+
 ### Timeline toolbar — `panels/timeline/toolbar.slint`
 
 - [ ] `undo-2` — placeholder `"Undo"` — `panels/timeline/toolbar.slint`.
