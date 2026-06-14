@@ -37,14 +37,14 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-
       - name: Install FFmpeg development libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config clang \
             libavcodec-dev libavformat-dev libavutil-dev \
-            libavfilter-dev libavdevice-dev libswscale-dev libswresample-dev \ libasound2-dev
+            libavfilter-dev libavdevice-dev libswscale-dev libswresample-dev \
+            libasound2-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
