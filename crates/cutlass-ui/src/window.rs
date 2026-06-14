@@ -12,10 +12,22 @@ use slint::winit_030::winit;
 use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSTitlebarSeparatorStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSAnimatablePropertyContainer, NSAnimationContext, NSTitlebarSeparatorStyle, NSView, NSWindow,
+    NSWindowStyleMask, NSWindowTitleVisibility,
 };
 #[cfg(target_os = "macos")]
+use objc2_foundation::NSRect;
+#[cfg(target_os = "macos")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    // The launch-screen window frame, captured before the first maximize so
+    // the editor→launch close can pop straight back to it. macOS-only state
+    // and every window op runs on the main thread, so a thread-local Cell is
+    // enough — no cross-thread sharing.
+    static NATURAL_FRAME: std::cell::Cell<Option<NSRect>> = const { std::cell::Cell::new(None) };
+}
 
 // Resolve the `NSWindow` hosting the given winit window through its raw
 // `NSView` handle. `None` if the handle isn't an AppKit one (e.g. before the
@@ -58,3 +70,51 @@ pub fn apply_native_chrome(window: &winit::window::Window) {
 /// No-op off macOS: those platforms keep the fully frameless shell.
 #[cfg(not(target_os = "macos"))]
 pub fn apply_native_chrome(_window: &winit::window::Window) {}
+
+/// Length of the launch↔editor frame morph. Short enough to feel instant,
+/// long enough to read as a smooth resize rather than a flicker.
+#[cfg(target_os = "macos")]
+const MORPH_DURATION: f64 = 0.16;
+
+/// Maximize / restore the window for the launch↔editor switch with a short,
+/// custom morph. winit's `set_maximized` calls `-[NSWindow zoom:]`, whose
+/// native animation is heavy and slow; a plain `animate:NO` setFrame snaps but
+/// flickers (the surface resizes a frame before content catches up). Instead
+/// we animate the frame over `MORPH_DURATION` via `NSAnimationContext` + the
+/// window's `animator` proxy: the launch-screen frame is remembered on the way
+/// up and morphed back to on the way down. `-isZoomed` still reports the
+/// filled-screen state afterwards, so winit's own maximize tracking (and the
+/// title-bar double-click toggle that reads it) stays correct.
+#[cfg(target_os = "macos")]
+pub fn set_maximized(window: &winit::window::Window, maximized: bool) {
+    let Some(ns_window) = ns_window_of(window) else {
+        return;
+    };
+    let target = if maximized {
+        // Capture the windowed frame to restore later — but not if we're
+        // already filling the screen, or we'd save the maximized frame.
+        if !ns_window.isZoomed() {
+            let frame = ns_window.frame();
+            NATURAL_FRAME.with(|f| f.set(Some(frame)));
+        }
+        match ns_window.screen() {
+            Some(screen) => screen.visibleFrame(),
+            None => return,
+        }
+    } else {
+        match NATURAL_FRAME.with(|f| f.get()) {
+            Some(frame) => frame,
+            None => return,
+        }
+    };
+    NSAnimationContext::beginGrouping();
+    NSAnimationContext::currentContext().setDuration(MORPH_DURATION);
+    ns_window.animator().setFrame_display(target, true);
+    NSAnimationContext::endGrouping();
+}
+
+/// Off macOS, defer to winit's maximize (the WM owns any animation).
+#[cfg(not(target_os = "macos"))]
+pub fn set_maximized(window: &winit::window::Window, maximized: bool) {
+    window.set_maximized(maximized);
+}
