@@ -211,7 +211,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn any_video_asset() -> Option<PathBuf> {
-        std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
+        std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets"))
             .ok()?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn strip_on_still_image_repeats_the_picture_for_every_target() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/texture.png");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets/texture.png");
         if !path.exists() {
             return;
         }

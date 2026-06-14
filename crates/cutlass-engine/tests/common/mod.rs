@@ -12,7 +12,7 @@ use cutlass_models::{
 };
 
 pub fn assets_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets")
 }
 
 pub fn small_video_asset() -> Option<PathBuf> {
@@ -184,7 +184,7 @@ pub fn load_project(engine: &mut Engine, path: &Path) {
     }
 }
 
-/// All MP4 assets under `assets/`, sorted for deterministic tests.
+/// All MP4 assets under `local-assets/assets/`, sorted for deterministic tests.
 pub fn video_assets() -> Vec<PathBuf> {
     let dir = assets_dir();
     let mut paths: Vec<_> = std::fs::read_dir(dir)

@@ -8,7 +8,7 @@ use std::time::Duration;
 use cutlass_decoder::{DecodeOptions, DecodedFrame, Decoder, HwAccel, KeyframeIndex, PixelFormat};
 
 pub fn assets_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets")
 }
 
 /// Prefer a small 1080p clip for fast integration runs.

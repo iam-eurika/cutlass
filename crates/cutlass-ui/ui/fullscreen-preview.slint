@@ -148,8 +148,8 @@ export component FullscreenPreview inherits Rectangle {
         // panel button, so gating can never diverge.
         Image {
             source: TimelineStore.playing
-                ? @image-url("assets/icon/pause.svg")
-                : @image-url("assets/icon/play.svg");
+                ? @image-url("../../../assets/icon/pause.svg")
+                : @image-url("../../../assets/icon/play.svg");
             image-fit: ImageFit.contain;
             colorize: #ffffff;
 
@@ -251,7 +251,7 @@ export component FullscreenPreview inherits Rectangle {
         }
 
         Image {
-            source: @image-url("assets/icon/fullscreen.svg");
+            source: @image-url("../../../assets/icon/fullscreen.svg");
             image-fit: ImageFit.contain;
             colorize: #ffffff;
 

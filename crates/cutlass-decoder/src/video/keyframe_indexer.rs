@@ -685,7 +685,7 @@ mod tests {
     }
 
     fn any_video_asset() -> Option<PathBuf> {
-        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets");
         let preferred = assets.join("6137050-hd_1920_1080_24fps.mp4");
         if preferred.exists() {
             return Some(preferred);

@@ -166,7 +166,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn any_video_asset() -> Option<PathBuf> {
-        std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
+        std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets"))
             .ok()?
             .filter_map(|e| e.ok())
             .map(|e| e.path())

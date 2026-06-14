@@ -128,7 +128,7 @@ Two boundaries matter:
   text/char placeholder, register it in [`docs/icons.md`](docs/icons.md), and
   move on. See [`.cursor/rules/icons.mdc`](.cursor/rules/icons.mdc).
 - **Do not commit ignored paths**: build artifacts (`/target`, `/dist`), media
-  scratch dirs (`frames/`, `proxy/`, `assets/`), `.env`, or `.cutlass/`.
+  scratch dirs (`frames/`, `proxy/`, `local-assets/`), `.env`, or `.cutlass/`.
 
 ## Commits
 

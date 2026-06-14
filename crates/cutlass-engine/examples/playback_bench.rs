@@ -10,7 +10,7 @@
 //!
 //! Run:
 //!   `cargo run --release -p cutlass-engine --example playback_bench`
-//!   `cargo run --release -p cutlass-engine --example playback_bench -- assets/foo.mp4 10`
+//!   `cargo run --release -p cutlass-engine --example playback_bench -- local-assets/assets/foo.mp4 10`
 //!
 //! Criterion benches (`benches/preview.rs`) cover steady-state single ticks;
 //! this harness exists because playback cost is a *sequence* property (GOP
@@ -33,7 +33,7 @@ fn main() {
         .next()
         .map(PathBuf::from)
         .or_else(default_asset)
-        .expect("no media found: pass a path or add assets/*.mp4");
+        .expect("no media found: pass a path or add local-assets/assets/*.mp4");
     let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(5);
 
     println!("media: {}", path.display());
@@ -44,7 +44,7 @@ fn main() {
 }
 
 fn default_asset() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets");
     for name in [
         "15531444_1920_1080_24fps.mp4",
         "6137050-hd_1920_1080_24fps.mp4",

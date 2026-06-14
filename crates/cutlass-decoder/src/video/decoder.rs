@@ -402,14 +402,14 @@ mod tests {
 
     fn workspace_asset(name: &str) -> Option<PathBuf> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets")
+            .join("../../local-assets/assets")
             .join(name);
         path.exists().then_some(path)
     }
 
     fn any_video_asset() -> Option<PathBuf> {
         workspace_asset("6137050-hd_1920_1080_24fps.mp4").or_else(|| {
-            std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
+            std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets"))
                 .ok()?
                 .filter_map(|e| e.ok())
                 .map(|e| e.path())

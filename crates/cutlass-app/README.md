@@ -8,7 +8,7 @@ This crate is useful as a smoke test for the full editing pipeline.
 
 When run from the repository root, the app:
 
-- Looks for MP4 files in `assets/`.
+- Looks for MP4 files in `local-assets/assets/`.
 - Picks up to three media files for a demo session.
 - Creates a new engine session.
 - Imports the selected media.
@@ -38,7 +38,7 @@ You can also set the name with `CUTLASS_NAME`:
 CUTLASS_NAME=demo_edit cargo run -p cutlass-app
 ```
 
-The app expects at least one `.mp4` file in `assets/`.
+The app expects at least one `.mp4` file in `local-assets/assets/`.
 
 ## Scope
 
