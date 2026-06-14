@@ -37,12 +37,12 @@ behind. The same loop is codified for the agent in
 ## Where icons live
 
 All UI icons live under the **single** tracked root
-`crates/cutlass-ui/ui/assets/icon/` (transport in `icon/`, library glyphs in
-`icon/library/`). `.gitignore` ignores `assets/` everywhere **except** this
-dir (`!crates/cutlass-ui/ui/assets/`), so anything dropped here commits
-normally — drop new icons in and reference them with a relative `@image-url`.
-Only the media scratch dirs (repo-root `assets/`, `frames/`, `proxy/`) stay
-ignored. The dock icon is also loaded from here via `include_bytes!` in
+`assets/icon/` (transport in `icon/`, library glyphs in
+`icon/library/`). Reference them from Slint with `@image-url` paths
+relative to each `.slint` file (see `app.slint` and panel files).
+Media scratch files for local dev and tests live in gitignored
+`local-assets/assets/` (`frames/`, `proxy/` stay ignored too). The dock
+icon is also loaded from `assets/icon/` via `include_bytes!` in
 `src/main.rs`.
 
 Loaded via `@image-url(...)` relative to the `.slint` file, then tinted with

@@ -21,7 +21,7 @@ use tracing_subscriber::EnvFilter;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
-const ASSETS_DIR: &str = "assets";
+const ASSETS_DIR: &str = "local-assets/assets";
 const CUTLASS_DIR: &str = ".cutlass";
 const PROJECTS_SUBDIR: &str = "projects";
 const EXPORTS_SUBDIR: &str = "exports";
@@ -76,7 +76,7 @@ fn print_usage() {
     eprintln!(
         "Usage: cutlass-app [--name NAME]\n\
          \n\
-         Builds a three-clip project from random videos in assets/, saves to\n\
+         Builds a three-clip project from random videos in local-assets/assets/, saves to\n\
          .cutlass/projects/, exports MP4 to .cutlass/exports/.\n\
          \n\
          --name  Session basename (default: demo, or CUTLASS_NAME env)\n"

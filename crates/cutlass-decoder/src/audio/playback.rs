@@ -339,7 +339,7 @@ mod tests {
     const RATE: u32 = 48_000;
 
     fn audio_asset() -> Option<PathBuf> {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets");
         std::fs::read_dir(dir)
             .ok()?
             .filter_map(|e| e.ok())
@@ -348,7 +348,7 @@ mod tests {
     }
 
     fn video_with_audio_asset() -> Option<PathBuf> {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets");
         std::fs::read_dir(dir)
             .ok()?
             .filter_map(|e| e.ok())

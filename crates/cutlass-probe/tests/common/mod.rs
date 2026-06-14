@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 pub fn assets_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets")
 }
 
 pub fn small_video_asset() -> Option<PathBuf> {

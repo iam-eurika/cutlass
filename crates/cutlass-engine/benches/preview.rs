@@ -2,7 +2,7 @@
 //!
 //! Run:
 //!   `cargo bench -p cutlass-engine --bench preview`
-//!   `CUTLASS_BENCH_ASSET=assets/foo.mp4 cargo bench -p cutlass-engine --bench preview`
+//!   `CUTLASS_BENCH_ASSET=local-assets/assets/foo.mp4 cargo bench -p cutlass-engine --bench preview`
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +14,7 @@ use cutlass_models::{
 };
 
 fn assets_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets")
 }
 
 fn bench_asset() -> Option<PathBuf> {
@@ -165,7 +165,7 @@ fn bench_get_frame_solid(c: &mut Criterion) {
 
 fn bench_get_frame_media(c: &mut Criterion) {
     let Some(path) = bench_asset() else {
-        eprintln!("preview bench: no CUTLASS_BENCH_ASSET or assets/*.mp4, skipping media cases");
+        eprintln!("preview bench: no CUTLASS_BENCH_ASSET or local-assets/assets/*.mp4, skipping media cases");
         return;
     };
     let (_dir, mut engine) = engine_with_media(&path, 120);

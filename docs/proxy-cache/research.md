@@ -7,7 +7,7 @@ assets below; re-bench before trusting them on other hardware.
 
 - **Machine:** Apple M5 Pro, 18 logical cores, VideoToolbox (HW decode + HW
   ProRes/H.264 encode). ffmpeg 8.x.
-- **Primary asset:** `assets/16078825_3840_2160_60fps.mp4` — 3840×2160, 59.94 fps,
+- **Primary asset:** `local-assets/assets/16078825_3840_2160_60fps.mp4` — 3840×2160, 59.94 fps,
   H.264, 36.5 s, GOP ≈ 250 frames (keyframe every ~4.17 s).
 - **Bench harness:** `crates/cutlass-decode/benches/cold_seek.rs` (criterion, 100
   samples/case). Run with `CUTLASS_BENCH_ASSET=<file> cargo bench -p cutlass-decode --bench cold_seek`.
@@ -264,7 +264,7 @@ are end-to-end through a freshly opened decoder per seek, so no RAM-cache hit
 masks the seek; warm RAM-cache hits are ~0.) Reproduce:
 
 ```bash
-CUTLASS_BENCH_ASSET="$PWD/assets/16078825_3840_2160_60fps.mp4" \
+CUTLASS_BENCH_ASSET="$PWD/local-assets/assets/16078825_3840_2160_60fps.mp4" \
   cargo bench -p cutlass-engines --bench import_seek
 ```
 
@@ -320,11 +320,11 @@ CUTLASS_BENCH_N=4 cargo bench -p cutlass-engines --bench multi_import_seek
 
 ```bash
 # Generate the proxy used above (SW decode + HW encode, all-intra H.264, 1080p):
-ffmpeg -i assets/16078825_3840_2160_60fps.mp4 -vf scale=1920:1080 \
+ffmpeg -i local-assets/assets/16078825_3840_2160_60fps.mp4 -vf scale=1920:1080 \
   -c:v h264_videotoolbox -g 1 -b:v 60M target/bench-assets/proxy_h264i.mov
 
 # Cold-seek bench, source vs proxy:
-CUTLASS_BENCH_ASSET="$PWD/assets/16078825_3840_2160_60fps.mp4" \
+CUTLASS_BENCH_ASSET="$PWD/local-assets/assets/16078825_3840_2160_60fps.mp4" \
   cargo bench -p cutlass-decode --bench cold_seek
 CUTLASS_BENCH_ASSET="$PWD/target/bench-assets/proxy_h264i.mov" \
   cargo bench -p cutlass-decode --bench cold_seek

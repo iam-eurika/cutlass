@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn image_file_probes_with_default_still_duration() {
         let path =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/texture.png");
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets/texture.png");
         if !path.exists() {
             return;
         }
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn audio_only_file_probes_with_zero_dimensions() {
         let path =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/baby.mp3");
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets/baby.mp3");
         if !path.exists() {
             return;
         }

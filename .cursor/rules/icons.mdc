@@ -32,8 +32,8 @@ Never block a feature on missing art. Instead:
 
 - Load via `@image-url(...)` relative to the `.slint` file and tint with
   `colorize:` so one SVG serves all themes.
-- Put the SVG in a **git-tracked** dir — `assets/` is gitignored
-  (`.gitignore:3`), so it won't commit. See the warning in `docs/icons.md`.
+- Put the SVG in repo-root `assets/icon/` (or `assets/icon/library/`).
+  Media scratch lives in gitignored `local-assets/` — see `docs/icons.md`.
 - Flip the registry entry to `[x]`.
 
 Don't silently leave a bare letter/word as if it were final, and don't fetch

@@ -370,13 +370,13 @@ mod tests {
 
     fn workspace_asset(name: &str) -> Option<PathBuf> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets")
+            .join("../../local-assets/assets")
             .join(name);
         path.exists().then_some(path)
     }
 
     fn first_asset() -> Option<PathBuf> {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-assets/assets");
         let mut entries: Vec<_> = std::fs::read_dir(&dir)
             .ok()?
             .filter_map(|e| e.ok())

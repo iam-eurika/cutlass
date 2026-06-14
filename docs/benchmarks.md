@@ -16,7 +16,7 @@ cargo bench -p cutlass-compositor --bench composite
 cargo bench -p cutlass-engine --bench preview
 
 # Point at a specific file
-CUTLASS_BENCH_ASSET=assets/foo.mp4 cargo bench -p cutlass-engine --bench preview
+CUTLASS_BENCH_ASSET=local-assets/assets/foo.mp4 cargo bench -p cutlass-engine --bench preview
 
 # Full short export (48-frame solid timeline → MP4)
 cargo bench -p cutlass-engine --bench export
@@ -28,7 +28,7 @@ Pass Criterion flags after `--`, e.g. `-- --sample-size 50`.
 
 | Variable | Used by | Purpose |
 |----------|---------|---------|
-| `CUTLASS_BENCH_ASSET` | `preview` | Path to an MP4 for media cold/warm cases. Falls back to the first `assets/*.mp4` if unset. |
+| `CUTLASS_BENCH_ASSET` | `preview` | Path to an MP4 for media cold/warm cases. Falls back to the first `local-assets/assets/*.mp4` if unset. |
 
 GPU benches skip silently when no adapter is available (common in headless VMs).
 
