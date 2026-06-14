@@ -13,6 +13,13 @@ export global AppState {
 
     in-out property <bool> preview-maximized: false;
 
+    // True on macOS, where the shell keeps the OS-drawn window frame (rounded
+    // corners, drop shadow, traffic lights) and only hides the titlebar
+    // (src/window.rs). There `no-frame` stays off and the title bar insets
+    // past the traffic lights with no custom caption buttons; elsewhere the
+    // shell is fully frameless. Set once at startup from src/main.rs.
+    in-out property <bool> is-macos: false;
+
     // AI assistant chat panel (ai-agent roadmap Phase 4): docked at the
     // far right, toggled from the title bar.
     in-out property <bool> agent-panel-open: false;

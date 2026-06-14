@@ -18,6 +18,7 @@ mod thumbnails;
 mod timecode;
 mod timeline;
 mod transport;
+mod window;
 
 use slint::BackendSelector;
 use slint::Global;
@@ -371,9 +372,20 @@ fn main() -> Result<(), slint::PlatformError> {
     #[cfg(target_os = "macos")]
     set_dock_icon();
 
+    // On macOS the shell keeps the OS-drawn frame (rounded corners, drop
+    // shadow, traffic lights) and only hides the titlebar, so `no-frame`
+    // stays off there and the title bar insets past the traffic lights with
+    // no custom caption buttons (see app.slint / shell/title-bar.slint). Set
+    // before the window is shown so `no-frame` resolves correctly at creation.
+    app.global::<AppState>()
+        .set_is_macos(cfg!(target_os = "macos"));
+
     let app_weak = app.as_weak();
     slint::invoke_from_event_loop(move || {
         if let Some(app) = app_weak.upgrade() {
+            // Hide the native titlebar once the winit window is realized
+            // (no-op off macOS); must run on the event loop, not before show.
+            app.window().with_winit_window(window::apply_native_chrome);
             app.window().set_maximized(true);
             app.global::<WindowBackend>().set_maximized(true);
         }
